@@ -1,0 +1,3 @@
+work/
+outputs/chat-app/__pycache__/
+outputs/chat-app/chat_state.json
