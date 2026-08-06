@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: codex-talk
+    runtime: python
+    rootDir: outputs/chat-app
+    plan: starter
+    buildCommand: python -m py_compile server.py
+    startCommand: python server.py
+    healthCheckPath: /health
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 10000
+      - key: DATA_DIR
+        value: /var/data
+    disk:
+      name: chat-state
+      mountPath: /var/data
+      sizeGB: 1

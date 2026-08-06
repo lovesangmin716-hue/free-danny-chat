@@ -1,0 +1,1362 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>FREE DANNY</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --black: #111111;
+        --gray: #cfcfcf;
+        --white: #ffffff;
+        --muted: #666666;
+        --bg: var(--gray);
+        --line: var(--black);
+        --panel: var(--white);
+        --text: var(--black);
+        --google: #111111;
+        --kakao: #111111;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+      }
+
+      body {
+        min-height: 100dvh;
+        display: flex;
+        justify-content: center;
+        align-items: stretch;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", "Apple SD Gothic Neo", sans-serif;
+      }
+
+      button,
+      input,
+      textarea {
+        font: inherit;
+        border-radius: 0;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      .auth-shell,
+      .app {
+        width: min(100vw, 392px);
+        min-height: 100dvh;
+        height: 100dvh;
+        background: var(--panel);
+        border-left: 1px solid var(--line);
+        border-right: 1px solid var(--line);
+        overflow: hidden;
+      }
+
+      .auth-shell {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .auth-header {
+        padding: 18px 16px 12px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .auth-header h1,
+      .brand h1 {
+        margin: 0;
+        font-size: 22px;
+        letter-spacing: 0.04em;
+      }
+
+      .auth-header p,
+      .auth-note,
+      .brand p,
+      .profile-hint,
+      .helper,
+      .room-preview,
+      .room-meta,
+      .room-time,
+      .chat-subtitle,
+      .status-text,
+      .auth-status,
+      .provider-copy,
+      .phone-help,
+      .empty-copy {
+        color: var(--muted);
+      }
+
+      .auth-header p {
+        margin: 6px 0 0;
+        font-size: 13px;
+      }
+
+      .auth-scroll {
+        flex: 1;
+        overflow-y: auto;
+        padding: 14px 16px 18px;
+      }
+
+      .auth-card,
+      .provider-card,
+      .signup-banner,
+      .brand,
+      .profile-card,
+      .room-create,
+      .room-list,
+      .empty-state {
+        border: 1px solid var(--line);
+        background: var(--panel);
+      }
+
+      .provider-card,
+      .auth-card {
+        padding: 14px;
+      }
+
+      .provider-card {
+        display: grid;
+        gap: 10px;
+      }
+
+      .provider-card h2,
+      .auth-card h2 {
+        margin: 0;
+        font-size: 15px;
+      }
+
+      .provider-copy,
+      .auth-note {
+        margin: 0;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .provider-stack {
+        display: grid;
+        gap: 8px;
+      }
+
+      .provider-button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 44px;
+        font-weight: 700;
+      }
+
+      .provider-button.google,
+      .provider-button.kakao {
+        background: var(--black);
+        color: var(--white);
+      }
+
+      .provider-button.demo,
+      .secondary-button {
+        background: var(--white);
+        color: var(--black);
+      }
+
+      .provider-status {
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .auth-card.compact {
+        margin-top: 10px;
+      }
+
+      .auth-card form,
+      .room-create form {
+        display: grid;
+        gap: 12px;
+      }
+
+      .signup-banner {
+        margin-top: 10px;
+        padding: 12px 14px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        background: var(--gray);
+      }
+
+      .signup-banner strong {
+        display: block;
+        font-size: 13px;
+        margin-bottom: 4px;
+      }
+
+      .signup-banner span {
+        font-size: 12px;
+      }
+
+      .field {
+        display: grid;
+        gap: 7px;
+      }
+
+      .field-row {
+        display: grid;
+        grid-template-columns: 1fr 118px;
+        gap: 8px;
+        align-items: end;
+      }
+
+      .field-row.code-row {
+        grid-template-columns: 1fr 110px;
+      }
+
+      label {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      input,
+      textarea {
+        width: 100%;
+        padding: 11px 12px;
+        color: var(--text);
+        background: var(--white);
+        border: 1px solid var(--line);
+        outline: none;
+      }
+
+      textarea {
+        resize: none;
+        line-height: 1.45;
+      }
+
+      input:focus,
+      textarea:focus {
+        outline: 2px solid var(--black);
+        outline-offset: -2px;
+      }
+
+      button {
+        width: 100%;
+        min-height: 42px;
+        padding: 10px 12px;
+        border: 1px solid var(--black);
+        background: var(--black);
+        color: var(--white);
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
+      .verified-badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        padding: 4px 8px;
+        border: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--black);
+        background: var(--gray);
+      }
+
+      .auth-status {
+        margin-top: 14px;
+        font-size: 13px;
+      }
+
+      .auth-status.error,
+      .status-text.error,
+      .provider-status.error {
+        color: var(--black);
+        font-weight: 700;
+      }
+
+      .auth-status.success,
+      .status-text.success,
+      .provider-status.success {
+        color: var(--black);
+        font-weight: 700;
+      }
+
+      .app {
+        display: grid;
+        grid-template-rows: auto 1fr;
+      }
+
+      .sidebar {
+        display: grid;
+        grid-template-rows: auto auto auto minmax(124px, 1fr);
+        gap: 8px;
+        padding: 10px;
+        border-bottom: 1px solid var(--line);
+        background: var(--white);
+      }
+
+      .brand,
+      .profile-card,
+      .room-create {
+        padding: 10px;
+      }
+
+      .brand p {
+        margin: 6px 0 0;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .profile-grid {
+        display: grid;
+        grid-template-columns: 42px 1fr;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .avatar,
+      .room-avatar {
+        display: inline-flex;
+        justify-content: center;
+        align-items: center;
+        font-weight: 700;
+        border: 1px solid var(--line);
+      }
+
+      .avatar {
+        width: 42px;
+        height: 42px;
+        background: var(--black);
+        color: var(--white);
+      }
+
+      .profile-name {
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .profile-hint {
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .profile-actions {
+        margin-top: 10px;
+      }
+
+      .room-list {
+        min-height: 0;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        overflow: hidden;
+      }
+
+      .room-list-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 10px 8px;
+      }
+
+      .room-list-body {
+        overflow-y: auto;
+        padding: 0 6px 6px;
+      }
+
+      .room-item {
+        width: 100%;
+        display: grid;
+        grid-template-columns: 38px 1fr auto;
+        gap: 10px;
+        align-items: center;
+        padding: 10px;
+        margin-bottom: 6px;
+        background: var(--white);
+        color: var(--black);
+        border: 1px solid transparent;
+        text-align: left;
+      }
+
+      .room-item.active {
+        background: var(--gray);
+        border-color: var(--line);
+      }
+
+      .room-avatar {
+        width: 38px;
+        height: 38px;
+        background: var(--white);
+      }
+
+      .room-name-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 3px;
+      }
+
+      .room-name {
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .room-preview,
+      .room-meta,
+      .room-time {
+        font-size: 11px;
+      }
+
+      .chat-panel {
+        min-height: 0;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        background: var(--white);
+      }
+
+      .chat-header {
+        padding: 12px 12px 10px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .chat-title {
+        margin: 0;
+        font-size: 18px;
+      }
+
+      .chat-subtitle {
+        margin-top: 4px;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .status-pill {
+        flex-shrink: 0;
+        min-height: 28px;
+        padding: 6px 8px;
+        border: 1px solid var(--line);
+        background: var(--gray);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .messages {
+        min-height: 0;
+        overflow-y: auto;
+        padding: 10px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        background: var(--gray);
+      }
+
+      .empty-state {
+        margin: auto 0;
+        padding: 16px;
+        text-align: center;
+      }
+
+      .empty-state h3 {
+        margin: 0 0 8px;
+        font-size: 16px;
+      }
+
+      .empty-copy {
+        margin: 0;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .message-row {
+        display: flex;
+      }
+
+      .message-row.mine {
+        justify-content: flex-end;
+      }
+
+      .bubble {
+        max-width: 78%;
+        padding: 10px 11px;
+        border: 1px solid var(--line);
+        background: var(--white);
+      }
+
+      .message-row.mine .bubble {
+        background: #e3e3e3;
+      }
+
+      .bubble-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 6px;
+        font-size: 11px;
+      }
+
+      .bubble-name {
+        font-weight: 700;
+      }
+
+      .bubble-text {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.45;
+        word-break: break-word;
+        white-space: pre-wrap;
+      }
+
+      .composer {
+        border-top: 1px solid var(--line);
+        padding: 8px 10px calc(10px + env(safe-area-inset-bottom));
+        background: var(--white);
+        display: grid;
+        gap: 8px;
+      }
+
+      .composer form {
+        display: grid;
+        grid-template-columns: 1fr 92px;
+        gap: 8px;
+        align-items: end;
+      }
+
+      .composer textarea {
+        min-height: 44px;
+        max-height: 96px;
+      }
+
+      .composer button {
+        min-height: 44px;
+      }
+
+      .status-text {
+        font-size: 12px;
+      }
+
+      @media (min-width: 480px) {
+        body {
+          align-items: center;
+          padding: 16px;
+        }
+
+        .auth-shell,
+        .app {
+          min-height: min(844px, calc(100vh - 32px));
+          height: min(844px, calc(100vh - 32px));
+          border: 1px solid var(--line);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <section class="auth-shell hidden" id="auth-screen">
+      <div class="auth-header">
+        <h1>FREE DANNY</h1>
+        <p>빠르고 안전한 채팅</p>
+      </div>
+
+      <div class="auth-scroll">
+        <div class="provider-card">
+          <h2>SNS 로그인</h2>
+          <p class="provider-copy">구글과 카카오 계정으로 바로 로그인할 수 있게 준비했습니다. 앱 키가 없을 때는 개발용 SNS 로그인으로 흐름을 먼저 확인할 수 있어요.</p>
+          <div class="provider-stack">
+            <button type="button" class="provider-button google" id="google-login-button">구글로 계속하기</button>
+            <button type="button" class="provider-button kakao" id="kakao-login-button">카카오로 계속하기</button>
+            <button type="button" class="provider-button demo" id="demo-login-button">개발용 SNS 체험 로그인</button>
+          </div>
+          <div class="provider-status" id="provider-status">SNS 로그인 설정을 확인하고 있어요.</div>
+        </div>
+
+        <div class="auth-card" id="login-card">
+          <h2>기존 비밀번호 계정</h2>
+          <p class="auth-note">예전에 만든 로컬 계정이 있으면 아래에서 그대로 로그인할 수 있어요.</p>
+          <form id="login-form">
+            <div class="field">
+              <label for="login-username">사용자 이름</label>
+              <input id="login-username" maxlength="24" placeholder="예: Sangmin" />
+            </div>
+            <div class="field">
+              <label for="login-password">비밀번호</label>
+              <input id="login-password" type="password" maxlength="40" placeholder="비밀번호를 입력해 주세요" />
+            </div>
+            <button type="submit">로그인하기</button>
+          </form>
+        </div>
+
+        <div class="signup-banner" id="signup-banner">
+          <div>
+            <strong>비밀번호 계정도 필요하신가요?</strong>
+            <span>아래 배너에서 휴대폰 인증 기반 가입을 열 수 있어요.</span>
+          </div>
+          <button type="button" class="secondary-button" id="signup-toggle">회원가입</button>
+        </div>
+
+        <div class="auth-card compact hidden" id="signup-card">
+          <h2>비밀번호 계정 만들기</h2>
+          <p class="auth-note">SNS 로그인과 별개로 직접 계정을 만들고 싶을 때만 사용해 주세요.</p>
+          <form id="signup-form">
+            <div class="field">
+              <label for="signup-username">사용자 이름</label>
+              <input id="signup-username" maxlength="24" placeholder="2자 이상 입력해 주세요" />
+            </div>
+            <div class="field">
+              <label for="signup-password">비밀번호</label>
+              <input id="signup-password" type="password" maxlength="40" placeholder="4자 이상 입력해 주세요" />
+            </div>
+            <div class="field">
+              <label for="signup-password-confirm">비밀번호 확인</label>
+              <input id="signup-password-confirm" type="password" maxlength="40" placeholder="비밀번호를 한 번 더 입력해 주세요" />
+            </div>
+            <div class="field">
+              <label for="signup-phone">휴대폰 번호</label>
+              <div class="field-row">
+                <input id="signup-phone" maxlength="13" inputmode="numeric" placeholder="01012345678" />
+                <button type="button" class="secondary-button" id="phone-request-button">인증번호 받기</button>
+              </div>
+            </div>
+            <div class="field">
+              <label for="signup-code">인증번호</label>
+              <div class="field-row code-row">
+                <input id="signup-code" maxlength="6" inputmode="numeric" placeholder="6자리 숫자" />
+                <button type="button" class="secondary-button" id="phone-verify-button">인증 확인</button>
+              </div>
+            </div>
+            <p class="phone-help" id="phone-help">개발 환경에서는 인증번호가 화면에 표시됩니다.</p>
+            <div class="verified-badge hidden" id="phone-verified-badge">휴대폰 인증 완료</div>
+            <div class="field">
+              <label for="signup-status">상태 메시지</label>
+              <input id="signup-status" maxlength="40" placeholder="예: 지금 접속 중" />
+            </div>
+            <button type="submit">가입하고 시작하기</button>
+            <button type="button" class="secondary-button" id="signup-close">닫기</button>
+          </form>
+        </div>
+
+        <div class="auth-status" id="auth-status">SNS 로그인 또는 기존 계정 로그인을 선택해 주세요.</div>
+      </div>
+    </section>
+
+    <main class="app hidden" id="app-screen">
+      <aside class="sidebar">
+        <section class="brand">
+          <h1>FREE DANNY</h1>
+          <p>카카오 로그인과 로컬 계정 로그인 모두 지원하는 모바일 메신저 MVP입니다.</p>
+        </section>
+
+        <section class="profile-card">
+          <div class="profile-grid">
+            <div class="avatar" id="profile-avatar">?</div>
+            <div>
+              <div class="profile-name" id="profile-name">로그인이 필요해요</div>
+              <div class="profile-hint" id="profile-status">로그인 방식과 상태 메시지가 여기에 표시됩니다.</div>
+            </div>
+          </div>
+          <div class="profile-actions">
+            <button type="button" class="secondary-button" id="logout-button">로그아웃</button>
+          </div>
+        </section>
+
+        <section class="room-create">
+          <form id="room-form">
+            <div class="field">
+              <label for="room-name">새 채팅방 이름</label>
+              <input id="room-name" maxlength="32" placeholder="예: 프로젝트 회의" />
+            </div>
+            <div class="field">
+              <label for="room-description">방 설명</label>
+              <input id="room-description" maxlength="100" placeholder="예: 오늘 일정과 진행 상황 정리" />
+            </div>
+            <button type="submit">채팅방 만들기</button>
+          </form>
+        </section>
+
+        <section class="room-list">
+          <div class="room-list-header">
+            <strong>채팅방</strong>
+            <span class="helper" id="room-count">0개</span>
+          </div>
+          <div class="room-list-body" id="rooms"></div>
+        </section>
+      </aside>
+
+      <section class="chat-panel">
+        <header class="chat-header">
+          <div>
+            <h2 class="chat-title" id="chat-title">채팅방을 선택해 주세요</h2>
+            <div class="chat-subtitle" id="chat-subtitle">위 목록에서 방을 누르면 바로 대화를 시작할 수 있어요.</div>
+          </div>
+          <div class="status-pill" id="connection-status">연결 준비 중</div>
+        </header>
+
+        <section class="messages" id="messages">
+          <div class="empty-state" id="empty-state">
+            <h3>메신저가 준비됐어요</h3>
+            <p class="empty-copy">채팅방을 선택하면 메시지가 여기에 쌓입니다.</p>
+          </div>
+        </section>
+
+        <footer class="composer">
+          <form id="message-form">
+            <textarea id="message-input" rows="2" maxlength="300" placeholder="메시지를 입력하고 Enter를 누르세요"></textarea>
+            <button type="submit">보내기</button>
+          </form>
+          <div class="status-text" id="status-text">메신저를 준비하고 있어요.</div>
+        </footer>
+      </section>
+    </main>
+
+    <template id="room-template">
+      <button class="room-item" type="button">
+        <div class="room-avatar"></div>
+        <div>
+          <div class="room-name-row">
+            <span class="room-name"></span>
+            <span class="room-time"></span>
+          </div>
+          <div class="room-preview"></div>
+          <div class="room-meta"></div>
+        </div>
+      </button>
+    </template>
+
+    <template id="message-template">
+      <div class="message-row">
+        <article class="bubble">
+          <div class="bubble-header">
+            <span class="bubble-name"></span>
+            <span class="bubble-time"></span>
+          </div>
+          <p class="bubble-text"></p>
+        </article>
+      </div>
+    </template>
+
+    <script>
+      const state = {
+        session: null,
+        rooms: [],
+        roomMap: new Map(),
+        activeRoomId: null,
+        activeMessages: [],
+        stream: null,
+        providers: {},
+        phoneVerification: {
+          phone: "",
+          token: "",
+          verified: false,
+        },
+      };
+
+      const authScreen = document.getElementById("auth-screen");
+      const appScreen = document.getElementById("app-screen");
+      const signupBanner = document.getElementById("signup-banner");
+      const signupToggle = document.getElementById("signup-toggle");
+      const signupCard = document.getElementById("signup-card");
+      const signupClose = document.getElementById("signup-close");
+      const authStatus = document.getElementById("auth-status");
+      const providerStatus = document.getElementById("provider-status");
+      const loginForm = document.getElementById("login-form");
+      const signupForm = document.getElementById("signup-form");
+      const googleLoginButton = document.getElementById("google-login-button");
+      const kakaoLoginButton = document.getElementById("kakao-login-button");
+      const demoLoginButton = document.getElementById("demo-login-button");
+      const loginUsername = document.getElementById("login-username");
+      const loginPassword = document.getElementById("login-password");
+      const signupUsername = document.getElementById("signup-username");
+      const signupPassword = document.getElementById("signup-password");
+      const signupPasswordConfirm = document.getElementById("signup-password-confirm");
+      const signupPhone = document.getElementById("signup-phone");
+      const signupCode = document.getElementById("signup-code");
+      const signupStatus = document.getElementById("signup-status");
+      const phoneRequestButton = document.getElementById("phone-request-button");
+      const phoneVerifyButton = document.getElementById("phone-verify-button");
+      const phoneHelp = document.getElementById("phone-help");
+      const phoneVerifiedBadge = document.getElementById("phone-verified-badge");
+      const logoutButton = document.getElementById("logout-button");
+      const profileAvatar = document.getElementById("profile-avatar");
+      const profileName = document.getElementById("profile-name");
+      const profileStatus = document.getElementById("profile-status");
+      const roomForm = document.getElementById("room-form");
+      const roomNameInput = document.getElementById("room-name");
+      const roomDescriptionInput = document.getElementById("room-description");
+      const roomCount = document.getElementById("room-count");
+      const roomsElement = document.getElementById("rooms");
+      const roomTemplate = document.getElementById("room-template");
+      const chatTitle = document.getElementById("chat-title");
+      const chatSubtitle = document.getElementById("chat-subtitle");
+      const messagesElement = document.getElementById("messages");
+      const emptyState = document.getElementById("empty-state");
+      const messageForm = document.getElementById("message-form");
+      const messageInput = document.getElementById("message-input");
+      const messageTemplate = document.getElementById("message-template");
+      const statusText = document.getElementById("status-text");
+      const connectionStatus = document.getElementById("connection-status");
+
+      function getInitial(value) {
+        return (value || "?").trim().slice(0, 1).toUpperCase();
+      }
+
+      function normalizePhone(value) {
+        return (value || "").replace(/\D/g, "").slice(0, 11);
+      }
+
+      function resetPhoneVerification() {
+        state.phoneVerification = {
+          phone: "",
+          token: "",
+          verified: false,
+        };
+        phoneVerifiedBadge.classList.add("hidden");
+      }
+
+      function updatePhoneHelp(message) {
+        phoneHelp.textContent = message;
+      }
+
+      function formatTime(iso) {
+        if (!iso) {
+          return "";
+        }
+        return new Date(iso).toLocaleTimeString("ko-KR", {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+      }
+
+      function setStatus(message, tone = "default") {
+        statusText.textContent = message;
+        statusText.className = `status-text${tone === "default" ? "" : ` ${tone}`}`;
+      }
+
+      function setAuthStatus(message, tone = "default") {
+        authStatus.textContent = message;
+        authStatus.className = `auth-status${tone === "default" ? "" : ` ${tone}`}`;
+      }
+
+      function setProviderStatus(message, tone = "default") {
+        providerStatus.textContent = message;
+        providerStatus.className = `provider-status${tone === "default" ? "" : ` ${tone}`}`;
+      }
+
+      async function api(url, options = {}) {
+        const response = await fetch(url, {
+          headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+          ...options,
+        });
+
+        const contentType = response.headers.get("Content-Type") || "";
+        const payload = contentType.includes("application/json")
+          ? await response.json()
+          : null;
+
+        if (response.status === 401) {
+          showAuth();
+          throw new Error(payload?.error || "로그인이 필요합니다.");
+        }
+
+        if (!response.ok) {
+          throw new Error(payload?.error || "요청 처리에 실패했습니다.");
+        }
+
+        return payload;
+      }
+
+      function showAuth(mode = "login") {
+        if (state.stream) {
+          state.stream.close();
+          state.stream = null;
+        }
+        state.session = null;
+        authScreen.classList.remove("hidden");
+        appScreen.classList.add("hidden");
+        setAuthMode(mode);
+      }
+
+      function showApp() {
+        authScreen.classList.add("hidden");
+        appScreen.classList.remove("hidden");
+      }
+
+      function setAuthMode(mode) {
+        const showSignup = mode === "signup";
+        signupBanner.classList.toggle("hidden", showSignup);
+        signupCard.classList.toggle("hidden", !showSignup);
+        setAuthStatus(
+          showSignup
+            ? "휴대폰 인증을 완료한 뒤 비밀번호 계정을 만들 수 있어요."
+            : "SNS 로그인 또는 기존 계정 로그인을 선택해 주세요."
+        );
+      }
+
+      function renderProfile() {
+        if (!state.session?.user) {
+          profileAvatar.textContent = "?";
+          profileName.textContent = "로그인이 필요해요";
+          profileStatus.textContent = "로그인 방식과 상태 메시지가 여기에 표시됩니다.";
+          return;
+        }
+
+        profileAvatar.textContent = getInitial(state.session.user.username);
+        profileName.textContent = state.session.user.username;
+        profileStatus.textContent = `${state.session.user.auth_provider_label} · ${state.session.user.status_message || "접속 중"}`;
+      }
+
+      function sortRooms(rooms) {
+        return [...rooms].sort((left, right) => String(right.updated_at || "").localeCompare(String(left.updated_at || "")));
+      }
+
+      function renderRooms() {
+        const sortedRooms = sortRooms(state.rooms);
+        roomsElement.replaceChildren();
+        roomCount.textContent = `${sortedRooms.length}개`;
+
+        sortedRooms.forEach((room) => {
+          const node = roomTemplate.content.firstElementChild.cloneNode(true);
+          node.dataset.roomId = room.id;
+          if (room.id === state.activeRoomId) {
+            node.classList.add("active");
+          }
+          node.querySelector(".room-avatar").textContent = getInitial(room.name);
+          node.querySelector(".room-name").textContent = room.name;
+          node.querySelector(".room-time").textContent = formatTime(room.updated_at);
+          node.querySelector(".room-preview").textContent = room.last_message
+            ? `${room.last_message.username}: ${room.last_message.text}`
+            : room.description || "아직 메시지가 없어요.";
+          node.querySelector(".room-meta").textContent = `${room.participant_count}명 · 메시지 ${room.message_count}개`;
+          node.addEventListener("click", () => selectRoom(room.id));
+          roomsElement.appendChild(node);
+        });
+      }
+
+      function updateRoom(room) {
+        state.roomMap.set(room.id, room);
+        state.rooms = sortRooms([...state.roomMap.values()]);
+        renderRooms();
+        syncActiveRoomHeader();
+      }
+
+      function syncActiveRoomHeader() {
+        const room = state.roomMap.get(state.activeRoomId);
+        if (!room) {
+          chatTitle.textContent = "채팅방을 선택해 주세요";
+          chatSubtitle.textContent = "위 목록에서 방을 누르면 바로 대화를 시작할 수 있어요.";
+          return;
+        }
+        chatTitle.textContent = room.name;
+        chatSubtitle.textContent = `${room.participant_count}명 참여 · ${room.description || "대화를 시작해 보세요."}`;
+      }
+
+      function renderMessages(messages) {
+        messagesElement.replaceChildren();
+        if (!messages.length) {
+          messagesElement.appendChild(emptyState);
+          return;
+        }
+
+        messages.forEach((message) => {
+          const node = messageTemplate.content.firstElementChild.cloneNode(true);
+          const mine = message.username === state.session?.user?.username;
+          if (mine) {
+            node.classList.add("mine");
+          }
+          node.querySelector(".bubble-name").textContent = mine ? "나" : message.username;
+          node.querySelector(".bubble-time").textContent = formatTime(message.timestamp);
+          node.querySelector(".bubble-text").textContent = message.text;
+          messagesElement.appendChild(node);
+        });
+
+        messagesElement.scrollTop = messagesElement.scrollHeight;
+      }
+
+      async function selectRoom(roomId) {
+        state.activeRoomId = roomId;
+        renderRooms();
+        syncActiveRoomHeader();
+        try {
+          state.activeMessages = await api(`/messages?room_id=${encodeURIComponent(roomId)}`);
+          renderMessages(state.activeMessages);
+          setStatus("대화를 불러왔어요.");
+        } catch (error) {
+          setStatus(error.message, "error");
+        }
+      }
+
+      async function fetchBootstrap() {
+        const data = await api("/bootstrap");
+        document.title = data.app_name;
+        state.session = { authenticated: true, user: data.user };
+        state.rooms = data.rooms || [];
+        state.roomMap = new Map(state.rooms.map((room) => [room.id, room]));
+        state.activeRoomId = data.selected_room_id;
+        renderProfile();
+        renderRooms();
+        syncActiveRoomHeader();
+        if (state.activeRoomId) {
+          await selectRoom(state.activeRoomId);
+        }
+      }
+
+      function connectEvents() {
+        if (state.stream) {
+          state.stream.close();
+        }
+
+        state.stream = new EventSource("/events");
+        state.stream.onopen = () => {
+          connectionStatus.textContent = "실시간 연결됨";
+        };
+        state.stream.onmessage = (event) => {
+          const payload = JSON.parse(event.data);
+          if (payload.type === "hello") {
+            return;
+          }
+          if (payload.type === "room_created") {
+            updateRoom(payload.room);
+            return;
+          }
+          if (payload.type === "message_created") {
+            updateRoom(payload.room);
+            if (payload.roomId === state.activeRoomId) {
+              state.activeMessages = [...state.activeMessages, payload.message];
+              renderMessages(state.activeMessages);
+            }
+          }
+        };
+        state.stream.onerror = () => {
+          connectionStatus.textContent = "재연결 중";
+        };
+      }
+
+      async function startApp() {
+        showApp();
+        await fetchBootstrap();
+        connectEvents();
+        setStatus("메신저 준비가 끝났어요.", "success");
+      }
+
+      async function loadProviders() {
+        try {
+          const data = await api("/auth/providers");
+          state.providers = data.providers || {};
+          const googleEnabled = Boolean(state.providers.google?.enabled);
+          const kakaoEnabled = Boolean(state.providers.kakao?.enabled);
+          const demoEnabled = Boolean(state.providers.demo?.enabled);
+          googleLoginButton.disabled = !googleEnabled;
+          kakaoLoginButton.disabled = !kakaoEnabled;
+          demoLoginButton.disabled = !demoEnabled;
+          if (googleEnabled) {
+            setProviderStatus("구글 로그인 버튼이 준비됐어요. 구글 클라이언트 ID와 시크릿이 연결되면 실제 OAuth로 이동합니다.", "success");
+          } else if (kakaoEnabled) {
+            setProviderStatus("카카오 로그인 버튼이 준비됐어요. 카카오 앱 키를 연결하면 실제 OAuth로 이동합니다.", "success");
+          } else {
+            setProviderStatus("아직 구글/카카오 앱 키가 없어서 개발용 SNS 로그인만 바로 테스트할 수 있어요.");
+          }
+        } catch (error) {
+          setProviderStatus(error.message, "error");
+        }
+      }
+
+      function consumeAuthQuery() {
+        const url = new URL(window.location.href);
+        const authError = url.searchParams.get("auth_error");
+        if (!authError) {
+          return;
+        }
+
+        const messages = {
+          google_not_configured: "구글 클라이언트 ID와 시크릿이 아직 연결되지 않았어요. 개발용 SNS 로그인으로 먼저 테스트할 수 있어요.",
+          google_access_denied: "구글 로그인 동의가 취소됐어요.",
+          kakao_not_configured: "카카오 앱 키가 아직 연결되지 않았어요. 개발용 SNS 로그인으로 먼저 테스트할 수 있어요.",
+          kakao_access_denied: "카카오 로그인 동의가 취소됐어요.",
+          oauth_state_invalid: "로그인 보안 검증에 실패했어요. 다시 시도해 주세요.",
+          google_login_failed: "구글 로그인 처리 중 문제가 생겼어요.",
+          kakao_login_failed: "카카오 로그인 처리 중 문제가 생겼어요.",
+        };
+
+        setAuthStatus(messages[authError] || "SNS 로그인 처리 중 문제가 생겼어요.", "error");
+        url.searchParams.delete("auth_error");
+        window.history.replaceState({}, document.title, `${url.pathname}${url.search ? `?${url.searchParams.toString()}` : ""}`);
+      }
+
+      async function submitLogin(event) {
+        event.preventDefault();
+        try {
+          state.session = await api("/login", {
+            method: "POST",
+            body: JSON.stringify({
+              username: loginUsername.value.trim(),
+              password: loginPassword.value,
+            }),
+          });
+          loginForm.reset();
+          await startApp();
+        } catch (error) {
+          setAuthStatus(error.message, "error");
+        }
+      }
+
+      function startGoogleLogin() {
+        if (!state.providers.google?.enabled) {
+          setAuthStatus("구글 로그인은 클라이언트 ID와 시크릿을 연결한 뒤 사용할 수 있어요.", "error");
+          return;
+        }
+        window.location.href = state.providers.google.login_url || "/auth/google/start";
+      }
+
+      function startKakaoLogin() {
+        if (!state.providers.kakao?.enabled) {
+          setAuthStatus("카카오 로그인은 앱 키를 연결한 뒤 사용할 수 있어요.", "error");
+          return;
+        }
+        window.location.href = state.providers.kakao.login_url || "/auth/kakao/start";
+      }
+
+      async function startDemoLogin() {
+        try {
+          state.session = await api("/auth/demo-login", {
+            method: "POST",
+            body: JSON.stringify({ provider: "demo" }),
+          });
+          await startApp();
+        } catch (error) {
+          setAuthStatus(error.message, "error");
+        }
+      }
+
+      async function requestPhoneCode() {
+        const phone = normalizePhone(signupPhone.value);
+        signupPhone.value = phone;
+        if (phone.length < 10) {
+          setAuthStatus("휴대폰 번호를 정확히 입력해 주세요.", "error");
+          signupPhone.focus();
+          return;
+        }
+
+        phoneRequestButton.disabled = true;
+        try {
+          const response = await api("/phone/request-code", {
+            method: "POST",
+            body: JSON.stringify({ phone }),
+          });
+          resetPhoneVerification();
+          state.phoneVerification.phone = phone;
+          const devCodeText = response.devCode ? ` 개발용 인증번호: ${response.devCode}` : "";
+          updatePhoneHelp(`${response.phoneMasked} 번호로 인증번호를 준비했어요.${devCodeText}`);
+          setAuthStatus("인증번호를 확인하고 아래에서 인증해 주세요.", "success");
+          signupCode.focus();
+        } catch (error) {
+          setAuthStatus(error.message, "error");
+        } finally {
+          phoneRequestButton.disabled = false;
+        }
+      }
+
+      async function verifyPhoneCode() {
+        const phone = normalizePhone(signupPhone.value);
+        const code = signupCode.value.replace(/\D/g, "").slice(0, 6);
+        signupPhone.value = phone;
+        signupCode.value = code;
+
+        if (phone.length < 10) {
+          setAuthStatus("휴대폰 번호를 먼저 입력해 주세요.", "error");
+          signupPhone.focus();
+          return;
+        }
+        if (code.length !== 6) {
+          setAuthStatus("인증번호 6자리를 입력해 주세요.", "error");
+          signupCode.focus();
+          return;
+        }
+
+        phoneVerifyButton.disabled = true;
+        try {
+          const response = await api("/phone/verify-code", {
+            method: "POST",
+            body: JSON.stringify({ phone, code }),
+          });
+          state.phoneVerification = {
+            phone,
+            token: response.verificationToken,
+            verified: true,
+          };
+          phoneVerifiedBadge.classList.remove("hidden");
+          updatePhoneHelp(`${response.phoneMasked} 번호 인증이 완료됐어요.`);
+          setAuthStatus("휴대폰 인증이 완료됐어요. 이제 비밀번호 계정을 만들 수 있어요.", "success");
+        } catch (error) {
+          resetPhoneVerification();
+          setAuthStatus(error.message, "error");
+        } finally {
+          phoneVerifyButton.disabled = false;
+        }
+      }
+
+      async function submitSignup(event) {
+        event.preventDefault();
+        const phone = normalizePhone(signupPhone.value);
+        signupPhone.value = phone;
+
+        if (signupPassword.value !== signupPasswordConfirm.value) {
+          setAuthStatus("비밀번호 확인이 일치하지 않습니다.", "error");
+          signupPasswordConfirm.focus();
+          return;
+        }
+
+        if (!state.phoneVerification.verified || state.phoneVerification.phone !== phone || !state.phoneVerification.token) {
+          setAuthStatus("휴대폰 인증을 먼저 완료해 주세요.", "error");
+          signupPhone.focus();
+          return;
+        }
+
+        try {
+          state.session = await api("/signup", {
+            method: "POST",
+            body: JSON.stringify({
+              username: signupUsername.value.trim(),
+              password: signupPassword.value,
+              statusMessage: signupStatus.value.trim(),
+              phone,
+              verificationToken: state.phoneVerification.token,
+            }),
+          });
+          signupForm.reset();
+          resetPhoneVerification();
+          updatePhoneHelp("개발 환경에서는 인증번호가 화면에 표시됩니다.");
+          await startApp();
+        } catch (error) {
+          setAuthStatus(error.message, "error");
+        }
+      }
+
+      async function logout() {
+        try {
+          await api("/logout", { method: "POST", body: JSON.stringify({}) });
+        } catch (error) {
+          console.error(error);
+        }
+        showAuth("login");
+        setAuthStatus("로그아웃했어요.", "success");
+      }
+
+      async function createRoom(event) {
+        event.preventDefault();
+        const name = roomNameInput.value.trim();
+        if (!name) {
+          setStatus("채팅방 이름을 입력해 주세요.", "error");
+          roomNameInput.focus();
+          return;
+        }
+
+        try {
+          const room = await api("/rooms", {
+            method: "POST",
+            body: JSON.stringify({
+              name,
+              description: roomDescriptionInput.value.trim(),
+            }),
+          });
+          roomForm.reset();
+          updateRoom(room);
+          await selectRoom(room.id);
+          setStatus("새 채팅방을 만들었어요.", "success");
+        } catch (error) {
+          setStatus(error.message, "error");
+        }
+      }
+
+      async function sendMessage(event) {
+        event.preventDefault();
+        if (!state.activeRoomId) {
+          setStatus("먼저 채팅방을 선택해 주세요.", "error");
+          return;
+        }
+
+        const text = messageInput.value.trim();
+        if (!text) {
+          setStatus("메시지를 입력해 주세요.", "error");
+          messageInput.focus();
+          return;
+        }
+
+        try {
+          await api("/messages", {
+            method: "POST",
+            body: JSON.stringify({
+              roomId: state.activeRoomId,
+              text,
+            }),
+          });
+          messageInput.value = "";
+          messageInput.focus();
+          setStatus("메시지를 보냈어요.", "success");
+        } catch (error) {
+          setStatus(error.message, "error");
+        }
+      }
+
+      async function checkSession() {
+        try {
+          const session = await api("/session", { headers: {} });
+          if (session.authenticated) {
+            state.session = session;
+            await startApp();
+          } else {
+            showAuth("login");
+            setAuthStatus("SNS 로그인 또는 기존 계정 로그인을 선택해 주세요.");
+          }
+        } catch (error) {
+          showAuth("login");
+          setAuthStatus("세션 확인에 실패했어요.", "error");
+        }
+      }
+
+      signupPhone.addEventListener("input", () => {
+        const previousPhone = state.phoneVerification.phone;
+        signupPhone.value = normalizePhone(signupPhone.value);
+        if (signupPhone.value !== previousPhone) {
+          resetPhoneVerification();
+          updatePhoneHelp("개발 환경에서는 인증번호가 화면에 표시됩니다.");
+        }
+      });
+
+      signupCode.addEventListener("input", () => {
+        signupCode.value = signupCode.value.replace(/\D/g, "").slice(0, 6);
+      });
+
+      signupToggle.addEventListener("click", () => setAuthMode("signup"));
+      signupClose.addEventListener("click", () => setAuthMode("login"));
+      googleLoginButton.addEventListener("click", startGoogleLogin);
+      kakaoLoginButton.addEventListener("click", startKakaoLogin);
+      demoLoginButton.addEventListener("click", startDemoLogin);
+      phoneRequestButton.addEventListener("click", requestPhoneCode);
+      phoneVerifyButton.addEventListener("click", verifyPhoneCode);
+      loginForm.addEventListener("submit", submitLogin);
+      signupForm.addEventListener("submit", submitSignup);
+      logoutButton.addEventListener("click", logout);
+      roomForm.addEventListener("submit", createRoom);
+      messageForm.addEventListener("submit", sendMessage);
+      messageInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          messageForm.requestSubmit();
+        }
+      });
+
+      consumeAuthQuery();
+      loadProviders();
+      checkSession();
+    </script>
+  </body>
+</html>
