@@ -62,6 +62,7 @@ PROFILE_PIXEL_SIDE = 32
 PROFILE_PIXEL_COUNT = PROFILE_PIXEL_SIDE * PROFILE_PIXEL_SIDE
 PROFILE_PALETTE = ("#ffffff", "#000000", "#777777", "#d9d9d9", "#e53935", "#fb8c00", "#fdd835", "#43a047", "#1e88e5", "#8e24aa", "#6d4c41", "#ec407a")
 SESSION_COOKIE_NAME = "codex_talk_session"
+OAUTH_STATE_COOKIE_NAME = "colorless_oauth_state"
 PASSWORD_ITERATIONS = 100_000
 PHONE_CODE_TTL_SECONDS = 180
 PHONE_TOKEN_TTL_SECONDS = 900
@@ -216,6 +217,18 @@ def make_cookie_header(token: str, *, max_age: int | None = None, secure: bool =
         cookie[SESSION_COOKIE_NAME]["secure"] = True
     if max_age is not None:
         cookie[SESSION_COOKIE_NAME]["max-age"] = str(max_age)
+    return cookie.output(header="").strip()
+
+
+def make_oauth_state_cookie(state: str, *, secure: bool) -> str:
+    cookie = SimpleCookie()
+    cookie[OAUTH_STATE_COOKIE_NAME] = state
+    cookie[OAUTH_STATE_COOKIE_NAME]["path"] = "/"
+    cookie[OAUTH_STATE_COOKIE_NAME]["httponly"] = True
+    cookie[OAUTH_STATE_COOKIE_NAME]["samesite"] = "Lax"
+    cookie[OAUTH_STATE_COOKIE_NAME]["max-age"] = str(OAUTH_STATE_TTL_SECONDS)
+    if secure:
+        cookie[OAUTH_STATE_COOKIE_NAME]["secure"] = True
     return cookie.output(header="").strip()
 
 
@@ -1656,7 +1669,10 @@ class ChatHandler(BaseHTTPRequestHandler):
             "include_granted_scopes": "true",
             "prompt": "select_account",
         }
-        self.redirect(f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}")
+        self.send_response(HTTPStatus.FOUND)
+        self.send_header("Location", f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}")
+        self.send_header("Set-Cookie", make_oauth_state_cookie(state, secure=self.cookie_secure()))
+        self.end_headers()
 
     def finish_google_login(self, query: dict[str, list[str]]) -> None:
         if "error" in query:
@@ -1665,7 +1681,9 @@ class ChatHandler(BaseHTTPRequestHandler):
 
         code = query.get("code", [""])[0].strip()
         state = query.get("state", [""])[0].strip()
-        if not code or not state or not OAUTH_STATES.consume(state):
+        cookie_state = self.read_cookie_value(OAUTH_STATE_COOKIE_NAME)
+        state_is_valid = bool(cookie_state) and hmac.compare_digest(state, cookie_state)
+        if not code or not state or not (state_is_valid or OAUTH_STATES.consume(state)):
             self.redirect("/?auth_error=oauth_state_invalid")
             return
 
