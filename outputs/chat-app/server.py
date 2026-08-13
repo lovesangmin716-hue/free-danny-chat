@@ -2461,14 +2461,13 @@ class ChatHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def read_session_token(self) -> str | None:
-        header_token = self.headers.get("X-Session-Token", "").strip()
-        if header_token:
-            return header_token
         raw_cookie = self.headers.get("Cookie", "")
         cookie = SimpleCookie()
         cookie.load(raw_cookie)
         morsel = cookie.get(SESSION_COOKIE_NAME)
-        return morsel.value if morsel else None
+        if morsel:
+            return morsel.value
+        return self.headers.get("X-Session-Token", "").strip() or None
 
     def read_json_body(self) -> dict | None:
         content_length = int(self.headers.get("Content-Length", "0"))
