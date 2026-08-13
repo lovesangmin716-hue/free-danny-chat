@@ -76,6 +76,12 @@ GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "").strip()
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
 SOCIAL_DEMO_LOGIN_ENABLED = os.getenv("SOCIAL_DEMO_LOGIN_ENABLED", "true").lower() != "false"
 SOCIAL_DEMO_ADMIN_PASSWORD = os.getenv("SOCIAL_DEMO_ADMIN_PASSWORD", "").strip()
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+SUPABASE_STATE_TABLE = "app_state"
+SUPABASE_STATE_ID = "primary"
+SUPABASE_UPLOAD_BUCKET = "chat-uploads"
+SUPABASE_ENABLED = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
 SUBSCRIBERS: set[queue.Queue] = set()
 SUBSCRIBERS_LOCK = threading.Lock()
 SHORTS_FEED_LOCK = threading.Lock()
@@ -314,7 +320,7 @@ def fetch_json(
     method: str = "GET",
     headers: dict[str, str] | None = None,
     data: bytes | None = None,
-) -> dict:
+) -> object:
     request = Request(url, data=data, method=method)
     for key, value in (headers or {}).items():
         request.add_header(key, value)
@@ -327,6 +333,41 @@ def fetch_json(
         raise ValueError(body or f"HTTP {error.code}") from error
     except URLError as error:
         raise ConnectionError(str(error.reason)) from error
+
+
+def fetch_bytes(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    data: bytes | None = None,
+) -> bytes:
+    request = Request(url, data=data, method=method)
+    for key, value in (headers or {}).items():
+        request.add_header(key, value)
+
+    try:
+        with urlopen(request, timeout=30) as response:
+            return response.read()
+    except HTTPError as error:
+        body = error.read().decode("utf-8", errors="ignore")
+        raise ValueError(body or f"HTTP {error.code}") from error
+    except URLError as error:
+        raise ConnectionError(str(error.reason)) from error
+
+
+def supabase_headers(content_type: str | None = None) -> dict[str, str]:
+    headers = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+    }
+    if content_type:
+        headers["Content-Type"] = content_type
+    return headers
+
+
+def supabase_object_url(filename: str) -> str:
+    return f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_UPLOAD_BUCKET}/{quote(filename)}"
 
 
 class SessionStore:
@@ -566,6 +607,17 @@ class StateStore:
         }
 
     def _write_state(self, state: dict) -> None:
+        if SUPABASE_ENABLED:
+            payload = json.dumps({"id": SUPABASE_STATE_ID, "state": state}, ensure_ascii=False).encode("utf-8")
+            headers = supabase_headers("application/json")
+            headers["Prefer"] = "resolution=merge-duplicates,return=minimal"
+            fetch_json(
+                f"{SUPABASE_URL}/rest/v1/{SUPABASE_STATE_TABLE}?on_conflict=id",
+                method="POST",
+                headers=headers,
+                data=payload,
+            )
+            return
         temp_path = self.path.with_suffix(".tmp")
         temp_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
         temp_path.replace(self.path)
@@ -667,6 +719,18 @@ class StateStore:
         return state
 
     def _load_state(self) -> dict:
+        if SUPABASE_ENABLED:
+            rows = fetch_json(
+                f"{SUPABASE_URL}/rest/v1/{SUPABASE_STATE_TABLE}?id=eq.{SUPABASE_STATE_ID}&select=state",
+                headers=supabase_headers(),
+            )
+            if isinstance(rows, list) and rows and isinstance(rows[0], dict) and isinstance(rows[0].get("state"), dict):
+                state = self._migrate_state(rows[0]["state"])
+            else:
+                state = self._default_state()
+            self._write_state(state)
+            return state
+
         if not self.path.exists():
             state = self._default_state()
             self._write_state(state)
@@ -1498,19 +1562,24 @@ class ChatHandler(BaseHTTPRequestHandler):
 
     def serve_upload(self, request_path: str) -> None:
         filename = Path(unquote(request_path.removeprefix("/uploads/"))).name
-        upload_path = (UPLOADS_DIR / filename).resolve()
+        if not filename or Path(filename).suffix.lower() not in ATTACHMENT_TYPES.values():
+            self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+            return
+
         try:
-            upload_path.relative_to(UPLOADS_DIR.resolve())
-        except ValueError:
+            if SUPABASE_ENABLED:
+                content = fetch_bytes(supabase_object_url(filename), headers=supabase_headers())
+            else:
+                upload_path = (UPLOADS_DIR / filename).resolve()
+                upload_path.relative_to(UPLOADS_DIR.resolve())
+                if not upload_path.is_file():
+                    raise FileNotFoundError(filename)
+                content = upload_path.read_bytes()
+        except (ConnectionError, FileNotFoundError, ValueError):
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
             return
 
-        if not upload_path.is_file() or upload_path.suffix.lower() not in ATTACHMENT_TYPES.values():
-            self.send_error(HTTPStatus.NOT_FOUND, "Not found")
-            return
-
-        content = upload_path.read_bytes()
-        content_type = mimetypes.guess_type(upload_path.name)[0] or "application/octet-stream"
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(content)))
@@ -2274,9 +2343,23 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "Unsupported or oversized file. Images and PDFs can be up to 8MB."}, HTTPStatus.BAD_REQUEST)
             return
 
-        UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
         filename = f"{new_id('upload')}{extension}"
-        (UPLOADS_DIR / filename).write_bytes(content)
+        if SUPABASE_ENABLED:
+            headers = supabase_headers(content_type)
+            headers["x-upsert"] = "false"
+            try:
+                fetch_json(
+                    supabase_object_url(filename),
+                    method="POST",
+                    headers=headers,
+                    data=content,
+                )
+            except (ConnectionError, ValueError):
+                self.send_json({"error": "Unable to save the file."}, HTTPStatus.BAD_GATEWAY)
+                return
+        else:
+            UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+            (UPLOADS_DIR / filename).write_bytes(content)
         original_name = Path(str(payload.get("name", "file"))).name.strip()[:120] or f"file{extension}"
         attachment = {
             "url": f"/uploads/{filename}",
@@ -2301,22 +2384,27 @@ class ChatHandler(BaseHTTPRequestHandler):
             return None
         url = str(value.get("url", "")).strip()
         filename = Path(unquote(url.removeprefix("/uploads/"))).name
-        upload_path = (UPLOADS_DIR / filename).resolve()
         content_type = str(value.get("type", "")).strip().lower()
-        if not url.startswith("/uploads/") or ATTACHMENT_TYPES.get(content_type) != upload_path.suffix.lower():
+        if not url.startswith("/uploads/") or ATTACHMENT_TYPES.get(content_type) != Path(filename).suffix.lower():
             return None
+        if not SUPABASE_ENABLED:
+            upload_path = (UPLOADS_DIR / filename).resolve()
+            try:
+                upload_path.relative_to(UPLOADS_DIR.resolve())
+            except ValueError:
+                return None
+            if not upload_path.is_file():
+                return None
         try:
-            upload_path.relative_to(UPLOADS_DIR.resolve())
-        except ValueError:
-            return None
-        if not upload_path.is_file():
-            return None
+            attachment_size = int(value.get("size", 0)) if SUPABASE_ENABLED else upload_path.stat().st_size
+        except (TypeError, ValueError):
+            attachment_size = 0
         name = Path(str(value.get("name", filename))).name.strip()[:120] or filename
         return {
             "url": f"/uploads/{filename}",
             "name": name,
             "type": content_type,
-            "size": upload_path.stat().st_size,
+            "size": attachment_size,
         }
 
     def mark_room_read(self, user: dict) -> None:
