@@ -327,7 +327,8 @@ def fetch_json(
 
     try:
         with urlopen(request, timeout=15) as response:
-            return json.loads(response.read().decode("utf-8"))
+            content = response.read().decode("utf-8")
+            return json.loads(content) if content else {}
     except HTTPError as error:
         body = error.read().decode("utf-8", errors="ignore")
         raise ValueError(body or f"HTTP {error.code}") from error
