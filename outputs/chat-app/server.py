@@ -1710,10 +1710,18 @@ class ChatHandler(BaseHTTPRequestHandler):
             return
 
         token = SESSIONS.create(user["username"])
-        self.send_response(HTTPStatus.FOUND)
-        self.send_header("Location", "/")
+        content = (
+            "<!doctype html><script>"
+            f"sessionStorage.setItem('free-danny-session-token',{json.dumps(token)});"
+            "location.replace('/');"
+            "</script>"
+        ).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
         self.send_header("Set-Cookie", make_cookie_header(token, max_age=60 * 60 * 24 * 7, secure=self.cookie_secure()))
         self.end_headers()
+        self.wfile.write(content)
 
     def google_id_token_login(self) -> None:
         is_redirect_login = "application/x-www-form-urlencoded" in self.headers.get("Content-Type", "")
