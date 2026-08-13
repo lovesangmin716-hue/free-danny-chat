@@ -1,4 +1,4 @@
-# FREE DANNY
+# Colorless
 
 회원가입 → 로그인 → 채팅 흐름으로 만든 모바일형 메신저 MVP입니다.
 
@@ -13,13 +13,15 @@ python server.py
 
 ## 현재 기능
 
-- 구글 OAuth 준비형 SNS 로그인
+- 구글 계정 로그인
 - 카카오 OAuth 준비형 SNS 로그인
 - 개발용 SNS 체험 로그인
 - 일반 아이디/비밀번호 로그인
 - 휴대폰 인증 기반 회원가입
-- 채팅방 생성 / 입장
-- SSE 기반 실시간 메시지 반영
+- 사용자별 친구 추가
+- 친구와의 1:1 채팅방 생성
+- 채팅 목록 / 친구 목록 화면
+- 앱 안에서 이어 보는 공개 YouTube 쇼츠 피드
 - `chat_state.json` 파일 기반 상태 저장
 
 ## 공개 배포
@@ -51,8 +53,7 @@ python server.py
 - `DATA_DIR`
 - `PUBLIC_BASE_URL` (선택)
 - `GOOGLE_CLIENT_ID`
-- `GOOGLE_CLIENT_SECRET`
-- `GOOGLE_REDIRECT_URI` (선택)
+- `YOUTUBE_API_KEY` (공개 쇼츠 피드용)
 - `KAKAO_REST_API_KEY`
 - `KAKAO_CLIENT_SECRET`
 - `KAKAO_REDIRECT_URI` (선택)
@@ -70,17 +71,36 @@ python server.py
 
 ## Google 로그인 설정
 
-구글 로그인을 실제로 쓰려면 아래 값을 Google Cloud Console에 등록해야 합니다.
+구글 로그인을 실제로 쓰려면 Google Cloud Console에서 만든 웹 애플리케이션 OAuth 클라이언트 ID가 필요합니다.
+
+로컬에서는 `outputs/chat-app/.env.example` 파일을 복사해 `.env`로 만든 뒤, 아래 값을 넣습니다. `.env`는 Git에 올라가지 않습니다.
+
+```text
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+```
 
 ### 로컬 개발
 
 - 승인된 JavaScript 원본: `http://localhost:8765`
-- 승인된 리디렉션 URI: `http://localhost:8765/auth/google/callback`
+- 승인된 JavaScript 원본: `http://127.0.0.1:8765`
+- 앱 접속 주소: `http://localhost:8765` 또는 `http://127.0.0.1:8765`
 
 ### 공개 배포
 
 - 승인된 JavaScript 원본: `https://your-app.onrender.com`
-- 승인된 리디렉션 URI: `https://your-app.onrender.com/auth/google/callback`
+- Render 환경 변수: `GOOGLE_CLIENT_ID`
+
+로컬 OAuth 클라이언트와 공개 배포 OAuth 클라이언트는 분리하는 것을 권장합니다.
+
+## YouTube 쇼츠 피드 설정
+
+게스트 쇼츠 피드는 YouTube Data API v3로 공개 영상 링크를 받아 앱 안에서 세로로 재생합니다. Google Cloud Console에서 API 키를 만들고 **YouTube Data API v3만 허용**하도록 제한한 뒤 `.env` 또는 배포 환경 변수에 넣으세요.
+
+```text
+YOUTUBE_API_KEY=your-youtube-data-api-key
+```
+
+API 키는 서버에서만 사용하며, 브라우저 코드나 Git 저장소에 넣지 않습니다.
 
 ## 카카오 로그인 설정
 

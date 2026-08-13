@@ -1,3 +1,6 @@
 work/
 outputs/chat-app/__pycache__/
 outputs/chat-app/chat_state.json
+outputs/chat-app/.env
+outputs/chat-app/server-output.log
+outputs/chat-app/server-error.log
