@@ -1,562 +1,574 @@
 <!doctype html>
 <html lang="ko">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>FREE DANNY</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#ffffff" />
+    <title>Colorless</title>
     <style>
-      :root {
-        color-scheme: light;
-        --black: #111111;
-        --gray: #cfcfcf;
-        --white: #ffffff;
-        --muted: #666666;
-        --bg: var(--gray);
-        --line: var(--black);
-        --panel: var(--white);
-        --text: var(--black);
-        --google: #111111;
-        --kakao: #111111;
+      @font-face {
+        font-family: "The Jamsil";
+        font-style: normal;
+        font-weight: 400;
+        src: url("assets/fonts/The%20Jamsil%202%20Light.ttf") format("truetype");
       }
 
-      * {
-        box-sizing: border-box;
+      @font-face {
+        font-family: "The Jamsil";
+        font-style: normal;
+        font-weight: 500;
+        src: url("assets/fonts/The%20Jamsil%203%20Regular.ttf") format("truetype");
       }
 
-      html,
-      body {
-        margin: 0;
-        min-height: 100%;
-      }
-
-      body {
-        min-height: 100dvh;
-        display: flex;
-        justify-content: center;
-        align-items: stretch;
-        background: var(--bg);
-        color: var(--text);
-        font-family: "Segoe UI", "Apple SD Gothic Neo", sans-serif;
-      }
-
-      button,
-      input,
-      textarea {
-        font: inherit;
-        border-radius: 0;
-      }
-
-      .hidden {
-        display: none !important;
-      }
-
-      .auth-shell,
-      .app {
-        width: min(100vw, 392px);
-        min-height: 100dvh;
-        height: 100dvh;
-        background: var(--panel);
-        border-left: 1px solid var(--line);
-        border-right: 1px solid var(--line);
-        overflow: hidden;
-      }
-
-      .auth-shell {
-        display: flex;
-        flex-direction: column;
-      }
-
-      .auth-header {
-        padding: 18px 16px 12px;
-        border-bottom: 1px solid var(--line);
-      }
-
-      .auth-header h1,
-      .brand h1 {
-        margin: 0;
-        font-size: 22px;
-        letter-spacing: 0.04em;
-      }
-
-      .auth-header p,
-      .auth-note,
-      .brand p,
-      .profile-hint,
-      .helper,
-      .room-preview,
-      .room-meta,
-      .room-time,
-      .chat-subtitle,
-      .status-text,
-      .auth-status,
-      .provider-copy,
-      .phone-help,
-      .empty-copy {
-        color: var(--muted);
-      }
-
-      .auth-header p {
-        margin: 6px 0 0;
-        font-size: 13px;
-      }
-
-      .auth-scroll {
-        flex: 1;
-        overflow-y: auto;
-        padding: 14px 16px 18px;
-      }
-
-      .auth-card,
-      .provider-card,
-      .signup-banner,
-      .brand,
-      .profile-card,
-      .room-create,
-      .room-list,
-      .empty-state {
-        border: 1px solid var(--line);
-        background: var(--panel);
-      }
-
-      .provider-card,
-      .auth-card {
-        padding: 14px;
-      }
-
-      .provider-card {
-        display: grid;
-        gap: 10px;
-      }
-
-      .provider-card h2,
-      .auth-card h2 {
-        margin: 0;
-        font-size: 15px;
-      }
-
-      .provider-copy,
-      .auth-note {
-        margin: 0;
-        font-size: 12px;
-        line-height: 1.5;
-      }
-
-      .provider-stack {
-        display: grid;
-        gap: 8px;
-      }
-
-      .provider-button {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        min-height: 44px;
+      @font-face {
+        font-family: "The Jamsil";
+        font-style: normal;
         font-weight: 700;
+        src: url("assets/fonts/The%20Jamsil%204%20Medium.ttf") format("truetype");
       }
 
-      .provider-button.google,
-      .provider-button.kakao {
-        background: var(--black);
-        color: var(--white);
+      @font-face {
+        font-family: "The Jamsil";
+        font-style: normal;
+        font-weight: 800;
+        src: url("assets/fonts/The%20Jamsil%205%20Bold.ttf") format("truetype");
       }
 
-      .provider-button.demo,
-      .secondary-button {
-        background: var(--white);
+      :root {
+        --black: #111111;
+        --gray: #737373;
+        --light-gray: #e5e5e5;
+        --white: #ffffff;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body { min-height: 100%; }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--light-gray);
         color: var(--black);
+        font-family: "The Jamsil", sans-serif;
       }
 
-      .provider-status {
-        font-size: 12px;
-        line-height: 1.5;
-      }
-
-      .auth-card.compact {
-        margin-top: 10px;
-      }
-
-      .auth-card form,
-      .room-create form {
-        display: grid;
-        gap: 12px;
-      }
-
-      .signup-banner {
-        margin-top: 10px;
-        padding: 12px 14px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        background: var(--gray);
-      }
-
-      .signup-banner strong {
-        display: block;
-        font-size: 13px;
-        margin-bottom: 4px;
-      }
-
-      .signup-banner span {
-        font-size: 12px;
-      }
-
-      .field {
-        display: grid;
-        gap: 7px;
-      }
-
-      .field-row {
-        display: grid;
-        grid-template-columns: 1fr 118px;
-        gap: 8px;
-        align-items: end;
-      }
-
-      .field-row.code-row {
-        grid-template-columns: 1fr 110px;
-      }
-
-      label {
-        font-size: 12px;
-        color: var(--muted);
-      }
-
-      input,
-      textarea {
-        width: 100%;
-        padding: 11px 12px;
-        color: var(--text);
-        background: var(--white);
-        border: 1px solid var(--line);
-        outline: none;
-      }
-
-      textarea {
-        resize: none;
-        line-height: 1.45;
-      }
-
-      input:focus,
-      textarea:focus {
-        outline: 2px solid var(--black);
-        outline-offset: -2px;
-      }
+      button, input, select, textarea { font: inherit; }
 
       button {
-        width: 100%;
-        min-height: 42px;
-        padding: 10px 12px;
+        min-height: 48px;
         border: 1px solid var(--black);
+        border-radius: 0;
         background: var(--black);
         color: var(--white);
-        font-weight: 700;
         cursor: pointer;
+        font-weight: 700;
       }
 
       button:disabled {
-        opacity: 0.55;
         cursor: not-allowed;
+        opacity: 0.45;
       }
 
-      .verified-badge {
-        display: inline-flex;
-        align-items: center;
-        min-height: 28px;
-        padding: 4px 8px;
-        border: 1px solid var(--line);
-        font-size: 12px;
-        color: var(--black);
-        background: var(--gray);
-      }
-
-      .auth-status {
-        margin-top: 14px;
-        font-size: 13px;
-      }
-
-      .auth-status.error,
-      .status-text.error,
-      .provider-status.error {
-        color: var(--black);
-        font-weight: 700;
-      }
-
-      .auth-status.success,
-      .status-text.success,
-      .provider-status.success {
-        color: var(--black);
-        font-weight: 700;
-      }
-
-      .app {
-        display: grid;
-        grid-template-rows: auto 1fr;
-      }
-
-      .sidebar {
-        display: grid;
-        grid-template-rows: auto auto auto minmax(124px, 1fr);
-        gap: 8px;
-        padding: 10px;
-        border-bottom: 1px solid var(--line);
-        background: var(--white);
-      }
-
-      .brand,
-      .profile-card,
-      .room-create {
-        padding: 10px;
-      }
-
-      .brand p {
-        margin: 6px 0 0;
-        font-size: 12px;
-        line-height: 1.45;
-      }
-
-      .profile-grid {
-        display: grid;
-        grid-template-columns: 42px 1fr;
-        gap: 10px;
-        align-items: center;
-      }
-
-      .avatar,
-      .room-avatar {
-        display: inline-flex;
-        justify-content: center;
-        align-items: center;
-        font-weight: 700;
-        border: 1px solid var(--line);
-      }
-
-      .avatar {
-        width: 42px;
-        height: 42px;
-        background: var(--black);
-        color: var(--white);
-      }
-
-      .profile-name {
-        font-size: 14px;
-        font-weight: 700;
-      }
-
-      .profile-hint {
-        font-size: 12px;
-        line-height: 1.4;
-      }
-
-      .profile-actions {
-        margin-top: 10px;
-      }
-
-      .room-list {
-        min-height: 0;
-        display: grid;
-        grid-template-rows: auto 1fr;
-        overflow: hidden;
-      }
-
-      .room-list-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 10px 10px 8px;
-      }
-
-      .room-list-body {
-        overflow-y: auto;
-        padding: 0 6px 6px;
-      }
-
-      .room-item {
+      input {
         width: 100%;
-        display: grid;
-        grid-template-columns: 38px 1fr auto;
-        gap: 10px;
-        align-items: center;
-        padding: 10px;
-        margin-bottom: 6px;
+        min-height: 48px;
+        border: 1px solid var(--black);
+        border-radius: 0;
         background: var(--white);
         color: var(--black);
-        border: 1px solid transparent;
-        text-align: left;
+        padding: 0 14px;
       }
 
-      .room-item.active {
-        background: var(--gray);
-        border-color: var(--line);
+      input:focus, button:focus-visible {
+        outline: 2px solid var(--black);
+        outline-offset: 2px;
       }
 
-      .room-avatar {
-        width: 38px;
-        height: 38px;
+      .hidden { display: none !important; }
+
+      .auth-shell {
+        width: min(100%, 430px);
+        min-height: 100vh;
+        margin: 0 auto;
         background: var(--white);
+        border-inline: 1px solid var(--black);
       }
 
-      .room-name-row {
-        display: flex;
-        justify-content: space-between;
-        gap: 8px;
-        margin-bottom: 3px;
-      }
-
-      .room-name {
-        font-size: 13px;
-        font-weight: 700;
-      }
-
-      .room-preview,
-      .room-meta,
-      .room-time {
-        font-size: 11px;
-      }
-
-      .chat-panel {
-        min-height: 0;
-        display: grid;
-        grid-template-rows: auto 1fr auto;
-        background: var(--white);
-      }
-
-      .chat-header {
-        padding: 12px 12px 10px;
-        border-bottom: 1px solid var(--line);
-        display: flex;
-        justify-content: space-between;
+      .auth-header {
         align-items: center;
-        gap: 8px;
+        border-bottom: 1px solid var(--black);
+        display: flex;
+        justify-content: space-between;
+        padding: calc(18px + env(safe-area-inset-top)) 22px 14px;
       }
 
-      .chat-title {
+      .auth-header button { min-height: 38px; padding-inline: 12px; }
+
+      .auth-header h1 {
         margin: 0;
-        font-size: 18px;
+        font-size: 28px;
+        letter-spacing: 0.06em;
       }
 
-      .chat-subtitle {
-        margin-top: 4px;
-        font-size: 12px;
-        line-height: 1.4;
+      .auth-header p {
+        font-size: 14px;
+        margin: 5px 0 0;
+        color: var(--gray);
       }
 
-      .status-pill {
-        flex-shrink: 0;
-        min-height: 28px;
-        padding: 6px 8px;
-        border: 1px solid var(--line);
-        background: var(--gray);
-        font-size: 11px;
-        font-weight: 700;
-      }
-
-      .messages {
-        min-height: 0;
-        overflow-y: auto;
-        padding: 10px 12px;
+      .auth-scroll {
         display: flex;
         flex-direction: column;
-        gap: 8px;
-        background: var(--gray);
+        gap: 10px;
+        padding: 14px 22px calc(16px + env(safe-area-inset-bottom));
       }
 
-      .empty-state {
-        margin: auto 0;
-        padding: 16px;
-        text-align: center;
+      .provider-card, .auth-card, .signup-banner {
+        border: 1px solid var(--black);
+        padding: 14px;
       }
 
-      .empty-state h3 {
-        margin: 0 0 8px;
-        font-size: 16px;
+      .auth-card, .signup-banner { margin-top: 0; }
+
+      .auth-card { order: 1; }
+      .signup-banner { order: 2; }
+
+      .provider-card {
+        border: 0;
+        order: 3;
+        padding: 0;
       }
 
-      .empty-copy {
-        margin: 0;
-        font-size: 12px;
+      h2 { margin: 0; font-size: 18px; }
+
+      .provider-copy, .auth-note, .signup-banner span, .phone-help {
+        color: var(--gray);
+        font-size: 14px;
         line-height: 1.5;
       }
 
-      .message-row {
-        display: flex;
+      .provider-copy, .auth-note { margin: 6px 0 0; }
+
+      .provider-stack, form { display: grid; gap: 8px; margin-top: 12px; }
+
+      .provider-card h2, .provider-copy { display: none; }
+
+      .provider-stack {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        margin-top: 0;
       }
 
-      .message-row.mine {
-        justify-content: flex-end;
+      .google-button-container { grid-column: 1 / -1; min-height: 48px; }
+
+      .google-button-container > div {
+        height: 48px !important;
+        width: 100% !important;
       }
 
-      .bubble {
-        max-width: 78%;
-        padding: 10px 11px;
-        border: 1px solid var(--line);
+      .provider-button.google, .provider-button.kakao, .provider-button.demo, .secondary-button {
         background: var(--white);
+        color: var(--black);
       }
 
-      .message-row.mine .bubble {
-        background: #e3e3e3;
+      .provider-button.google { grid-column: 1 / -1; }
+      .provider-button.kakao, .provider-button.demo { min-height: 42px; }
+
+      .provider-status:empty { display: none; }
+
+      .field { display: grid; gap: 7px; }
+      label { font-size: 14px; font-weight: 700; }
+      .auth-card input, .auth-card select, .auth-card button { min-height: 44px; }
+      .auth-card select { background: var(--white); border: 1px solid var(--black); border-radius: 0; color: var(--black); padding: 0 12px; width: 100%; }
+      .field-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+      .field-row button { min-height: 48px; padding-inline: 12px; white-space: nowrap; }
+
+      .signup-banner {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        justify-content: space-between;
       }
 
-      .bubble-header {
+      .signup-banner strong, .signup-banner span { display: block; }
+      .signup-banner button { flex: 0 0 auto; min-height: 40px; padding-inline: 12px; }
+
+      .provider-status, .auth-status, .phone-help, .verified-badge {
+        margin: 8px 0 0;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .auth-status { order: 4; }
+
+      .provider-status, .auth-status, .phone-help { color: var(--gray); }
+      .success { color: var(--black); }
+      .error { color: var(--black); font-weight: 700; }
+      .verified-badge { border: 1px solid var(--black); padding: 10px; font-weight: 700; }
+
+      .app {
+        width: min(100%, 430px);
+        height: 100dvh;
+        min-height: 100vh;
+        margin: 0 auto;
+        background: var(--white);
+        border-inline: 1px solid var(--black);
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .app-header {
+        align-items: flex-start;
+        border-bottom: 1px solid var(--black);
         display: flex;
         justify-content: space-between;
-        gap: 10px;
-        margin-bottom: 6px;
-        font-size: 11px;
+        padding: calc(20px + env(safe-area-inset-top)) 18px 14px;
       }
 
-      .bubble-name {
-        font-weight: 700;
-      }
-
-      .bubble-text {
+      .app-header h1 {
+        font-size: 28px;
         margin: 0;
-        font-size: 13px;
-        line-height: 1.45;
-        word-break: break-word;
-        white-space: pre-wrap;
       }
 
-      .composer {
-        border-top: 1px solid var(--line);
-        padding: 8px 10px calc(10px + env(safe-area-inset-bottom));
+      .app.shorts-mode .app-header,
+      .app.shorts-mode .app-status { display: none; }
+
+      .app-actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      .app-actions button {
+        min-height: 40px;
+        padding-inline: 14px;
+        white-space: nowrap;
+      }
+
+      .friend-add-button {
         background: var(--white);
-        display: grid;
-        gap: 8px;
+        color: var(--black);
       }
 
-      .composer form {
+      .list-tabs {
+        border-top: 1px solid var(--black);
         display: grid;
-        grid-template-columns: 1fr 92px;
-        gap: 8px;
+        flex: 0 0 auto;
+        grid-template-columns: repeat(3, 1fr) 48px;
+      }
+
+      .list-tabs button {
+        background: var(--white);
+        border: 0;
+        border-right: 1px solid var(--black);
+        color: var(--gray);
+        min-height: 46px;
+      }
+
+      .list-tabs button:last-child { border-right: 0; }
+      .list-tabs button.active { background: var(--black); color: var(--white); }
+      .shorts-sound-toggle { font-size: 16px; min-width: 48px; padding: 0; }
+      .app:not(.shorts-mode) .list-tabs { grid-template-columns: repeat(3, 1fr); }
+      .app.shorts-mode .shorts-sound-toggle { background: var(--black); color: var(--white); }
+
+      .list-content {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        position: relative;
+      }
+
+      .chat-list, .friend-list { padding: 0; }
+
+      .shorts-view {
+        height: 100%;
+        inset: 0;
+        overflow-y: auto;
+        overscroll-behavior-y: contain;
+        position: absolute;
+        scroll-snap-type: y mandatory;
+        scrollbar-width: none;
+      }
+
+      .shorts-view::-webkit-scrollbar { display: none; }
+      .shorts-feed { height: 100%; }
+
+      .short-card {
         align-items: end;
+        background: var(--black);
+        display: grid;
+        height: 100%;
+        min-height: 100%;
+        overflow: hidden;
+        position: relative;
+        scroll-snap-align: start;
+        scroll-snap-stop: always;
       }
 
-      .composer textarea {
-        min-height: 44px;
-        max-height: 96px;
+      .short-card iframe {
+        border: 0;
+        height: 100%;
+        inset: 0;
+        pointer-events: none;
+        position: absolute;
+        width: 100%;
       }
 
-      .composer button {
-        min-height: 44px;
+      .short-card-copy {
+        background: linear-gradient(transparent, rgba(0, 0, 0, 0.9));
+        color: var(--white);
+        display: grid;
+        gap: 6px;
+        padding: 56px 18px calc(72px + env(safe-area-inset-bottom));
+        position: relative;
+        width: 100%;
       }
 
-      .status-text {
-        font-size: 12px;
+      .short-card-copy h2, .short-card-copy p { margin: 0; }
+      .short-card-copy h2 { font-size: 18px; }
+      .short-card-copy p { color: #d0d0d0; font-size: 13px; line-height: 1.5; }
+      .short-card-copy button { margin-top: 6px; min-height: 42px; }
+
+      .short-share-bar {
+        background: var(--white);
+        border-top: 1px solid var(--black);
+        border-bottom: 1px solid var(--black);
+        bottom: 46px;
+        color: var(--black);
+        align-items: center;
+        display: none;
+        inset-inline: 0;
+        height: 46px;
+        padding: 5px 12px;
+        position: absolute;
+        overscroll-behavior: contain;
+        touch-action: none;
+        z-index: 2;
+      }
+
+      .app.shorts-mode .short-share-bar { display: flex; }
+      .short-share-label, .short-share-feedback { display: none; }
+      .short-share-list { display: flex; flex: 1; gap: 0; min-width: 0; overflow-x: auto; overscroll-behavior: contain; padding-right: 10px; scrollbar-width: none; touch-action: pan-x; }
+      .short-share-list::-webkit-scrollbar { display: none; }
+      .short-share-person { align-items: center; background: transparent; border: 0; border-right: 1px solid var(--light-gray); color: var(--black); display: grid; flex: 0 0 106px; gap: 7px; grid-template-columns: 34px minmax(0, 1fr); min-height: 34px; padding: 0 10px; text-align: left; }
+      .short-share-person .avatar { height: 34px; width: 34px; }
+      .short-share-person.selected .avatar { outline: 2px solid var(--black); outline-offset: 2px; }
+      .short-share-person .presence-emoji { bottom: -8px; font-size: 10px; height: 16px; right: -8px; width: 16px; }
+      .short-share-person span:last-child { display: block; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .short-share-send { align-items: center; background: var(--white); border: 0; border-left: 1px solid var(--black); color: var(--black); display: grid; flex: 0 0 42px; font-size: 20px; min-height: 36px; padding: 0; place-items: center; }
+      .short-share-send:not(:disabled) { background: var(--black); color: var(--white); }
+      .short-share-send:disabled { color: var(--gray); opacity: 1; }
+      .short-message-toggle { background: var(--white); border: 0; border-left: 1px solid var(--black); color: transparent; display: grid; flex: 0 0 16px; font-size: 0; grid-template-rows: repeat(2, 1fr); line-height: 1; min-height: 36px; padding: 3px 2px; }
+      .short-message-toggle span { align-items: center; display: grid; place-items: center; }
+      .short-message-toggle.enabled .short-message-on, .short-message-toggle:not(.enabled) .short-message-off { background: var(--black); color: var(--white); }
+      .short-share-bar.replying { padding-left: 0; padding-right: 0; }
+      .short-share-bar.replying .short-share-list { padding-right: 0; }
+      .short-message-notice { align-items: center; background: var(--white); border: 0; color: var(--black); display: grid; flex: 1; gap: 8px; grid-template-columns: 34px minmax(0, 1fr); min-width: 0; padding: 0; text-align: left; }
+      .short-message-notice .avatar { height: 34px; width: 34px; }
+      .short-message-copy { display: grid; gap: 2px; min-width: 0; }
+      .short-message-copy strong, .short-message-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .short-message-copy strong { font-size: 12px; }
+      .short-message-copy span { color: var(--gray); font-size: 11px; }
+      .short-inline-reply { background: var(--white); border: 1px solid var(--black); color: var(--black); flex: 1; font: inherit; height: 34px; min-width: 0; padding: 0 9px; width: 100%; }
+      .short-share-empty { color: #d0d0d0; font-size: 12px; margin: 0; padding: 7px 0; }
+      .short-share-feedback { color: var(--white); font-size: 11px; margin: 0; min-height: 14px; }
+
+      .short-empty-card {
+        align-content: center;
+        background: var(--white);
+        color: var(--black);
+        gap: 12px;
+        padding: 22px;
+      }
+
+      .short-empty-card p { color: var(--gray); }
+
+      .list-item {
+        align-items: center;
+        background: var(--white);
+        border: 0;
+        border-bottom: 1px solid var(--light-gray);
+        color: var(--black);
+        display: grid;
+        gap: 12px;
+        grid-template-columns: 52px minmax(0, 1fr) auto;
+        min-height: 82px;
+        padding: 12px 18px;
+        text-align: left;
+        width: 100%;
+      }
+
+      .list-item:hover { background: #f4f4f4; }
+
+      .avatar {
+        align-items: center;
+        background: var(--black);
+        border: 1px solid var(--black);
+        color: var(--white);
+        display: flex;
+        font-size: 21px;
+        font-weight: 700;
+        height: 52px;
+        justify-content: center;
+        overflow: hidden;
+        width: 52px;
+      }
+
+      .avatar canvas { height: 100%; image-rendering: pixelated; width: 100%; }
+      .avatar-wrap { display: inline-flex; position: relative; }
+      .presence-emoji { background: transparent; border: 0; bottom: -9px; display: grid; font-size: 16px; height: 22px; line-height: 1; place-items: center; position: absolute; right: -9px; width: 22px; z-index: 1; }
+
+      .item-copy { min-width: 0; }
+      .item-title { display: block; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .item-preview { color: var(--gray); display: block; font-size: 14px; margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .item-time { align-self: start; color: var(--gray); font-size: 12px; padding-top: 3px; white-space: nowrap; }
+
+      .friend-list .list-item { grid-template-columns: 52px minmax(0, 1fr); }
+      .friend-action { min-height: 36px; padding-inline: 10px; }
+
+      .empty-list {
+        color: var(--gray);
+        line-height: 1.6;
+        padding: 34px 22px;
+        text-align: center;
+      }
+
+      .app-status {
+        border-top: 1px solid var(--black);
+        color: var(--gray);
+        font-size: 13px;
+        margin: 0;
+        min-height: 43px;
+        padding: 13px 18px calc(13px + env(safe-area-inset-bottom));
+      }
+
+      .sheet-backdrop {
+        align-items: flex-end;
+        background: rgba(0, 0, 0, 0.42);
+        display: flex;
+        inset: 0;
+        justify-content: center;
+        padding: 16px;
+        position: absolute;
+        z-index: 2;
+      }
+
+      .user-sheet {
+        background: var(--white);
+        border: 1px solid var(--black);
+        max-height: 78vh;
+        overflow: hidden;
+        width: 100%;
+      }
+
+      .sheet-header {
+        align-items: center;
+        border-bottom: 1px solid var(--black);
+        display: flex;
+        justify-content: space-between;
+        padding: 15px;
+      }
+
+      .sheet-header h2 { font-size: 18px; }
+      .sheet-close { background: var(--white); color: var(--black); min-height: 34px; padding-inline: 11px; }
+      .user-directory { max-height: calc(78vh - 66px); overflow-y: auto; }
+
+      .directory-item {
+        align-items: center;
+        border-bottom: 1px solid var(--light-gray);
+        display: grid;
+        gap: 10px;
+        grid-template-columns: 42px minmax(0, 1fr) auto;
+        padding: 12px 15px;
+      }
+
+      .directory-item .avatar { font-size: 17px; height: 42px; width: 42px; }
+      .directory-item strong, .directory-item span { display: block; }
+      .directory-item span { color: var(--gray); font-size: 13px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .directory-item button { min-height: 36px; padding-inline: 10px; }
+
+      .profile-sheet { max-height: 92vh; overflow-y: auto; }
+      .profile-editor { padding: 16px; }
+      .profile-editor-copy { color: var(--gray); font-size: 13px; line-height: 1.5; margin: 0 0 14px; }
+      .profile-editor .field { margin-bottom: 12px; }
+      .pixel-palette { display: grid; gap: 8px; grid-template-columns: repeat(6, 1fr); margin: 12px 0; }
+      .profile-palette-select { background: var(--white); border: 1px solid var(--black); color: var(--black); min-height: 44px; padding: 0 10px; width: 100%; }
+      .pixel-color { min-height: 34px; padding: 0; }
+      .pixel-color.active { outline: 3px solid var(--black); outline-offset: 2px; }
+      .custom-color-button { align-items: center; background: var(--white); border: 1px dashed var(--black); color: var(--black); cursor: pointer; display: flex; font-size: 22px; font-weight: 400; justify-content: center; min-height: 34px; padding: 0; position: relative; }
+      .custom-color-button input { cursor: pointer; inset: 0; opacity: 0; position: absolute; width: 100%; }
+      .custom-palette { border: 1px solid var(--black); margin: 12px 0; padding: 12px; }
+      .custom-palette-header { align-items: center; display: flex; font-size: 13px; justify-content: space-between; }
+      .custom-palette-heading { align-items: center; display: flex; gap: 8px; }
+      .custom-palette-toggle { background: var(--white); color: var(--black); min-height: 30px; padding-inline: 9px; }
+      .custom-palette-empty { color: var(--gray); font-size: 13px; margin: 10px 0 0; }
+      .custom-palette-colors { display: flex; flex-wrap: wrap; gap: 7px; margin: 10px 0 0; }
+      .custom-palette-color { height: 34px; min-height: 34px; padding: 0; width: 34px; }
+      .custom-palette-color.active { outline: 3px solid var(--black); outline-offset: 2px; }
+      .palette-picker { border-top: 1px solid var(--black); margin-top: 12px; padding-top: 12px; }
+      .status-emoji-picker { align-items: center; display: flex; flex-direction: column; height: min(68vh, 500px); margin: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: calc(34vh - 76px) 0; scroll-snap-type: y mandatory; scrollbar-width: none; }
+      .status-emoji-picker::-webkit-scrollbar { display: none; }
+      .status-emoji-button, .status-emoji-add { align-items: center; background: transparent; border: 0; box-shadow: none; color: var(--black); display: flex; flex: 0 0 152px; font-size: 88px; justify-content: center; min-height: 152px; padding: 0; scroll-snap-align: center; width: 100%; }
+      .status-emoji-button:hover:not(:disabled), .status-emoji-add:hover:not(:disabled) { box-shadow: none; transform: none; }
+      .status-emoji-button.active { transform: scale(1.12); }
+      .status-emoji-add { font-size: 74px; font-weight: 300; }
+      .status-emoji-input { height: 1px; opacity: 0; pointer-events: none; position: absolute; width: 1px; }
+      .status-emoji-sheet { background: transparent; border: 0; box-shadow: none; padding: 0; width: min(100%, 360px); }
+      .pixel-editor-grid { border: 1px solid var(--black); display: grid; grid-template-columns: repeat(32, 1fr); margin: 0 auto 16px; touch-action: none; width: min(100%, 320px); }
+      .pixel-cell { aspect-ratio: 1; border: 0; box-shadow: inset 0 0 0 0.5px var(--light-gray); min-height: 0; min-width: 0; padding: 0; }
+      .pixel-cell:focus-visible { outline: 1px solid var(--black); outline-offset: -1px; }
+      .profile-actions { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
+
+      .chat-room { background: var(--white); display: flex; flex-direction: column; inset: 0; position: absolute; z-index: 3; }
+      .chat-room-header { align-items: center; border-bottom: 1px solid var(--black); display: grid; gap: 12px; grid-template-columns: auto 42px minmax(0, 1fr); min-height: 68px; padding: 10px 14px; }
+      .chat-room-back { background: var(--white); color: var(--black); min-height: 38px; padding-inline: 10px; }
+      .chat-room-header .avatar { height: 42px; width: 42px; }
+      .chat-room-title { display: grid; gap: 3px; min-width: 0; }
+      .chat-room-title strong { font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .chat-presence { color: var(--gray); font-size: 12px; }
+      .chat-message-list { display: flex; flex: 1; flex-direction: column; gap: 9px; min-height: 0; overflow-y: auto; padding: 18px; }
+      .chat-empty { color: var(--gray); margin: auto; text-align: center; }
+      .message-row { display: flex; flex-direction: column; gap: 3px; max-width: 82%; }
+      .message-row.mine { align-self: flex-end; align-items: flex-end; }
+      .message-row.theirs { align-self: flex-start; }
+      .message-bubble { background: #f1f1f1; border: 1px solid var(--black); line-height: 1.45; padding: 10px 12px; white-space: pre-wrap; word-break: break-word; }
+      .message-row.mine .message-bubble { background: var(--black); color: var(--white); }
+      .message-attachment { display: grid; gap: 8px; }
+      .message-image { display: block; height: auto; max-height: 300px; max-width: 100%; object-fit: contain; }
+      .message-file { align-items: center; color: inherit; display: flex; font-weight: 700; gap: 8px; text-decoration: underline; }
+      .chat-attachment-preview { align-items: center; border-top: 1px solid var(--black); display: flex; font-size: 13px; gap: 8px; min-height: 38px; padding: 6px 14px; }
+      .chat-attachment-preview.hidden { display: none; }
+      .chat-attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .chat-attachment-remove { background: var(--white); color: var(--black); margin-left: auto; min-height: 28px; padding: 2px 9px; }
+      .chat-attachment-tray { display: none !important; }
+      .chat-attachment-guide { bottom: 0; height: 240px; left: 0; pointer-events: none; position: absolute; width: 240px; z-index: 21; }
+      .chat-attachment-guide.hidden { display: none; }
+      .attachment-guide-sector { fill: #f3f3f3; stroke: var(--light-gray); stroke-width: 1; }
+      .attachment-guide-sector.active { fill: var(--black); }
+      .attachment-guide-label { color: var(--black); font-size: 12px; font-weight: 700; position: absolute; }
+      .attachment-guide-label.active { color: var(--white); }
+      .attachment-guide-label[data-kind="photo"] { left: 20px; top: 40px; }
+      .attachment-guide-label[data-kind="pdf"] { left: 84px; top: 78px; }
+      .attachment-guide-label[data-kind="file"] { left: 145px; top: 134px; }
+      .attachment-guide-label[data-kind="camera"] { left: 183px; top: 190px; }
+      .chat-attachment-button { background: var(--white); color: var(--black); min-width: 44px; padding: 0; touch-action: none; user-select: none; }
+      .chat-attachment-button.swiping { background: var(--black); color: var(--white); }
+      .message-meta { color: var(--gray); display: flex; font-size: 11px; gap: 6px; }
+      .message-read { color: var(--black); font-weight: 700; }
+      .message-unread { color: var(--gray); font-weight: 700; }
+      .chat-message-form { border-top: 1px solid var(--black); display: grid; gap: 8px; grid-template-columns: auto minmax(0, 1fr) auto; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); }
+      .chat-message-form input { min-height: 44px; }
+      .chat-message-form button { min-height: 44px; padding-inline: 15px; }
       }
 
       @media (min-width: 480px) {
-        body {
-          align-items: center;
-          padding: 16px;
-        }
-
-        .auth-shell,
-        .app {
-          min-height: min(844px, calc(100vh - 32px));
+        body { padding: 16px; }
+        .auth-shell, .app {
           height: min(844px, calc(100vh - 32px));
-          border: 1px solid var(--line);
+          min-height: min(844px, calc(100vh - 32px));
+          border: 1px solid var(--black);
         }
       }
     </style>
@@ -564,33 +576,36 @@
   <body>
     <section class="auth-shell hidden" id="auth-screen">
       <div class="auth-header">
-        <h1>FREE DANNY</h1>
-        <p>빠르고 안전한 채팅</p>
+        <div>
+          <h1>Colorless</h1>
+          <p>채팅의 본질을 되찾다</p>
+        </div>
       </div>
 
       <div class="auth-scroll">
         <div class="provider-card">
           <h2>SNS 로그인</h2>
-          <p class="provider-copy">구글과 카카오 계정으로 바로 로그인할 수 있게 준비했습니다. 앱 키가 없을 때는 개발용 SNS 로그인으로 흐름을 먼저 확인할 수 있어요.</p>
+          <p class="provider-copy">구글과 카카오 계정으로 로그인할 수 있어요.</p>
           <div class="provider-stack">
-            <button type="button" class="provider-button google" id="google-login-button">구글로 계속하기</button>
-            <button type="button" class="provider-button kakao" id="kakao-login-button">카카오로 계속하기</button>
-            <button type="button" class="provider-button demo" id="demo-login-button">개발용 SNS 체험 로그인</button>
+            <button type="button" class="provider-button google" id="google-login-button" aria-label="구글로 계속하기">구글로 계속하기</button>
+            <div class="google-button-container hidden" id="google-button-container"></div>
+            <button type="button" class="provider-button kakao" id="kakao-login-button" aria-label="카카오로 계속하기">카카오로 계속하기</button>
+            <button type="button" class="provider-button demo" id="demo-login-button" aria-label="개발용 SNS 체험 로그인">개발용 SNS 체험 로그인</button>
           </div>
-          <div class="provider-status" id="provider-status">SNS 로그인 설정을 확인하고 있어요.</div>
+          <p class="provider-status" id="provider-status">SNS 로그인 설정을 확인하고 있어요.</p>
         </div>
 
         <div class="auth-card" id="login-card">
           <h2>기존 비밀번호 계정</h2>
-          <p class="auth-note">예전에 만든 로컬 계정이 있으면 아래에서 그대로 로그인할 수 있어요.</p>
+          <p class="auth-note">기존 계정으로 로그인할 수 있어요.</p>
           <form id="login-form">
             <div class="field">
               <label for="login-username">사용자 이름</label>
-              <input id="login-username" maxlength="24" placeholder="예: Sangmin" />
+              <input id="login-username" maxlength="24" autocomplete="username" />
             </div>
             <div class="field">
               <label for="login-password">비밀번호</label>
-              <input id="login-password" type="password" maxlength="40" placeholder="비밀번호를 입력해 주세요" />
+              <input id="login-password" type="password" maxlength="40" autocomplete="current-password" />
             </div>
             <button type="submit">로그인하기</button>
           </form>
@@ -599,166 +614,341 @@
         <div class="signup-banner" id="signup-banner">
           <div>
             <strong>비밀번호 계정도 필요하신가요?</strong>
-            <span>아래 배너에서 휴대폰 인증 기반 가입을 열 수 있어요.</span>
+            <span>휴대폰 인증 기반 가입을 열 수 있어요.</span>
           </div>
           <button type="button" class="secondary-button" id="signup-toggle">회원가입</button>
         </div>
 
-        <div class="auth-card compact hidden" id="signup-card">
+        <div class="auth-card hidden" id="signup-card">
           <h2>비밀번호 계정 만들기</h2>
-          <p class="auth-note">SNS 로그인과 별개로 직접 계정을 만들고 싶을 때만 사용해 주세요.</p>
+          <p class="auth-note">휴대폰 인증을 완료한 뒤 계정을 만들 수 있어요.</p>
           <form id="signup-form">
             <div class="field">
               <label for="signup-username">사용자 이름</label>
-              <input id="signup-username" maxlength="24" placeholder="2자 이상 입력해 주세요" />
+              <input id="signup-username" maxlength="24" autocomplete="username" />
+            </div>
+            <div class="field">
+              <label for="signup-friend-code">친구 ID</label>
+              <input id="signup-friend-code" maxlength="20" autocomplete="off" autocapitalize="off" placeholder="예: colorless_01" />
             </div>
             <div class="field">
               <label for="signup-password">비밀번호</label>
-              <input id="signup-password" type="password" maxlength="40" placeholder="4자 이상 입력해 주세요" />
+              <input id="signup-password" type="password" maxlength="40" autocomplete="new-password" />
             </div>
             <div class="field">
               <label for="signup-password-confirm">비밀번호 확인</label>
-              <input id="signup-password-confirm" type="password" maxlength="40" placeholder="비밀번호를 한 번 더 입력해 주세요" />
+              <input id="signup-password-confirm" type="password" maxlength="40" autocomplete="new-password" />
+            </div>
+            <div class="field">
+              <label for="signup-age-group">연령대</label>
+              <select id="signup-age-group" required>
+                <option value="" selected disabled>연령대 선택</option>
+                <option value="10대">10대</option>
+                <option value="20대">20대</option>
+                <option value="30대">30대</option>
+                <option value="40대">40대</option>
+                <option value="50대 이상">50대 이상</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="signup-gender">성별</label>
+              <select id="signup-gender" required>
+                <option value="" selected disabled>성별 선택</option>
+                <option value="여성">여성</option>
+                <option value="남성">남성</option>
+              </select>
             </div>
             <div class="field">
               <label for="signup-phone">휴대폰 번호</label>
               <div class="field-row">
-                <input id="signup-phone" maxlength="13" inputmode="numeric" placeholder="01012345678" />
+                <input id="signup-phone" maxlength="13" inputmode="numeric" autocomplete="tel" />
                 <button type="button" class="secondary-button" id="phone-request-button">인증번호 받기</button>
               </div>
             </div>
             <div class="field">
               <label for="signup-code">인증번호</label>
-              <div class="field-row code-row">
-                <input id="signup-code" maxlength="6" inputmode="numeric" placeholder="6자리 숫자" />
+              <div class="field-row">
+                <input id="signup-code" maxlength="6" inputmode="numeric" />
                 <button type="button" class="secondary-button" id="phone-verify-button">인증 확인</button>
               </div>
             </div>
             <p class="phone-help" id="phone-help">개발 환경에서는 인증번호가 화면에 표시됩니다.</p>
             <div class="verified-badge hidden" id="phone-verified-badge">휴대폰 인증 완료</div>
-            <div class="field">
-              <label for="signup-status">상태 메시지</label>
-              <input id="signup-status" maxlength="40" placeholder="예: 지금 접속 중" />
-            </div>
             <button type="submit">가입하고 시작하기</button>
             <button type="button" class="secondary-button" id="signup-close">닫기</button>
           </form>
         </div>
 
-        <div class="auth-status" id="auth-status">SNS 로그인 또는 기존 계정 로그인을 선택해 주세요.</div>
+        <p class="auth-status" id="auth-status">SNS 로그인 또는 기존 계정 로그인을 선택해 주세요.</p>
       </div>
     </section>
 
-    <main class="app hidden" id="app-screen">
-      <aside class="sidebar">
-        <section class="brand">
-          <h1>FREE DANNY</h1>
-          <p>카카오 로그인과 로컬 계정 로그인 모두 지원하는 모바일 메신저 MVP입니다.</p>
-        </section>
-
-        <section class="profile-card">
-          <div class="profile-grid">
-            <div class="avatar" id="profile-avatar">?</div>
-            <div>
-              <div class="profile-name" id="profile-name">로그인이 필요해요</div>
-              <div class="profile-hint" id="profile-status">로그인 방식과 상태 메시지가 여기에 표시됩니다.</div>
-            </div>
-          </div>
-          <div class="profile-actions">
-            <button type="button" class="secondary-button" id="logout-button">로그아웃</button>
-          </div>
-        </section>
-
-        <section class="room-create">
-          <form id="room-form">
-            <div class="field">
-              <label for="room-name">새 채팅방 이름</label>
-              <input id="room-name" maxlength="32" placeholder="예: 프로젝트 회의" />
-            </div>
-            <div class="field">
-              <label for="room-description">방 설명</label>
-              <input id="room-description" maxlength="100" placeholder="예: 오늘 일정과 진행 상황 정리" />
-            </div>
-            <button type="submit">채팅방 만들기</button>
-          </form>
-        </section>
-
-        <section class="room-list">
-          <div class="room-list-header">
-            <strong>채팅방</strong>
-            <span class="helper" id="room-count">0개</span>
-          </div>
-          <div class="room-list-body" id="rooms"></div>
-        </section>
-      </aside>
-
-      <section class="chat-panel">
-        <header class="chat-header">
-          <div>
-            <h2 class="chat-title" id="chat-title">채팅방을 선택해 주세요</h2>
-            <div class="chat-subtitle" id="chat-subtitle">위 목록에서 방을 누르면 바로 대화를 시작할 수 있어요.</div>
-          </div>
-          <div class="status-pill" id="connection-status">연결 준비 중</div>
-        </header>
-
-        <section class="messages" id="messages">
-          <div class="empty-state" id="empty-state">
-            <h3>메신저가 준비됐어요</h3>
-            <p class="empty-copy">채팅방을 선택하면 메시지가 여기에 쌓입니다.</p>
-          </div>
-        </section>
-
-        <footer class="composer">
-          <form id="message-form">
-            <textarea id="message-input" rows="2" maxlength="300" placeholder="메시지를 입력하고 Enter를 누르세요"></textarea>
-            <button type="submit">보내기</button>
-          </form>
-          <div class="status-text" id="status-text">메신저를 준비하고 있어요.</div>
-        </footer>
-      </section>
-    </main>
-
-    <template id="room-template">
-      <button class="room-item" type="button">
-        <div class="room-avatar"></div>
+    <main class="app hidden" id="app-screen" aria-label="메신저">
+      <header class="app-header">
         <div>
-          <div class="room-name-row">
-            <span class="room-name"></span>
-            <span class="room-time"></span>
-          </div>
-          <div class="room-preview"></div>
-          <div class="room-meta"></div>
+          <h1 id="app-title">채팅</h1>
         </div>
-      </button>
-    </template>
+        <div class="app-actions">
+          <button type="button" id="open-login-button">로그인</button>
+          <button type="button" class="friend-add-button" id="open-profile-button">Profile</button>
+          <button type="button" class="friend-add-button" id="open-directory-button">Add Friend</button>
+          <button type="button" id="logout-button">Log Out</button>
+        </div>
+      </header>
 
-    <template id="message-template">
-      <div class="message-row">
-        <article class="bubble">
-          <div class="bubble-header">
-            <span class="bubble-name"></span>
-            <span class="bubble-time"></span>
+      <section class="list-content">
+        <div class="chat-list" id="chat-list"></div>
+        <div class="friend-list hidden" id="friend-list"></div>
+        <section class="shorts-view hidden" id="shorts-view" aria-label="YouTube 쇼츠">
+          <div class="shorts-feed" id="shorts-feed"></div>
+        </section>
+      </section>
+      <aside class="short-share-bar" id="short-share-bar" aria-label="쇼츠 공유">
+        <span class="short-share-label">최근 대화</span>
+        <div class="short-share-list" id="short-share-list"></div>
+        <button class="short-message-toggle" id="short-message-toggle" type="button" aria-label="쇼츠 메시지 알림"><span class="short-message-on">ON</span><span class="short-message-off">OFF</span></button>
+        <button class="short-share-send" id="short-share-send" type="button" aria-label="쇼츠 보내기" disabled>➤</button>
+        <p class="short-share-feedback" id="short-share-feedback" aria-live="polite"></p>
+      </aside>
+      <section class="chat-room hidden" id="chat-room" aria-label="1:1 chat">
+        <header class="chat-room-header">
+          <button type="button" class="chat-room-back" id="close-chat-room">Back</button>
+          <span id="chat-room-avatar"></span>
+          <div class="chat-room-title">
+            <strong id="chat-room-name"></strong>
+            <span class="chat-presence" id="chat-room-presence"></span>
           </div>
-          <p class="bubble-text"></p>
-        </article>
+        </header>
+        <div class="chat-message-list" id="chat-message-list"></div>
+        <div class="chat-attachment-preview hidden" id="chat-attachment-preview">
+          <span class="chat-attachment-name" id="chat-attachment-name"></span>
+          <button class="chat-attachment-remove" id="chat-attachment-remove" type="button" aria-label="Cancel attachment">×</button>
+        </div>
+        <div class="chat-attachment-tray hidden" id="chat-attachment-tray" aria-label="Attachment options">
+          <div class="chat-attachment-options">
+            <button class="chat-attachment-option" type="button" data-attachment-kind="photo">Photo</button>
+            <button class="chat-attachment-option" type="button" data-attachment-kind="pdf">PDF</button>
+            <button class="chat-attachment-option" type="button" data-attachment-kind="file">File<br>soon</button>
+            <button class="chat-attachment-option" type="button" data-attachment-kind="camera">Camera<br>soon</button>
+            <button class="chat-attachment-option" type="button" data-attachment-kind="photo"><span>▣</span><strong>사진</strong></button>
+            <button class="chat-attachment-option" type="button" data-attachment-kind="pdf"><span>PDF</span><strong>PDF</strong></button>
+            <button class="chat-attachment-option" type="button" disabled><span>···</span><strong>파일</strong><em>soon</em></button>
+          </div>
+          <button class="chat-attachment-puck" id="chat-attachment-puck" type="button" aria-label="Drag to choose attachment">+</button>
+        </div>
+        <div class="chat-attachment-guide hidden" id="chat-attachment-guide" aria-hidden="true">
+          <svg viewBox="0 0 240 240" width="240" height="240">
+            <path class="attachment-guide-sector" data-kind="photo" d="M 0 240 L 0 0 A 240 240 0 0 1 91.8 18.2 Z" />
+            <path class="attachment-guide-sector" data-kind="pdf" d="M 0 240 L 91.8 18.2 A 240 240 0 0 1 169.8 70.2 Z" />
+            <path class="attachment-guide-sector" data-kind="file" d="M 0 240 L 169.8 70.2 A 240 240 0 0 1 221.8 148.2 Z" />
+            <path class="attachment-guide-sector" data-kind="camera" d="M 0 240 L 221.8 148.2 A 240 240 0 0 1 240 240 Z" />
+          </svg>
+          <span class="attachment-guide-label" data-kind="photo">사진</span>
+          <span class="attachment-guide-label" data-kind="pdf">PDF</span>
+          <span class="attachment-guide-label" data-kind="file">파일</span>
+          <span class="attachment-guide-label" data-kind="camera">카메라</span>
+        </div>
+        <form class="chat-message-form" id="chat-message-form">
+          <input id="chat-attachment-input" type="file" accept="image/jpeg,image/png,image/gif,image/webp,application/pdf" hidden />
+          <button class="chat-attachment-button" id="chat-attachment-button" type="button" aria-label="Open attachment options" aria-expanded="false">+</button>
+          <input id="chat-message-input" maxlength="300" autocomplete="off" placeholder="메시지 입력" />
+          <button type="submit">Send</button>
+        </form>
+      </section>
+      <p class="app-status" id="app-status">채팅 목록을 불러오는 중이에요.</p>
+      <nav class="list-tabs" aria-label="메신저 탭">
+        <button type="button" class="active" id="chats-tab">채팅</button>
+        <button type="button" id="friends-tab">친구</button>
+        <button type="button" id="shorts-tab">쇼츠</button>
+        <button type="button" class="shorts-sound-toggle" id="shorts-sound-toggle" aria-label="쇼츠 소리 켜기">🔇</button>
+      </nav>
+
+      <div class="sheet-backdrop hidden" id="directory-sheet" role="dialog" aria-modal="true" aria-labelledby="directory-title">
+        <section class="user-sheet">
+          <header class="sheet-header">
+            <h2 id="directory-title">사용자 추가</h2>
+            <button type="button" class="sheet-close" id="close-directory-button">닫기</button>
+          </header>
+          <div class="field">
+            <label for="friend-code-input">친구 ID</label>
+            <div class="field-row">
+              <input id="friend-code-input" maxlength="20" autocomplete="off" autocapitalize="off" placeholder="친구 ID 입력" />
+              <button type="button" class="secondary-button" id="friend-code-add-button">추가</button>
+            </div>
+          </div>
+          <div class="user-directory" id="user-directory"></div>
+        </section>
       </div>
-    </template>
+
+      <div class="sheet-backdrop hidden" id="profile-sheet" role="dialog" aria-modal="true" aria-labelledby="profile-title">
+        <section class="user-sheet profile-sheet">
+          <header class="sheet-header">
+            <h2 id="profile-title">내 프로필</h2>
+            <button type="button" class="sheet-close" id="close-profile-button">닫기</button>
+          </header>
+          <div class="profile-editor">
+            <div class="field">
+              <label for="profile-display-name">이름</label>
+              <input id="profile-display-name" maxlength="24" autocomplete="nickname" />
+            </div>
+            <div class="field">
+              <label for="profile-friend-code">친구 ID</label>
+              <input id="profile-friend-code" maxlength="20" autocomplete="off" autocapitalize="off" />
+            </div>
+            <section class="custom-palette" aria-label="나만의 팔레트">
+              <div class="custom-palette-header">
+                <div class="custom-palette-heading">
+                  <strong>나만의 팔레트</strong>
+                  <button type="button" class="custom-palette-toggle" id="toggle-palette-picker-button">색 조합</button>
+                </div>
+                <span id="custom-palette-count">0 / 10</span>
+              </div>
+              <p class="custom-palette-empty hidden" id="custom-palette-empty">나만의 팔레트를 추가할 수 있어요.</p>
+              <div class="custom-palette-colors" id="custom-palette-colors"></div>
+              <div class="palette-picker hidden" id="palette-picker">
+                <div class="field">
+                  <label for="profile-palette-select">추천 색 조합</label>
+                  <select class="profile-palette-select" id="profile-palette-select"></select>
+                </div>
+                <div class="pixel-palette" id="pixel-palette" aria-label="색상 선택">
+                  <label class="custom-color-button" id="custom-color-button" aria-label="직접 색상 선택">+<input type="color" id="custom-profile-color" value="#000000" /></label>
+                </div>
+              </div>
+            </section>
+            <div class="pixel-editor-grid" id="pixel-editor-grid" aria-label="32 × 32 픽셀 편집기"></div>
+            <div class="profile-actions">
+              <button type="button" class="secondary-button" id="clear-profile-button">모두 지우기</button>
+              <button type="button" id="save-profile-button">프로필 저장</button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="sheet-backdrop hidden" id="status-emoji-sheet" role="dialog" aria-modal="true" aria-label="상태 이모티콘 선택">
+        <section class="user-sheet status-emoji-sheet">
+          <div class="status-emoji-picker" id="status-emoji-picker">
+      <button class="status-emoji-add" id="status-emoji-add" type="button" aria-label="직접 이모티콘 선택"><span aria-hidden="true">+</span></button>
+            <input class="status-emoji-input" id="profile-status-emoji" maxlength="16" inputmode="text" autocomplete="off" autocapitalize="off" />
+          </div>
+        </section>
+      </div>
+    </main>
 
     <script>
       const state = {
         session: null,
-        rooms: [],
-        roomMap: new Map(),
-        activeRoomId: null,
-        activeMessages: [],
-        stream: null,
+        sessionToken: sessionStorage.getItem("free-danny-session-token") || "",
         providers: {},
-        phoneVerification: {
-          phone: "",
-          token: "",
-          verified: false,
+        messenger: { friends: [], discoverableUsers: [], rooms: [] },
+        activeList: "chats",
+        selectedShareRoomId: "",
+        shortMessageNotice: null,
+        shortMessageTimer: null,
+        shortMessagePaused: false,
+        shortInlineReply: null,
+        shortsMessagesEnabled: localStorage.getItem("colorless-shorts-messages") !== "off",
+        selectedRoomId: "",
+        messages: [],
+        chatDrafts: {},
+        chatAttachment: null,
+        chatAttachmentTrayOpen: false,
+        chatAttachmentDrag: { active: false, kind: "" },
+        chatAttachmentGuideTimer: null,
+        eventSource: null,
+        liveSyncTimer: null,
+        liveSyncBusy: false,
+        liveSyncInitialized: false,
+        lastSeenRoomMessageIds: {},
+        phoneVerification: { phone: "", token: "", verified: false },
+        profilePixels: "",
+      selectedProfileColor: "#000000",
+      selectedProfilePalette: "default",
+  customPalette: [],
+        selectedStatusEmoji: "",
+        statusPickerTouched: false,
+        statusPickerTimer: null,
+        youtube: {
+          accessToken: "",
+          videos: [],
+          activeIndex: 0,
+          seedTitle: "",
+          message: "",
+          guestVideos: [],
+          guestCursor: "",
+          guestLoading: false,
+          guestError: "",
+          feedVersion: 0,
+          soundEnabled: false,
+          tokenClient: null,
         },
+        isGuest: false,
+        palettePickerOpen: false,
+      lastPixelTapIndex: -1,
+        profilePainting: false,
+        profileCells: [],
       };
+
+      const PIXEL_SIDE = 32;
+      const PROFILE_PIXEL_COUNT = PIXEL_SIDE * PIXEL_SIDE;
+      const DEFAULT_PROFILE_PALETTE = ["#ffffff", "#000000", "#777777", "#d9d9d9", "#e53935", "#fb8c00", "#fdd835", "#43a047", "#1e88e5", "#8e24aa", "#6d4c41", "#ec407a"];
+      const PROFILE_PALETTES = [
+        ["#ff77b7", "#ffb3d9", "#ffe7f2", "#7cf0ff", "#2a2a3a"],
+        ["#ff4d6d", "#ffb703", "#a7f432", "#39d5ff", "#1b1f2a"],
+        ["#ff6b6b", "#ffa94d", "#ffd93d", "#6bcbef", "#2d2a32"],
+        ["#0f172a", "#1f2a44", "#2dd4bf", "#b7f7e7", "#7c3aed"],
+        ["#120b1e", "#3a0a2a", "#b80f3c", "#ff4d8d", "#f5e6ff"],
+        ["#ff8fab", "#ffd6a5", "#fdffb6", "#caffbf", "#1f2937"],
+        ["#0b1020", "#ff2ea6", "#7a5cff", "#25f4ff", "#f6f7fb"],
+        ["#2b1d14", "#6f4e37", "#b08968", "#e6ccb2", "#fefae0"],
+        ["#2a1c14", "#6b4226", "#c58c5b", "#f2d0a7", "#b86bff"],
+        ["#1b263b", "#415a77", "#778da9", "#ff7aa2", "#f8f9ff"],
+        ["#3b1d5a", "#ff3d3d", "#ffce3a", "#2ee59d", "#fff4d6"],
+        ["#f7f0ff", "#e2d6ff", "#c7b8ff", "#ffb3c1", "#2a2a3a"],
+        ["#0a0f1c", "#ffffff", "#ff2d55", "#ffd60a", "#34d1ff"],
+        ["#ffb38a", "#ff7a59", "#ffd9c2", "#5ad1c7", "#1f2a44"],
+        ["#0b1320", "#1f2937", "#a3ff12", "#f5ff9a", "#7c7cff"],
+        ["#160a22", "#3a1d5a", "#8a4fff", "#d6c2ff", "#fff7ff"],
+        ["#2a1c14", "#ff6b00", "#ffb703", "#fff1b8", "#ff3d81"],
+        ["#ff5fa2", "#ff9f1c", "#fff1a8", "#4deeea", "#3a0a2a"],
+        ["#0b1020", "#25304a", "#2ee59d", "#6bcbef", "#ff77b7"],
+        ["#10131a", "#ff4d8d", "#7a5cff", "#c7b8ff", "#f6f7fb"],
+        ["#1f2937", "#ffd60a", "#fff1b8", "#a7f432", "#ff6b6b"],
+        ["#ff2d55", "#ff7a59", "#ffd9c2", "#25f4ff", "#0a0f1c"],
+      ];
+      /*
+      const PROFILE_PALETTE_NAMES = [
+        "솜사탕 아케이드", "구미 웜 글로우", "소다 팝 선셋", "민트칩 던전",
+        "체리 콜라 나이트", "롤리팝 과수원", "태피 네온 골목", "캐러멜 라떼",
+        "버블티 보바", "프로스티 베리", "젤리빈 바자", "마시멜로 구름나라",
+        "하드캔디 대비", "피치 소다 해변", "사워 애플 가로등", "리코리스 라벤더",
+        "캔디콘 카니발", "레인보우 셔벗", "록캔디 동굴", "버블검 메카",
+        "허니 레몬 팝", "핑크 레모네이드",
+      ];
+const STATUS_EMOJI_OPTIONS = ["🥳", "😀", "😐", "😕", "😭"];
+      */
+      /*
+      const PROFILE_PALETTE_NAMES = [
+        "솜사탕 아케이드", "구미 웜 글로우", "소다 팝 선셋", "민트칩 던전",
+        "체리 콜라 나이트", "롤리팝 과수원", "태피 네온 골목", "캐러멜 라떼",
+        "버블티 보바", "프로스티 베리", "젤리빈 바자", "마시멜로 구름나라",
+        "하드캔디 대비", "피치 소다 해변", "사워 애플 가로등", "리코리스 라벤더",
+        "캔디콘 카니발", "레인보우 셔벗", "록캔디 동굴", "버블검 메카",
+        "허니 레몬 팝", "핑크 레모네이드",
+      ];
+      const STATUS_EMOJI_OPTIONS = ["🥳", "😀", "😐", "😕", "😭"];
+      */
+      const PROFILE_PALETTE_NAMES = [
+        "\uc1a0\uc0ac\ud0d5 \uc544\ucf00\uc774\ub4dc", "\uad6c\ubbf8 \uc6dc \uae00\ub85c\uc6b0", "\uc18c\ub2e4 \ud31d \uc120\uc14b", "\ubbfc\ud2b8\uce69 \ub358\uc804",
+        "\uccb4\ub9ac \ucf5c\ub77c \ub098\uc774\ud2b8", "\ub864\ub9ac\ud31d \uacfc\uc218\uc6d0", "\ud0dc\ud53c \ub124\uc628 \uace8\ubaa9", "\uce90\ub7ec\uba5c \ub77c\ub5bc",
+        "\ubc84\ube14\ud2f0 \ubcf4\ubc14", "\ud504\ub85c\uc2a4\ud2f0 \ubca0\ub9ac", "\uc824\ub9ac\ube48 \ubc14\uc790", "\ub9c8\uc2dc\uba5c\ub85c \uad6c\ub984\ub098\ub77c",
+        "\ud558\ub4dc\uce94\ub514 \ub300\ube44", "\ud53c\uce58 \uc18c\ub2e4 \ud574\ubcc0", "\uc0ac\uc6cc \uc560\ud50c \uac00\ub85c\ub4f1", "\ub9ac\ucf54\ub9ac\uc2a4 \ub77c\ubca4\ub354",
+        "\uce94\ub514\ucf58 \uce74\ub2c8\ubc1c", "\ub808\uc778\ubcf4\uc6b0 \uc154\ubcb3", "\ub85d\uce94\ub514 \ub3d9\uad74", "\ubc84\ube14\uac80 \uba54\uce74",
+        "\ud5c8\ub2c8 \ub808\ubaac \ud31d", "\ud551\ud06c \ub808\ubaa8\ub124\uc774\ub4dc",
+      ];
+      const STATUS_EMOJI_OPTIONS = ["\ud83e\udd73", "\ud83d\ude00", "\ud83d\ude10", "\ud83d\ude15", "\ud83d\ude2d"];
+      const emojiSegmenter = typeof Intl.Segmenter === "function"
+        ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+        : null;
 
       const authScreen = document.getElementById("auth-screen");
       const appScreen = document.getElementById("app-screen");
@@ -768,77 +958,176 @@
       const signupClose = document.getElementById("signup-close");
       const authStatus = document.getElementById("auth-status");
       const providerStatus = document.getElementById("provider-status");
+      const logoutButton = document.getElementById("logout-button");
+      const openLoginButton = document.getElementById("open-login-button");
+      const appTitle = document.getElementById("app-title");
+      const chatsTab = document.getElementById("chats-tab");
+      const friendsTab = document.getElementById("friends-tab");
+      const shortsTab = document.getElementById("shorts-tab");
+      const shortsSoundToggle = document.getElementById("shorts-sound-toggle");
+      const chatList = document.getElementById("chat-list");
+      const friendList = document.getElementById("friend-list");
+      const chatRoom = document.getElementById("chat-room");
+      const closeChatRoomButton = document.getElementById("close-chat-room");
+      const chatRoomAvatar = document.getElementById("chat-room-avatar");
+      const chatRoomName = document.getElementById("chat-room-name");
+      const chatRoomPresence = document.getElementById("chat-room-presence");
+      const chatMessageList = document.getElementById("chat-message-list");
+      const chatMessageForm = document.getElementById("chat-message-form");
+      const chatMessageInput = document.getElementById("chat-message-input");
+      const chatAttachmentInput = document.getElementById("chat-attachment-input");
+      const chatAttachmentButton = document.getElementById("chat-attachment-button");
+      const chatAttachmentTray = document.getElementById("chat-attachment-tray");
+      const chatAttachmentOptions = document.querySelectorAll("[data-attachment-kind]");
+      const chatAttachmentPuck = document.getElementById("chat-attachment-puck");
+      const chatAttachmentGuide = document.getElementById("chat-attachment-guide");
+      const chatAttachmentGuideItems = chatAttachmentGuide.querySelectorAll("[data-kind]");
+      const chatAttachmentPreview = document.getElementById("chat-attachment-preview");
+      const chatAttachmentName = document.getElementById("chat-attachment-name");
+      const chatAttachmentRemove = document.getElementById("chat-attachment-remove");
+      const shortsView = document.getElementById("shorts-view");
+      const shortsFeed = document.getElementById("shorts-feed");
+      const shortShareBar = document.getElementById("short-share-bar");
+      const shortShareList = document.getElementById("short-share-list");
+      const shortMessageToggle = document.getElementById("short-message-toggle");
+      const shortShareSend = document.getElementById("short-share-send");
+      const shortShareFeedback = document.getElementById("short-share-feedback");
+      const appStatus = document.getElementById("app-status");
+      const openDirectoryButton = document.getElementById("open-directory-button");
+      const closeDirectoryButton = document.getElementById("close-directory-button");
+      const directorySheet = document.getElementById("directory-sheet");
+      const userDirectory = document.getElementById("user-directory");
+      const friendCodeInput = document.getElementById("friend-code-input");
+      const friendCodeAddButton = document.getElementById("friend-code-add-button");
+      const openProfileButton = document.getElementById("open-profile-button");
+      const closeProfileButton = document.getElementById("close-profile-button");
+      const profileSheet = document.getElementById("profile-sheet");
+      const pixelPalette = document.getElementById("pixel-palette");
+      const profilePaletteSelect = document.getElementById("profile-palette-select");
+      const customProfileColor = document.getElementById("custom-profile-color");
+      const customColorButton = document.getElementById("custom-color-button");
+      const customPaletteColors = document.getElementById("custom-palette-colors");
+      const customPaletteCount = document.getElementById("custom-palette-count");
+      const customPaletteEmpty = document.getElementById("custom-palette-empty");
+      const togglePalettePickerButton = document.getElementById("toggle-palette-picker-button");
+      const palettePicker = document.getElementById("palette-picker");
+      const pixelEditorGrid = document.getElementById("pixel-editor-grid");
+      const profileDisplayName = document.getElementById("profile-display-name");
+      const profileFriendCode = document.getElementById("profile-friend-code");
+      const statusEmojiPicker = document.getElementById("status-emoji-picker");
+      const profileStatusEmoji = document.getElementById("profile-status-emoji");
+      const statusEmojiAdd = document.getElementById("status-emoji-add");
+      const statusEmojiSheet = document.getElementById("status-emoji-sheet");
+      const clearProfileButton = document.getElementById("clear-profile-button");
+      const saveProfileButton = document.getElementById("save-profile-button");
       const loginForm = document.getElementById("login-form");
       const signupForm = document.getElementById("signup-form");
       const googleLoginButton = document.getElementById("google-login-button");
+      const googleButtonContainer = document.getElementById("google-button-container");
       const kakaoLoginButton = document.getElementById("kakao-login-button");
       const demoLoginButton = document.getElementById("demo-login-button");
       const loginUsername = document.getElementById("login-username");
       const loginPassword = document.getElementById("login-password");
       const signupUsername = document.getElementById("signup-username");
+      const signupFriendCode = document.getElementById("signup-friend-code");
       const signupPassword = document.getElementById("signup-password");
       const signupPasswordConfirm = document.getElementById("signup-password-confirm");
+      const signupAgeGroup = document.getElementById("signup-age-group");
+      const signupGender = document.getElementById("signup-gender");
       const signupPhone = document.getElementById("signup-phone");
       const signupCode = document.getElementById("signup-code");
-      const signupStatus = document.getElementById("signup-status");
       const phoneRequestButton = document.getElementById("phone-request-button");
       const phoneVerifyButton = document.getElementById("phone-verify-button");
       const phoneHelp = document.getElementById("phone-help");
       const phoneVerifiedBadge = document.getElementById("phone-verified-badge");
-      const logoutButton = document.getElementById("logout-button");
-      const profileAvatar = document.getElementById("profile-avatar");
-      const profileName = document.getElementById("profile-name");
-      const profileStatus = document.getElementById("profile-status");
-      const roomForm = document.getElementById("room-form");
-      const roomNameInput = document.getElementById("room-name");
-      const roomDescriptionInput = document.getElementById("room-description");
-      const roomCount = document.getElementById("room-count");
-      const roomsElement = document.getElementById("rooms");
-      const roomTemplate = document.getElementById("room-template");
-      const chatTitle = document.getElementById("chat-title");
-      const chatSubtitle = document.getElementById("chat-subtitle");
-      const messagesElement = document.getElementById("messages");
-      const emptyState = document.getElementById("empty-state");
-      const messageForm = document.getElementById("message-form");
-      const messageInput = document.getElementById("message-input");
-      const messageTemplate = document.getElementById("message-template");
-      const statusText = document.getElementById("status-text");
-      const connectionStatus = document.getElementById("connection-status");
-
-      function getInitial(value) {
-        return (value || "?").trim().slice(0, 1).toUpperCase();
-      }
 
       function normalizePhone(value) {
         return (value || "").replace(/\D/g, "").slice(0, 11);
       }
 
-      function resetPhoneVerification() {
-        state.phoneVerification = {
-          phone: "",
-          token: "",
-          verified: false,
-        };
-        phoneVerifiedBadge.classList.add("hidden");
+      function normalizeStatusEmoji(value) {
+        const trimmed = (value || "").trim();
+        const emoji = emojiSegmenter
+          ? [...emojiSegmenter.segment(trimmed)][0]?.segment || ""
+          : Array.from(trimmed)[0] || "";
+        return /[\p{Extended_Pictographic}\p{Regional_Indicator}]/u.test(emoji) ? emoji : "";
       }
 
-      function updatePhoneHelp(message) {
-        phoneHelp.textContent = message;
+function renderStatusEmojiPicker() {
+  statusEmojiPicker.replaceChildren();
+  STATUS_EMOJI_OPTIONS.forEach((emoji) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `status-emoji-button${state.selectedStatusEmoji === emoji ? " active" : ""}`;
+    button.dataset.emoji = emoji;
+    button.textContent = emoji;
+    button.setAttribute("aria-label", "상태 이모티콘 선택");
+    button.addEventListener("click", () => chooseStatusEmoji(emoji));
+    statusEmojiPicker.appendChild(button);
+  });
+        statusEmojiPicker.appendChild(statusEmojiAdd);
       }
 
-      function formatTime(iso) {
-        if (!iso) {
-          return "";
+function openStatusEmojiPicker() {
+  state.selectedStatusEmoji = "";
+  state.statusPickerTouched = false;
+  profileStatusEmoji.value = "";
+  renderStatusEmojiPicker();
+  statusEmojiSheet.classList.remove("hidden");
+}
+
+function selectCenteredStatusEmoji() {
+  if (!state.statusPickerTouched || statusEmojiSheet.classList.contains("hidden")) return;
+
+  const pickerBounds = statusEmojiPicker.getBoundingClientRect();
+  const centerY = pickerBounds.top + pickerBounds.height / 2;
+  const choices = [...statusEmojiPicker.querySelectorAll(".status-emoji-button, .status-emoji-add")];
+  const centeredChoice = choices.reduce((closest, choice) => {
+    const bounds = choice.getBoundingClientRect();
+    const distance = Math.abs(bounds.top + bounds.height / 2 - centerY);
+    return !closest || distance < closest.distance ? { choice, distance } : closest;
+  }, null)?.choice;
+
+  if (!centeredChoice) return;
+  if (centeredChoice === statusEmojiAdd) {
+    profileStatusEmoji.value = "";
+    profileStatusEmoji.focus({ preventScroll: true });
+    return;
+  }
+  chooseStatusEmoji(centeredChoice.dataset.emoji);
+}
+
+      async function chooseStatusEmoji(emoji) {
+        const user = state.messenger.user || state.session?.user;
+        if (!user || !emoji) return;
+
+        state.selectedStatusEmoji = emoji;
+        profileStatusEmoji.value = emoji;
+        renderStatusEmojiPicker();
+
+        try {
+          const data = await api("/profile", {
+            method: "POST",
+            body: JSON.stringify({
+              displayName: getDisplayName(user),
+              statusMessage: emoji,
+              friendCode: user.friend_code,
+              pixels: normalizeProfilePixels(user.profile_pixels),
+            }),
+          });
+          state.messenger.user = data.user;
+          if (state.session?.user) state.session.user = data.user;
+          statusEmojiSheet.classList.add("hidden");
+          renderMessenger();
+          updatePresence();
+        } catch (error) {
+          setAppStatus(error.message, "error");
         }
-        return new Date(iso).toLocaleTimeString("ko-KR", {
-          hour: "2-digit",
-          minute: "2-digit",
-        });
       }
 
-      function setStatus(message, tone = "default") {
-        statusText.textContent = message;
-        statusText.className = `status-text${tone === "default" ? "" : ` ${tone}`}`;
+      function resetPhoneVerification() {
+        state.phoneVerification = { phone: "", token: "", verified: false };
+        phoneVerifiedBadge.classList.add("hidden");
       }
 
       function setAuthStatus(message, tone = "default") {
@@ -851,37 +1140,62 @@
         providerStatus.className = `provider-status${tone === "default" ? "" : ` ${tone}`}`;
       }
 
+      function setAppStatus(message, tone = "default") {
+        appStatus.textContent = message;
+        appStatus.className = `app-status${tone === "default" ? "" : ` ${tone}`}`;
+      }
+
       async function api(url, options = {}) {
         const response = await fetch(url, {
-          headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            ...(state.sessionToken ? { "X-Session-Token": state.sessionToken } : {}),
+            ...(options.headers || {}),
+          },
           ...options,
         });
-
         const contentType = response.headers.get("Content-Type") || "";
-        const payload = contentType.includes("application/json")
-          ? await response.json()
-          : null;
+        const payload = contentType.includes("application/json") ? await response.json() : null;
 
         if (response.status === 401) {
+          state.sessionToken = "";
+          sessionStorage.removeItem("free-danny-session-token");
           showAuth();
           throw new Error(payload?.error || "로그인이 필요합니다.");
         }
-
         if (!response.ok) {
           throw new Error(payload?.error || "요청 처리에 실패했습니다.");
         }
-
         return payload;
       }
 
-      function showAuth(mode = "login") {
-        if (state.stream) {
-          state.stream.close();
-          state.stream = null;
+      function rememberSession(session) {
+        state.session = session;
+        state.isGuest = false;
+        state.sessionToken = session?.sessionToken || "";
+        if (state.sessionToken) {
+          sessionStorage.setItem("free-danny-session-token", state.sessionToken);
         }
+      }
+
+      function showAuth(mode = "login") {
+        if (state.eventSource) {
+          state.eventSource.close();
+          state.eventSource = null;
+        }
+        window.clearInterval(state.liveSyncTimer);
+        state.liveSyncTimer = null;
+        state.liveSyncBusy = false;
+        state.liveSyncInitialized = false;
+        state.lastSeenRoomMessageIds = {};
+        state.selectedRoomId = "";
+        state.messages = [];
         state.session = null;
+        state.isGuest = false;
         authScreen.classList.remove("hidden");
         appScreen.classList.add("hidden");
+        directorySheet.classList.add("hidden");
         setAuthMode(mode);
       }
 
@@ -890,161 +1204,1456 @@
         appScreen.classList.remove("hidden");
       }
 
-      function setAuthMode(mode) {
-        const showSignup = mode === "signup";
-        signupBanner.classList.toggle("hidden", showSignup);
-        signupCard.classList.toggle("hidden", !showSignup);
-        setAuthStatus(
-          showSignup
-            ? "휴대폰 인증을 완료한 뒤 비밀번호 계정을 만들 수 있어요."
-            : "SNS 로그인 또는 기존 계정 로그인을 선택해 주세요."
-        );
+      function getInitial(value) {
+        return (value || "?").trim().slice(0, 1).toUpperCase();
       }
 
-      function renderProfile() {
-        if (!state.session?.user) {
-          profileAvatar.textContent = "?";
-          profileName.textContent = "로그인이 필요해요";
-          profileStatus.textContent = "로그인 방식과 상태 메시지가 여기에 표시됩니다.";
+      function getDisplayName(user) {
+        return user?.display_name || user?.username || "";
+      }
+
+      function formatTime(value) {
+        if (!value) return "";
+        return new Date(value).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" });
+      }
+
+      function blankProfilePixels() {
+        return Array(PROFILE_PIXEL_COUNT).fill("#ffffff");
+      }
+
+      function normalizeProfilePixels(pixels) {
+        return Array.isArray(pixels)
+          && pixels.length === PROFILE_PIXEL_COUNT
+          && pixels.every((color) => typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color))
+          ? pixels.map((color) => color.toLowerCase())
+          : blankProfilePixels();
+      }
+
+      function drawProfilePixels(canvas, pixels) {
+        const context = canvas.getContext("2d");
+        const normalizedPixels = normalizeProfilePixels(pixels);
+        for (let index = 0; index < PROFILE_PIXEL_COUNT; index += 1) {
+          context.fillStyle = normalizedPixels[index];
+          context.fillRect(index % PIXEL_SIDE, Math.floor(index / PIXEL_SIDE), 1, 1);
+        }
+      }
+
+      function createAvatar(value, pixels, presence = null, savedStatus = "") {
+        const wrapper = document.createElement("span");
+        wrapper.className = "avatar-wrap";
+        const avatar = document.createElement("canvas");
+        avatar.className = "avatar";
+        avatar.width = PIXEL_SIDE;
+        avatar.height = PIXEL_SIDE;
+        /*
+        avatar.setAttribute("aria-label", `${value} 프로필`);
+        */
+        avatar.setAttribute("aria-label", `profile-${value}`);
+        drawProfilePixels(avatar, pixels);
+        wrapper.appendChild(avatar);
+        const activityEmoji = presence?.online
+          ? (normalizeStatusEmoji(presence.emoji) || normalizeStatusEmoji(savedStatus))
+          : "";
+        if (activityEmoji) {
+          const emoji = document.createElement("span");
+          emoji.className = "presence-emoji";
+          emoji.textContent = activityEmoji; /*
+          emoji.setAttribute("aria-label", "활동 중");
+          */ emoji.setAttribute("aria-label", "active");
+          wrapper.appendChild(emoji);
+        }
+        return wrapper;
+      }
+
+      function getActiveProfilePalette() {
+        if (state.selectedProfilePalette === "default") return DEFAULT_PROFILE_PALETTE;
+        if (state.selectedProfilePalette === "custom") return state.customPalette;
+        return PROFILE_PALETTES[Number(state.selectedProfilePalette.replace("preset-", ""))] || DEFAULT_PROFILE_PALETTE;
+      }
+
+      function renderProfilePalette() {
+        pixelPalette.replaceChildren();
+        const colors = getActiveProfilePalette();
+        if (!colors.length) {
+          const empty = document.createElement("span");
+          empty.textContent = "나만의 팔레트를 추가할 수 있어요.";
+          pixelPalette.appendChild(empty);
+          pixelPalette.appendChild(customColorButton);
           return;
         }
-
-        profileAvatar.textContent = getInitial(state.session.user.username);
-        profileName.textContent = state.session.user.username;
-        profileStatus.textContent = `${state.session.user.auth_provider_label} · ${state.session.user.status_message || "접속 중"}`;
+        colors.forEach((color, index) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `pixel-color${state.selectedProfileColor === color ? " active" : ""}`;
+          button.dataset.color = color;
+          button.style.backgroundColor = color;
+          button.setAttribute("aria-label", `${index + 1}번 색상 선택`);
+          button.addEventListener("click", () => {
+            state.selectedProfileColor = color;
+            customProfileColor.value = color;
+            updateProfilePaletteSelection();
+          });
+          button.addEventListener("dblclick", (event) => {
+            event.preventDefault();
+            addCustomPaletteColor(color);
+          });
+          pixelPalette.appendChild(button);
+        });
+        pixelPalette.appendChild(customColorButton);
       }
 
-      function sortRooms(rooms) {
-        return [...rooms].sort((left, right) => String(right.updated_at || "").localeCompare(String(left.updated_at || "")));
-      }
-
-      function renderRooms() {
-        const sortedRooms = sortRooms(state.rooms);
-        roomsElement.replaceChildren();
-        roomCount.textContent = `${sortedRooms.length}개`;
-
-        sortedRooms.forEach((room) => {
-          const node = roomTemplate.content.firstElementChild.cloneNode(true);
-          node.dataset.roomId = room.id;
-          if (room.id === state.activeRoomId) {
-            node.classList.add("active");
-          }
-          node.querySelector(".room-avatar").textContent = getInitial(room.name);
-          node.querySelector(".room-name").textContent = room.name;
-          node.querySelector(".room-time").textContent = formatTime(room.updated_at);
-          node.querySelector(".room-preview").textContent = room.last_message
-            ? `${room.last_message.username}: ${room.last_message.text}`
-            : room.description || "아직 메시지가 없어요.";
-          node.querySelector(".room-meta").textContent = `${room.participant_count}명 · 메시지 ${room.message_count}개`;
-          node.addEventListener("click", () => selectRoom(room.id));
-          roomsElement.appendChild(node);
+      function updateProfilePaletteSelection() {
+        pixelPalette.querySelectorAll(".pixel-color").forEach((button) => {
+          button.classList.toggle("active", button.dataset.color === state.selectedProfileColor);
+        });
+        customPaletteColors.querySelectorAll(".custom-palette-color").forEach((button) => {
+          button.classList.toggle("active", button.dataset.color === state.selectedProfileColor);
         });
       }
 
-      function updateRoom(room) {
-        state.roomMap.set(room.id, room);
-        state.rooms = sortRooms([...state.roomMap.values()]);
-        renderRooms();
-        syncActiveRoomHeader();
-      }
-
-      function syncActiveRoomHeader() {
-        const room = state.roomMap.get(state.activeRoomId);
-        if (!room) {
-          chatTitle.textContent = "채팅방을 선택해 주세요";
-          chatSubtitle.textContent = "위 목록에서 방을 누르면 바로 대화를 시작할 수 있어요.";
-          return;
-        }
-        chatTitle.textContent = room.name;
-        chatSubtitle.textContent = `${room.participant_count}명 참여 · ${room.description || "대화를 시작해 보세요."}`;
-      }
-
-      function renderMessages(messages) {
-        messagesElement.replaceChildren();
-        if (!messages.length) {
-          messagesElement.appendChild(emptyState);
-          return;
-        }
-
-        messages.forEach((message) => {
-          const node = messageTemplate.content.firstElementChild.cloneNode(true);
-          const mine = message.username === state.session?.user?.username;
-          if (mine) {
-            node.classList.add("mine");
-          }
-          node.querySelector(".bubble-name").textContent = mine ? "나" : message.username;
-          node.querySelector(".bubble-time").textContent = formatTime(message.timestamp);
-          node.querySelector(".bubble-text").textContent = message.text;
-          messagesElement.appendChild(node);
+      function renderProfilePaletteSelect() {
+        profilePaletteSelect.replaceChildren();
+        const defaultOption = document.createElement("option");
+        defaultOption.value = "default";
+        defaultOption.textContent = "기본 색 조합";
+        defaultOption.selected = state.selectedProfilePalette === "default";
+        profilePaletteSelect.appendChild(defaultOption);
+        PROFILE_PALETTES.forEach((palette, index) => {
+          const option = document.createElement("option");
+          option.value = `preset-${index}`;
+          option.textContent = PROFILE_PALETTE_NAMES[index];
+          option.selected = option.value === state.selectedProfilePalette;
+          profilePaletteSelect.appendChild(option);
         });
-
-        messagesElement.scrollTop = messagesElement.scrollHeight;
+        const customOption = document.createElement("option");
+        customOption.value = "custom";
+        customOption.textContent = `나만의 팔레트 (${state.customPalette.length}색)`;
+        customOption.selected = state.selectedProfilePalette === "custom";
+        profilePaletteSelect.appendChild(customOption);
       }
 
-      async function selectRoom(roomId) {
-        state.activeRoomId = roomId;
-        renderRooms();
-        syncActiveRoomHeader();
+      function renderCustomPalette() {
+        customPaletteColors.replaceChildren();
+        customPaletteCount.textContent = `${state.customPalette.length} / 10`;
+        customPaletteEmpty.classList.toggle("hidden", state.customPalette.length > 0);
+        state.customPalette.forEach((color) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `custom-palette-color${state.selectedProfileColor === color ? " active" : ""}`;
+          button.dataset.color = color;
+          button.style.backgroundColor = color;
+          button.setAttribute("aria-label", `${color} 색상 선택`);
+          button.title = "클릭하여 색상 선택, 두 번 클릭하여 삭제";
+          button.addEventListener("click", () => {
+            state.selectedProfileColor = color;
+            customProfileColor.value = color;
+            updateProfilePaletteSelection();
+          });
+          button.addEventListener("dblclick", (event) => {
+            event.preventDefault();
+            removeCustomPaletteColor(color);
+          });
+          customPaletteColors.appendChild(button);
+        });
+      }
+
+      function renderPalettePicker() {
+        palettePicker.classList.toggle("hidden", !state.palettePickerOpen);
+        togglePalettePickerButton.textContent = state.palettePickerOpen ? "닫기" : "색 조합";
+      }
+
+      async function saveCustomPalette() {
+        const data = await api("/profile/custom-palette", {
+          method: "POST",
+          body: JSON.stringify({ colors: state.customPalette }),
+        });
+        state.messenger.user = data.user;
+        if (state.session?.user) state.session.user = data.user;
+        state.customPalette = data.user.custom_palette || [];
+        renderCustomPalette();
+        renderProfilePaletteSelect();
+        if (state.selectedProfilePalette === "custom") renderProfilePalette();
+      }
+
+      async function addCustomPaletteColor(color = state.selectedProfileColor) {
+        if (state.customPalette.includes(color)) {
+          setAppStatus("이미 나만의 팔레트에 있는 색이에요.", "error");
+          return;
+        }
+        if (state.customPalette.length >= 10) {
+          setAppStatus("나만의 팔레트에는 색을 10개까지 추가할 수 있어요.", "error");
+          return;
+        }
+        state.customPalette.push(color);
         try {
-          state.activeMessages = await api(`/messages?room_id=${encodeURIComponent(roomId)}`);
-          renderMessages(state.activeMessages);
-          setStatus("대화를 불러왔어요.");
+          await saveCustomPalette();
+          setAppStatus("나만의 팔레트에 색을 추가했어요.", "success");
         } catch (error) {
-          setStatus(error.message, "error");
+          state.customPalette = state.customPalette.filter((item) => item !== color);
+          renderCustomPalette();
+          setAppStatus(error.message, "error");
         }
       }
 
-      async function fetchBootstrap() {
-        const data = await api("/bootstrap");
-        document.title = data.app_name;
-        state.session = { authenticated: true, user: data.user };
-        state.rooms = data.rooms || [];
-        state.roomMap = new Map(state.rooms.map((room) => [room.id, room]));
-        state.activeRoomId = data.selected_room_id;
-        renderProfile();
-        renderRooms();
-        syncActiveRoomHeader();
-        if (state.activeRoomId) {
-          await selectRoom(state.activeRoomId);
+      async function removeCustomPaletteColor(color) {
+        const previousPalette = [...state.customPalette];
+        state.customPalette = state.customPalette.filter((item) => item !== color);
+        try {
+          await saveCustomPalette();
+          setAppStatus("나만의 팔레트에서 색을 지웠어요.", "success");
+        } catch (error) {
+          state.customPalette = previousPalette;
+          renderCustomPalette();
+          setAppStatus(error.message, "error");
+        }
+      }
+
+      function paintProfilePixel(index) {
+        if (state.profilePixels[index] === state.selectedProfileColor) return;
+        state.profilePixels[index] = state.selectedProfileColor;
+        const cell = state.profileCells[index];
+        if (cell) cell.style.backgroundColor = state.selectedProfileColor;
+      }
+
+      function eraseProfilePixel(index) {
+        if (state.profilePixels[index] === "#ffffff") return;
+        state.profilePixels[index] = "#ffffff";
+        const cell = state.profileCells[index];
+        if (cell) cell.style.backgroundColor = "#ffffff";
+      }
+
+      function buildProfileEditor() {
+        pixelEditorGrid.replaceChildren();
+        state.profileCells = [];
+        for (let index = 0; index < PROFILE_PIXEL_COUNT; index += 1) {
+          const cell = document.createElement("button");
+          cell.type = "button";
+          cell.className = "pixel-cell";
+          cell.setAttribute("aria-label", `${Math.floor(index / PIXEL_SIDE) + 1}행 ${(index % PIXEL_SIDE) + 1}열 픽셀`);
+          cell.style.backgroundColor = state.profilePixels[index];
+          cell.addEventListener("pointerdown", (event) => {
+            event.preventDefault();
+            const isDoubleTap = state.lastPixelTapIndex === index;
+            state.lastPixelTapIndex = isDoubleTap ? -1 : index;
+            state.profilePainting = true;
+            if (isDoubleTap) {
+              eraseProfilePixel(index);
+            } else {
+              paintProfilePixel(index);
+            }
+          });
+          cell.addEventListener("dblclick", (event) => {
+            event.preventDefault();
+            state.lastPixelTapIndex = -1;
+            eraseProfilePixel(index);
+          });
+          cell.addEventListener("pointerenter", () => {
+            if (state.profilePainting) paintProfilePixel(index);
+          });
+          state.profileCells.push(cell);
+          pixelEditorGrid.appendChild(cell);
+        }
+      }
+
+      function openProfileEditor() {
+        const user = state.messenger.user || state.session?.user;
+        state.profilePixels = normalizeProfilePixels(user?.profile_pixels);
+        state.customPalette = Array.isArray(user?.custom_palette) ? user.custom_palette : [];
+        profileDisplayName.value = getDisplayName(user);
+        profileFriendCode.value = user?.friend_code || "";
+        state.selectedProfileColor = "#000000";
+        state.selectedProfilePalette = "default";
+        state.palettePickerOpen = false;
+        state.lastPixelTapIndex = -1;
+        customProfileColor.value = state.selectedProfileColor;
+        renderProfilePaletteSelect();
+        renderProfilePalette();
+        renderCustomPalette();
+        renderPalettePicker();
+        buildProfileEditor();
+        profileSheet.classList.remove("hidden");
+      }
+
+      function closeProfileEditor() {
+        state.profilePainting = false;
+        profileSheet.classList.add("hidden");
+      }
+
+      async function saveProfilePixels() {
+        saveProfileButton.disabled = true;
+        const user = state.messenger.user || state.session?.user;
+        try {
+          const data = await api("/profile", {
+            method: "POST",
+            body: JSON.stringify({
+              displayName: profileDisplayName.value.trim(),
+              statusMessage: user?.status_message || "",
+              friendCode: profileFriendCode.value.trim(),
+              pixels: state.profilePixels,
+            }),
+          });
+          state.messenger.user = data.user;
+          if (state.session?.user) state.session.user = data.user;
+          closeProfileEditor();
+          renderMessenger();
+          setAppStatus("프로필을 저장했어요.", "success");
+        } catch (error) {
+          setAppStatus(error.message, "error");
+        } finally {
+          saveProfileButton.disabled = false;
+        }
+      }
+
+      function recentChatRooms() {
+        return [...state.messenger.rooms].sort((first, second) => {
+          const firstHasMessage = Boolean(first.last_message);
+          const secondHasMessage = Boolean(second.last_message);
+          if (firstHasMessage !== secondHasMessage) return firstHasMessage ? -1 : 1;
+          return new Date(second.updated_at).getTime() - new Date(first.updated_at).getTime();
+        });
+      }
+
+      function renderChats() {
+        chatList.replaceChildren();
+        if (!state.messenger.rooms.length) {
+          const empty = document.createElement("p");
+          empty.className = "empty-list";
+          empty.textContent = state.isGuest
+            ? "로그인하면 채팅을 시작할 수 있어요."
+            : "아직 만든 1:1 채팅방이 없어요. 친구 탭에서 대화를 시작해 보세요.";
+          chatList.appendChild(empty);
+          return;
+        }
+
+        recentChatRooms().forEach((room) => {
+          const item = document.createElement("button");
+          item.type = "button";
+          item.className = "list-item";
+          item.addEventListener("click", () => openChatRoom(room.id));
+
+          const copy = document.createElement("div");
+          copy.className = "item-copy";
+          const title = document.createElement("strong");
+          title.className = "item-title";
+          title.textContent = room.name;
+          /* const preview = document.createElement("span");
+          preview.className = "item-preview"; /*
+          /*
+          preview.textContent = room.last_message ? room.last_message.text : "대화를 시작해 보세요.";
+          */ /*
+          preview.textContent = room.last_message ? room.last_message.text : "\ub300\ud654\ub97c \uc2dc\uc791\ud574 \ubcf4\uc138\uc694.";
+          */ /* preview.textContent = friend.presence?.online ? "online" : (friend.status_message || "offline");
+          copy.append(title, preview);
+
+          */ const preview = document.createElement("span");
+          preview.className = "item-preview";
+          preview.textContent = room.last_message
+            ? (room.last_message.text || (room.last_message.attachment?.type === "application/pdf" ? "PDF" : "Photo"))
+            : "Start a conversation.";
+          copy.append(title, preview);
+          const time = document.createElement("time");
+          time.className = "item-time";
+          time.textContent = formatTime(room.updated_at);
+          item.append(createAvatar(room.name, room.peer?.profile_pixels, room.peer?.presence, room.peer?.status_message), copy, time);
+          chatList.appendChild(item);
+        });
+      }
+
+      function currentRoom() {
+        return state.messenger.rooms.find((room) => room.id === state.selectedRoomId) || null;
+      }
+
+      function attachmentKindAt(x, y) {
+        const distance = Math.hypot(x, y);
+        if (distance < 28 || x < 0 || y > 0) return "";
+        const angle = Math.atan2(-y, x);
+        if (angle < 0 || angle > Math.PI / 2) return "";
+        const segment = Math.min(3, Math.floor(angle / (Math.PI / 8)));
+        return ["camera", "file", "pdf", "photo"][segment];
+      }
+
+      function showAttachmentGuide() {
+        chatAttachmentGuide.classList.remove("hidden");
+      }
+
+      function highlightAttachmentGuide(kind) {
+        chatAttachmentGuideItems.forEach((item) => item.classList.toggle("active", item.dataset.kind === kind));
+      }
+
+      function updateAttachmentSwipe(event) {
+        const swipe = state.chatAttachmentDrag;
+        swipe.kind = attachmentKindAt(event.clientX - swipe.startX, event.clientY - swipe.startY);
+        chatAttachmentButton.classList.toggle("swiping", Boolean(swipe.kind));
+        highlightAttachmentGuide(swipe.kind);
+      }
+
+      function resetAttachmentSwipe() {
+        if (state.chatAttachmentGuideTimer) {
+          clearTimeout(state.chatAttachmentGuideTimer);
+          state.chatAttachmentGuideTimer = null;
+        }
+        state.chatAttachmentDrag = { active: false, kind: "", startX: 0, startY: 0 };
+        chatAttachmentButton.classList.remove("swiping");
+        chatAttachmentGuide.classList.add("hidden");
+        highlightAttachmentGuide("");
+      }
+
+      function openAttachmentPicker(kind) {
+        if (kind !== "photo" && kind !== "pdf") {
+          setAppStatus("준비 중인 기능이에요.");
+          return;
+        }
+        chatAttachmentInput.accept = kind === "pdf"
+          ? "application/pdf"
+          : "image/jpeg,image/png,image/gif,image/webp";
+        chatAttachmentInput.value = "";
+        chatAttachmentInput.click();
+      }
+
+      function renderChatAttachmentTray() {
+        chatAttachmentTray.classList.add("hidden");
+      }
+
+      function renderChatAttachmentPreview() {
+        const file = state.chatAttachment;
+        chatAttachmentPreview.classList.toggle("hidden", !file);
+        chatAttachmentName.textContent = file ? `${file.type === "application/pdf" ? "PDF" : "Photo"}: ${file.name}` : "";
+      }
+
+      function clearChatAttachment() {
+        state.chatAttachment = null;
+        chatAttachmentInput.value = "";
+        renderChatAttachmentPreview();
+      }
+
+      function fileToBase64(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.addEventListener("load", () => resolve(String(reader.result || "").split(",", 2)[1] || ""));
+          reader.addEventListener("error", () => reject(new Error("Unable to read the file.")));
+          reader.readAsDataURL(file);
+        });
+      }
+
+      async function uploadChatAttachment(file) {
+        const data = await fileToBase64(file);
+        const result = await api("/uploads", {
+          method: "POST",
+          body: JSON.stringify({ name: file.name, type: file.type, data }),
+        });
+        return result.attachment;
+      }
+
+      function renderChatRoom() {
+        const room = currentRoom();
+        if (!room) {
+          chatRoom.classList.add("hidden");
+          return;
+        }
+        const presence = room.peer?.presence;
+        const isInThisRoom = Boolean(presence?.online && presence.active_room_ids?.includes(room.id));
+        chatRoom.classList.remove("hidden");
+        renderChatAttachmentTray();
+        renderChatAttachmentPreview();
+        const draft = state.chatDrafts[room.id] || "";
+        if (chatMessageInput.value !== draft) chatMessageInput.value = draft;
+        chatRoomAvatar.replaceChildren(createAvatar(room.name, room.peer?.profile_pixels, presence, room.peer?.status_message));
+        chatRoomName.textContent = room.name; /*
+        chatRoomPresence.textContent = isInThisRoom ? "대화방에 접속 중" : (presence?.online ? "활동 중" : "");
+
+        */ chatRoomPresence.textContent = isInThisRoom ? "in chat" : (presence?.online ? "online" : "");
+        chatMessageList.replaceChildren();
+        if (!state.messages.length) {
+          const empty = document.createElement("p");
+          empty.className = "chat-empty";
+          empty.textContent = "첫 메시지를 보내 보세요.";
+          chatMessageList.appendChild(empty);
+          return;
+        }
+        const username = state.messenger.user?.username;
+        state.messages.forEach((message) => {
+          const mine = message.username === username;
+          const row = document.createElement("article");
+          row.className = `message-row ${mine ? "mine" : "theirs"}`;
+          const bubble = document.createElement("div");
+          bubble.className = "message-bubble";
+          if (message.attachment?.url) {
+            const attachment = message.attachment;
+            const attachmentLink = document.createElement("a");
+            attachmentLink.className = "message-attachment";
+            attachmentLink.href = attachment.url;
+            attachmentLink.target = "_blank";
+            attachmentLink.rel = "noopener";
+            if (attachment.type?.startsWith("image/")) {
+              const image = document.createElement("img");
+              image.className = "message-image";
+              image.src = attachment.url;
+              image.alt = attachment.name || "Attached photo";
+              image.loading = "lazy";
+              attachmentLink.appendChild(image);
+            } else {
+              attachmentLink.classList.add("message-file");
+              attachmentLink.textContent = `PDF · ${attachment.name || "attachment.pdf"}`;
+            }
+            bubble.appendChild(attachmentLink);
+          }
+          if (message.text) {
+            const messageText = document.createElement("span");
+            messageText.textContent = message.text;
+            bubble.appendChild(messageText);
+          }
+          const meta = document.createElement("div");
+          meta.className = "message-meta";
+          if (mine) {
+            const read = document.createElement("span");
+            read.className = message.read ? "message-read" : "message-unread";
+            read.textContent = "읽음";
+            read.textContent = message.read ? "\uc77d\uc74c" : "\uc548 \uc77d\uc74c";
+            meta.appendChild(read);
+          }
+          const time = document.createElement("time");
+          time.textContent = formatTime(message.timestamp);
+          meta.appendChild(time);
+          row.append(bubble, meta);
+          chatMessageList.appendChild(row);
+        });
+        requestAnimationFrame(() => { chatMessageList.scrollTop = chatMessageList.scrollHeight; });
+      }
+
+      async function updatePresence() {
+        if (!state.session?.user) return;
+        const emoji = state.selectedStatusEmoji || normalizeStatusEmoji(state.messenger.user?.status_message);
+        try {
+          await api("/presence", {
+            method: "POST",
+            body: JSON.stringify({ activeRoomId: document.hidden ? "" : state.selectedRoomId, emoji }),
+          });
+        } catch (_) {
+        }
+      }
+
+      async function loadChatMessages() {
+        if (!state.selectedRoomId) return;
+        const roomId = state.selectedRoomId;
+        try {
+          state.messages = await api(`/messages?room_id=${encodeURIComponent(roomId)}`);
+          if (state.selectedRoomId !== roomId) return;
+          renderChatRoom();
+          await api("/rooms/read", { method: "POST", body: JSON.stringify({ roomId }) });
+        } catch (error) {
+          setAppStatus(error.message, "error");
+        }
+      }
+
+      async function openChatRoom(roomId) {
+        state.selectedRoomId = roomId;
+        state.messages = [];
+        chatMessageInput.value = state.chatDrafts[roomId] || "";
+        renderChatRoom();
+        await updatePresence();
+        await loadChatMessages();
+        chatMessageInput.focus();
+      }
+
+      function closeChatRoom() {
+        const wasReplyingToShortNotice = state.activeList === "shorts" && state.shortMessagePaused;
+        state.selectedRoomId = "";
+        state.messages = [];
+        chatRoom.classList.add("hidden");
+        updatePresence();
+        if (wasReplyingToShortNotice) resumeShortMessageNotice();
+      }
+
+      async function sendChatMessage(event) {
+        event.preventDefault();
+        const roomId = state.selectedRoomId;
+        const text = (chatMessageInput.value || state.chatDrafts[roomId] || "").trim();
+        const attachmentFile = state.chatAttachment;
+        if (!roomId || (!text && !attachmentFile)) return;
+        chatMessageInput.disabled = true;
+        chatAttachmentButton.disabled = true;
+        try {
+          const attachment = attachmentFile ? await uploadChatAttachment(attachmentFile) : null;
+          await api("/messages", { method: "POST", body: JSON.stringify({ roomId, text, attachment }) });
+          if (state.shortMessageNotice?.roomId === roomId) {
+            clearShortMessageNotice();
+            if (state.activeList === "shorts") renderShortShareBar();
+          }
+          delete state.chatDrafts[roomId];
+          chatMessageInput.value = "";
+          clearChatAttachment();
+          await loadChatMessages();
+          if (state.activeList === "shorts") {
+            const data = await api("/messenger");
+            state.messenger = {
+              user: data.user,
+              friends: data.friends || [],
+              discoverableUsers: data.discoverable_users || [],
+              rooms: data.rooms || [],
+            };
+          } else {
+            await loadMessenger();
+          }
+        } catch (error) {
+          state.chatDrafts[roomId] = chatMessageInput.value;
+          setAppStatus(error.message, "error");
+        } finally {
+          chatMessageInput.disabled = false;
+          chatAttachmentButton.disabled = false;
+          chatMessageInput.focus();
         }
       }
 
       function connectEvents() {
-        if (state.stream) {
-          state.stream.close();
-        }
-
-        state.stream = new EventSource("/events");
-        state.stream.onopen = () => {
-          connectionStatus.textContent = "실시간 연결됨";
-        };
-        state.stream.onmessage = (event) => {
-          const payload = JSON.parse(event.data);
+        if (state.eventSource || !state.session?.user) return;
+        const source = new EventSource("/events");
+        state.eventSource = source;
+        source.onmessage = async (event) => {
+          let payload;
+          try {
+            payload = JSON.parse(event.data);
+          } catch (_) {
+            return;
+          }
           if (payload.type === "hello") {
+            updatePresence();
             return;
           }
-          if (payload.type === "room_created") {
-            updateRoom(payload.room);
-            return;
-          }
+          const isShortsView = state.activeList === "shorts";
           if (payload.type === "message_created") {
-            updateRoom(payload.room);
-            if (payload.roomId === state.activeRoomId) {
-              state.activeMessages = [...state.activeMessages, payload.message];
-              renderMessages(state.activeMessages);
+            const isIncoming = payload.message?.username !== state.messenger.user?.username;
+            await loadMessenger(!isShortsView);
+            if (payload.roomId === state.selectedRoomId) await loadChatMessages();
+            if (isShortsView) {
+              const room = state.messenger.rooms.find((candidate) => candidate.id === payload.roomId);
+              if (!state.shortInlineReply && isIncoming && room) showShortMessageNotice(room, payload.message);
+              else if (!state.shortInlineReply) renderShortShareBar();
+            } else {
+              renderChatRoom();
             }
+            return;
+          }
+          if (payload.type === "room_read" && payload.username !== state.messenger.user?.username && payload.roomId === state.selectedRoomId) {
+            await loadChatMessages();
+          }
+          await loadMessenger(!isShortsView);
+          if (isShortsView) {
+            if (!state.shortInlineReply) renderShortShareBar();
+          } else {
+            renderChatRoom();
           }
         };
-        state.stream.onerror = () => {
-          connectionStatus.textContent = "재연결 중";
+        source.onerror = () => {
+          source.close();
+          if (state.eventSource === source) {
+            state.eventSource = null;
+            window.setTimeout(connectEvents, 1200);
+          }
         };
       }
 
+      function renderFriends() {
+        friendList.replaceChildren();
+        if (!state.messenger.friends.length) {
+          const empty = document.createElement("p");
+          empty.className = "empty-list";
+          empty.textContent = state.isGuest
+            ? "로그인하면 친구를 추가할 수 있어요."
+            : "친구가 없어요. 오른쪽 위 친구 추가 버튼으로 사용자를 추가해 보세요.";
+          friendList.appendChild(empty);
+          return;
+        }
+
+        state.messenger.friends.forEach((friend) => {
+          const item = document.createElement("button");
+          item.type = "button";
+          item.className = "list-item";
+          item.addEventListener("click", () => openDirectChat(friend.id));
+          const copy = document.createElement("div");
+          copy.className = "item-copy";
+          const title = document.createElement("strong");
+          title.className = "item-title";
+          title.textContent = getDisplayName(friend);
+          /*
+          /* const preview = document.createElement("span");
+          preview.className = "item-preview";
+          preview.textContent = friend.status_message || "접속 중";
+          */ /*
+          const preview = document.createElement("span");
+          preview.className = "item-preview";
+          preview.textContent = friend.presence?.online ? "활동 중" : (friend.status_message || "오프라인");
+          copy.append(title, preview);
+
+          */ const preview = document.createElement("span");
+          preview.className = "item-preview";
+          preview.textContent = friend.presence?.online ? "online" : (friend.status_message || "offline");
+          copy.append(title, preview);
+          /* const startButton = document.createElement("button");
+          startButton.type = "button";
+          startButton.className = "friend-action";
+          startButton.textContent = "대화 시작";
+          startButton.addEventListener("click", () => createDirectRoom(friend.id));
+          item.append(createAvatar(getDisplayName(friend), friend.profile_pixels, friend.presence), copy, startButton); */
+          item.append(createAvatar(getDisplayName(friend), friend.profile_pixels, friend.presence, friend.status_message), copy);
+          friendList.appendChild(item);
+        });
+      }
+
+      function renderDirectory() {
+        userDirectory.replaceChildren();
+        if (!state.messenger.discoverableUsers.length) {
+          const empty = document.createElement("p");
+          empty.className = "empty-list";
+          empty.textContent = "친구 ID를 입력해 추가하세요.";
+          userDirectory.appendChild(empty);
+          return;
+        }
+
+        state.messenger.discoverableUsers.forEach((user) => {
+          const item = document.createElement("div");
+          item.className = "directory-item";
+          const copy = document.createElement("div");
+          const name = document.createElement("strong");
+          name.textContent = getDisplayName(user);
+          const status = document.createElement("span");
+          /*
+          status.textContent = user.status_message || "접속 중";
+          */
+          status.textContent = user.status_message || "\uc628\ub77c\uc778";
+          copy.append(name, status);
+
+          const addButton = document.createElement("button");
+          addButton.type = "button";
+          addButton.className = "friend-action";
+          addButton.textContent = "친구 추가";
+          addButton.addEventListener("click", () => addFriend(user.id));
+          item.append(createAvatar(getDisplayName(user), user.profile_pixels), copy, addButton);
+          userDirectory.appendChild(item);
+        });
+      }
+
+      function youtubeDurationSeconds(duration) {
+        const match = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(duration || "");
+        if (!match) return 0;
+        return Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0);
+      }
+
+      function createShortCard(video, copy, action) {
+        const card = document.createElement("article");
+        card.className = "short-card";
+        card.style.height = `${Math.max(shortsView.clientHeight, 1)}px`;
+
+        const frame = document.createElement("iframe");
+        frame.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+        frame.allowFullscreen = true;
+        frame.loading = "lazy";
+        frame.referrerPolicy = "strict-origin-when-cross-origin";
+        frame.dataset.videoId = video.id;
+        setShortFrameSound(frame, false);
+        frame.title = video.title || "YouTube 쇼츠";
+
+        const metadata = document.createElement("div");
+        metadata.className = "short-card-copy";
+        const title = document.createElement("h2");
+        title.textContent = video.title || "YouTube 쇼츠";
+        const description = document.createElement("p");
+        description.textContent = copy;
+        metadata.append(title, description);
+
+        if (action) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = action.label;
+          button.addEventListener("click", action.onClick);
+          metadata.appendChild(button);
+        }
+
+        card.append(frame, metadata);
+        return card;
+      }
+
+      function activeShortVideo() {
+        if (!state.youtube.guestVideos.length) return null;
+        const cardHeight = Math.max(shortsView.clientHeight, 1);
+        const index = Math.max(0, Math.min(
+          state.youtube.guestVideos.length - 1,
+          Math.round(shortsView.scrollTop / cardHeight),
+        ));
+        return state.youtube.guestVideos[index] || null;
+      }
+
+      function clearShortMessageNotice() {
+        window.clearTimeout(state.shortMessageTimer);
+        state.shortMessageTimer = null;
+        state.shortMessageNotice = null;
+        state.shortMessagePaused = false;
+        state.shortInlineReply = null;
+      }
+
+      function scheduleShortMessageNotice() {
+        window.clearTimeout(state.shortMessageTimer);
+        if (!state.shortMessageNotice || state.shortMessagePaused) return;
+        state.shortMessageTimer = window.setTimeout(() => {
+          clearShortMessageNotice();
+          renderShortShareBar();
+        }, 5000);
+      }
+
+      function showShortMessageNotice(room, message) {
+        if (!state.shortsMessagesEnabled) return;
+        state.shortMessageNotice = { roomId: room.id, sender: room.name, text: message.text };
+        state.shortMessagePaused = false;
+        renderShortShareBar();
+        scheduleShortMessageNotice();
+      }
+
+      function dismissShortInlineReply() {
+        if (!state.shortInlineReply) return;
+        state.shortInlineReply = null;
+        state.shortMessageNotice = null;
+        state.shortMessagePaused = false;
+        window.clearTimeout(state.shortMessageTimer);
+        state.shortMessageTimer = null;
+        renderShortShareBar(true);
+      }
+
+      function toggleShortMessages() {
+        state.shortsMessagesEnabled = !state.shortsMessagesEnabled;
+        localStorage.setItem("colorless-shorts-messages", state.shortsMessagesEnabled ? "on" : "off");
+        if (!state.shortsMessagesEnabled && !state.shortInlineReply) clearShortMessageNotice();
+        renderShortShareBar(true);
+      }
+
+      function pauseShortMessageNotice() {
+        if (!state.shortMessageNotice) return;
+        state.shortMessagePaused = true;
+        window.clearTimeout(state.shortMessageTimer);
+        state.shortMessageTimer = null;
+      }
+
+      function resumeShortMessageNotice() {
+        if (!state.shortMessageNotice || !state.shortMessagePaused) return;
+        state.shortMessagePaused = false;
+        renderShortShareBar();
+        scheduleShortMessageNotice();
+      }
+
+      function renderShortShareBar(force = false) {
+        if (state.shortInlineReply && !force) return;
+        shortShareBar.classList.toggle("replying", Boolean(state.shortInlineReply));
+        shortMessageToggle.classList.toggle("enabled", state.shortsMessagesEnabled);
+        shortMessageToggle.setAttribute("aria-pressed", String(state.shortsMessagesEnabled));
+        shortMessageToggle.setAttribute("aria-label", state.shortsMessagesEnabled ? "쇼츠 메시지 알림 켜짐" : "쇼츠 메시지 알림 꺼짐");
+        shortShareList.replaceChildren();
+        shortShareFeedback.textContent = ""; /*
+        shortShareSend.textContent = "➤";
+        shortShareSend.setAttribute("aria-label", "Send");
+        */ shortShareSend.textContent = ">";
+        shortShareSend.setAttribute("aria-label", "Send");
+        if (state.shortInlineReply) {
+          const input = document.createElement("input");
+          input.type = "text";
+          input.className = "short-inline-reply";
+          input.maxLength = 300;
+          input.autocomplete = "off";
+          input.placeholder = "Reply";
+          input.setAttribute("aria-label", "Reply message");
+          input.value = state.shortInlineReply.draft || "";
+          const saveDraft = () => {
+            if (!state.shortInlineReply) return;
+            state.shortInlineReply.draft = input.value;
+            shortShareSend.disabled = !input.value.trim();
+            if (!input.value.trim()) dismissShortInlineReply();
+          };
+          input.addEventListener("input", saveDraft);
+          input.addEventListener("compositionend", saveDraft);
+          input.addEventListener("keyup", saveDraft);
+          input.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              dismissShortInlineReply();
+              return;
+            }
+            if (event.key === "Enter") {
+              event.preventDefault();
+              sendShortInlineReply();
+            }
+          });
+          input.addEventListener("blur", () => {
+            window.setTimeout(() => {
+              if (state.shortInlineReply && !input.value.trim()) dismissShortInlineReply();
+            }, 0);
+          });
+          shortShareList.appendChild(input);
+          shortShareSend.disabled = !input.value.trim();
+          shortShareSend.setAttribute("aria-label", "Send reply");
+          requestAnimationFrame(() => input.focus());
+          return;
+        }
+        if (state.shortMessageNotice) {
+          const room = state.messenger.rooms.find((candidate) => candidate.id === state.shortMessageNotice.roomId);
+          const notice = document.createElement("button");
+          notice.type = "button";
+          notice.className = "short-message-notice";
+          notice.appendChild(createAvatar(
+            state.shortMessageNotice.sender,
+            room?.peer?.profile_pixels,
+            room?.peer?.presence,
+            room?.peer?.status_message,
+          ));
+          const copy = document.createElement("span");
+          copy.className = "short-message-copy";
+          const sender = document.createElement("strong");
+          sender.textContent = state.shortMessageNotice.sender;
+          const text = document.createElement("span");
+          text.textContent = state.shortMessageNotice.text;
+          copy.append(sender, text);
+          notice.appendChild(copy);
+          notice.addEventListener("click", replyToShortMessageNotice);
+          shortShareList.appendChild(notice);
+          shortShareSend.disabled = false;
+          shortShareSend.setAttribute("aria-label", "Reply");
+          return;
+        }
+        const rooms = recentChatRooms();
+        if (!rooms.length) {
+          state.selectedShareRoomId = "";
+          shortShareSend.disabled = true;
+          /*
+          const empty = document.createElement("p");
+          empty.className = "short-share-empty";
+          empty.textContent = "대화를 시작하면 여기서 쇼츠를 보낼 수 있어요.";
+          shortShareList.appendChild(empty);
+          */ return;
+        }
+        if (!rooms.some((room) => room.id === state.selectedShareRoomId)) state.selectedShareRoomId = "";
+
+        rooms.forEach((room) => {
+          const person = document.createElement("button");
+          person.type = "button";
+          person.className = "short-share-person"; /*
+          person.title = `${room.name}에게 현재 쇼츠 보내기`;
+          */ person.title = `Share to ${room.name}`;
+          person.appendChild(createAvatar(room.name, room.peer?.profile_pixels, room.peer?.presence, room.peer?.status_message));
+          const name = document.createElement("span");
+          name.textContent = room.name;
+          person.appendChild(name);
+          person.classList.toggle("selected", state.selectedShareRoomId === room.id);
+          person.addEventListener("click", () => selectShortShareRoom(room.id));
+          shortShareList.appendChild(person);
+        });
+        shortShareSend.disabled = !state.selectedShareRoomId;
+      }
+
+      function selectShortShareRoom(roomId) {
+        state.selectedShareRoomId = roomId;
+        renderShortShareBar();
+      }
+
+      async function sendSelectedShort() {
+        const room = state.messenger.rooms.find((candidate) => candidate.id === state.selectedShareRoomId);
+        if (room) await shareShortToRoom(room);
+      }
+
+      async function replyToShortMessageNotice() {
+        const roomId = state.shortMessageNotice?.roomId;
+        if (!roomId) return;
+        pauseShortMessageNotice();
+        state.shortInlineReply = { roomId, draft: "" };
+        renderShortShareBar(true);
+      }
+
+      async function sendShortInlineReply() {
+        const roomId = state.shortInlineReply?.roomId;
+        const input = shortShareList.querySelector(".short-inline-reply");
+        if (input && state.shortInlineReply) state.shortInlineReply.draft = input.value;
+        const text = (input?.value || state.shortInlineReply?.draft || "").trim();
+        if (!roomId || !text) return;
+        input.disabled = true;
+        shortShareSend.disabled = true;
+        try {
+          await api("/messages", { method: "POST", body: JSON.stringify({ roomId, text }) });
+          clearShortMessageNotice();
+          await loadMessenger(false);
+          renderShortShareBar();
+        } catch (error) {
+          input.disabled = false;
+          shortShareSend.disabled = false;
+          shortShareFeedback.textContent = error.message;
+        }
+      }
+
+      async function handleShortShareAction() {
+        if (state.shortInlineReply) {
+          await sendShortInlineReply();
+          return;
+        }
+        if (state.shortMessageNotice) {
+          await replyToShortMessageNotice();
+          return;
+        }
+        await sendSelectedShort();
+      }
+
+      async function shareShortToRoom(room) {
+        const video = activeShortVideo();
+        if (!video) {
+          shortShareFeedback.textContent = "공유할 쇼츠를 먼저 불러와 주세요.";
+          return;
+        }
+        const url = `https://www.youtube.com/shorts/${video.id}`; /*
+        shortShareFeedback.textContent = `${room.name}에게 보내는 중…`;
+        */ const shareUrl = `https://www.youtube.com/shorts/${video.id}`;
+        shortShareFeedback.textContent = `Sending to ${room.name}...`;
+        try {
+          await api("/messages", {
+            method: "POST",
+            body: JSON.stringify({ roomId: room.id, text: shareUrl }),
+          });
+          shortShareFeedback.textContent = `${room.name}에게 보냈어요.`;
+          shortShareSend.disabled = true;
+        } catch (error) {
+          shortShareFeedback.textContent = error.message;
+        }
+      }
+
+      let shortFrameObserver = null;
+
+      function shortEmbedSource(videoId, soundEnabled) {
+        return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?autoplay=1&mute=${soundEnabled ? "0" : "1"}&playsinline=1&rel=0`;
+      }
+
+      function setShortFrameSound(frame, soundEnabled, forceLoad = false) {
+        if (frame.dataset.soundEnabled === String(soundEnabled) && (frame.dataset.src || frame.src)) return;
+        const source = shortEmbedSource(frame.dataset.videoId, soundEnabled);
+        frame.dataset.soundEnabled = String(soundEnabled);
+        if (frame.dataset.src && !forceLoad) {
+          frame.dataset.src = source;
+          return;
+        }
+        frame.src = source;
+        delete frame.dataset.src;
+      }
+
+      function syncActiveShortAudio() {
+        const cards = Array.from(shortsFeed.querySelectorAll(".short-card:not(.short-empty-card)"));
+        if (!cards.length) return;
+        const activeCard = cards.reduce((closest, card) => (
+          Math.abs(card.offsetTop - shortsView.scrollTop) < Math.abs(closest.offsetTop - shortsView.scrollTop)
+            ? card
+            : closest
+        ));
+
+        cards.forEach((card) => {
+          const frame = card.querySelector("iframe");
+          if (!frame) return;
+          const enableSound = state.youtube.soundEnabled && card === activeCard;
+          setShortFrameSound(frame, enableSound, enableSound);
+        });
+        shortsSoundToggle.textContent = state.youtube.soundEnabled ? "🔊" : "🔇";
+        shortsSoundToggle.setAttribute("aria-label", state.youtube.soundEnabled ? "쇼츠 소리 끄기" : "쇼츠 소리 켜기");
+      }
+
+      function loadVisibleShortFrames() {
+        shortFrameObserver?.disconnect();
+
+        const frames = shortsFeed.querySelectorAll("iframe[data-src]");
+        const activate = (frame) => {
+          const source = frame.dataset.src;
+          if (!source) return;
+          frame.src = source;
+          delete frame.dataset.src;
+        };
+
+        if (!("IntersectionObserver" in window)) {
+          frames.forEach(activate);
+          return;
+        }
+
+        shortFrameObserver = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            activate(entry.target);
+            shortFrameObserver?.unobserve(entry.target);
+          });
+        }, {
+          root: shortsView,
+          rootMargin: "150% 0px",
+        });
+
+        frames.forEach((frame) => shortFrameObserver.observe(frame));
+      }
+
+      function createShortEmptyCard(titleText, copyText, action) {
+        const card = document.createElement("article");
+        card.className = "short-card short-empty-card";
+        card.style.height = `${Math.max(shortsView.clientHeight, 1)}px`;
+        const title = document.createElement("h2");
+        title.textContent = titleText;
+        const copy = document.createElement("p");
+        copy.textContent = copyText;
+        card.append(title, copy);
+        if (action) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = action.label;
+          button.addEventListener("click", action.onClick);
+          card.appendChild(button);
+        }
+        return card;
+      }
+
+      function renderShorts() {
+        const scrollPosition = shortsView.scrollTop;
+        shortsFeed.replaceChildren();
+
+        if (!state.youtube.guestVideos.length) {
+          shortsFeed.appendChild(createShortEmptyCard(
+            state.youtube.guestError ? "쇼츠를 불러오지 못했어요" : "YouTube Shorts",
+            state.youtube.guestError || "한국 쇼츠를 불러오는 중이에요.",
+            state.youtube.guestLoading
+              ? null
+              : { label: "다시 불러오기", onClick: loadGuestShorts },
+          ));
+          return;
+        }
+
+        state.youtube.guestVideos.forEach((video) => {
+          shortsFeed.appendChild(createShortCard(
+            video,
+            video.channel_title || "YouTube",
+          ));
+        });
+        if (state.youtube.guestError) {
+          shortsFeed.appendChild(createShortEmptyCard(
+            "다음 쇼츠를 불러오지 못했어요",
+            state.youtube.guestError,
+            { label: "다시 불러오기", onClick: loadGuestShorts },
+          ));
+        }
+        shortsView.scrollTop = scrollPosition;
+        renderShortShareBar();
+        loadVisibleShortFrames();
+        syncActiveShortAudio();
+      }
+
+      async function loadGuestShorts(refresh = false) {
+        if (state.youtube.guestLoading) return;
+        const feedVersion = state.youtube.feedVersion;
+        state.youtube.guestLoading = true;
+        state.youtube.guestError = "";
+        renderShorts();
+
+        try {
+          const requestQuery = state.youtube.guestCursor
+            ? `?cursor=${encodeURIComponent(state.youtube.guestCursor)}`
+            : refresh
+              ? "?refresh=1"
+              : "";
+          const payload = await api(`/youtube/shorts${requestQuery}`);
+          if (feedVersion !== state.youtube.feedVersion) return;
+          const existingIds = new Set(state.youtube.guestVideos.map((video) => video.id));
+          const newVideos = (payload.items || []).filter((video) => video?.id && !existingIds.has(video.id));
+          state.youtube.guestVideos.push(...newVideos);
+          state.youtube.guestCursor = payload.next_cursor || "";
+          const retryAfter = Number(payload.retry_after || 0);
+          if (!newVideos.length && (state.youtube.guestCursor || retryAfter > 0)) {
+            window.setTimeout(() => {
+              if (state.activeList === "shorts" && !state.youtube.guestLoading) {
+                loadGuestShorts(!state.youtube.guestCursor);
+              }
+            }, retryAfter > 0 ? retryAfter * 1000 : 120);
+          }
+        } catch (error) {
+          if (feedVersion !== state.youtube.feedVersion) return;
+          state.youtube.guestError = error.message;
+        } finally {
+          if (feedVersion !== state.youtube.feedVersion) return;
+          state.youtube.guestLoading = false;
+          renderShorts();
+        }
+      }
+
+      function maybeLoadMoreGuestShorts() {
+        if (state.youtube.guestLoading) return;
+        const remaining = shortsView.scrollHeight - shortsView.scrollTop - shortsView.clientHeight;
+        if (remaining < shortsView.clientHeight * 1.5) {
+          loadGuestShorts(!state.youtube.guestCursor);
+        }
+      }
+
+      async function loadYouTubeShorts() {
+        if (!state.youtube.accessToken) return;
+        state.youtube.message = "좋아요 기반 추천 쇼츠를 찾는 중이에요.";
+        renderShorts();
+
+        try {
+          const likedResponse = await fetch("https://www.googleapis.com/youtube/v3/videos?part=snippet&myRating=like&maxResults=1", {
+            headers: { Authorization: `Bearer ${state.youtube.accessToken}` },
+          });
+          const likedPayload = await likedResponse.json();
+          if (!likedResponse.ok) throw new Error(likedPayload?.error?.message || "좋아요한 영상을 불러오지 못했어요.");
+
+          const seed = likedPayload.items?.[0];
+          if (!seed?.id) {
+            state.youtube.videos = [];
+            state.youtube.seedTitle = "";
+            state.youtube.message = "좋아요한 영상을 찾지 못했어요.";
+            renderShorts();
+            return;
+          }
+
+          const relatedUrl = new URL("https://www.googleapis.com/youtube/v3/search");
+          relatedUrl.search = new URLSearchParams({
+            part: "snippet",
+            type: "video",
+            videoDuration: "short",
+            relatedToVideoId: seed.id,
+            maxResults: "25",
+          });
+          const relatedResponse = await fetch(relatedUrl, {
+            headers: { Authorization: `Bearer ${state.youtube.accessToken}` },
+          });
+          const relatedPayload = await relatedResponse.json();
+          if (!relatedResponse.ok) throw new Error(relatedPayload?.error?.message || "유사한 영상을 불러오지 못했어요.");
+
+          const videoIds = (relatedPayload.items || []).map((item) => item.id?.videoId).filter(Boolean);
+          if (!videoIds.length) {
+            state.youtube.videos = [];
+            state.youtube.seedTitle = seed.snippet?.title || "";
+            state.youtube.message = "유사한 영상을 찾지 못했어요.";
+            renderShorts();
+            return;
+          }
+
+          const videosUrl = new URL("https://www.googleapis.com/youtube/v3/videos");
+          videosUrl.search = new URLSearchParams({
+            part: "snippet,contentDetails",
+            id: videoIds.join(","),
+          });
+          const videosResponse = await fetch(videosUrl, {
+            headers: { Authorization: `Bearer ${state.youtube.accessToken}` },
+          });
+          const videosPayload = await videosResponse.json();
+          if (!videosResponse.ok) throw new Error(videosPayload?.error?.message || "추천 영상을 불러오지 못했어요.");
+
+          state.youtube.videos = (videosPayload.items || []).filter((video) => youtubeDurationSeconds(video.contentDetails?.duration) > 0 && youtubeDurationSeconds(video.contentDetails?.duration) <= 60);
+          state.youtube.seedTitle = seed.snippet?.title || "";
+          state.youtube.activeIndex = 0;
+          state.youtube.message = "";
+          renderShorts();
+        } catch (error) {
+          state.youtube.message = error.message;
+          renderShorts();
+          setAppStatus(error.message, "error");
+        }
+      }
+
+      async function connectYouTube() {
+        if (!state.providers.google?.enabled) {
+          state.youtube.message = "Google 로그인을 먼저 연결해 주세요.";
+          renderShorts();
+          return;
+        }
+
+        try {
+          await loadGoogleIdentityLibrary();
+          if (!window.google?.accounts?.oauth2) throw new Error("YouTube 권한 창을 열지 못했어요.");
+
+          state.youtube.tokenClient = window.google.accounts.oauth2.initTokenClient({
+            client_id: state.providers.google.client_id,
+            scope: "https://www.googleapis.com/auth/youtube.readonly",
+            callback: async (response) => {
+              if (response.error || !response.access_token) {
+                state.youtube.message = "YouTube 읽기 권한이 필요해요.";
+                renderShorts();
+                return;
+              }
+              state.youtube.accessToken = response.access_token;
+              await loadYouTubeShorts();
+            },
+          });
+          state.youtube.tokenClient.requestAccessToken({ prompt: state.youtube.accessToken ? "" : "consent" });
+        } catch (error) {
+          state.youtube.message = error.message;
+          renderShorts();
+          setAppStatus(error.message, "error");
+        }
+      }
+
+      function renderMessenger() {
+        const user = state.messenger.user || state.session?.user;
+        appScreen.classList.remove("guest-mode");
+        appScreen.classList.toggle("shorts-mode", state.activeList === "shorts");
+        appTitle.textContent = state.activeList === "friends" ? "친구" : "채팅";
+        openLoginButton.classList.add("hidden");
+        openProfileButton.classList.remove("hidden");
+        openDirectoryButton.classList.remove("hidden");
+        logoutButton.classList.remove("hidden");
+        chatsTab.classList.toggle("active", state.activeList === "chats");
+        friendsTab.classList.toggle("active", state.activeList === "friends");
+        shortsTab.classList.toggle("active", state.activeList === "shorts");
+        shortsSoundToggle.classList.toggle("hidden", state.activeList !== "shorts");
+        chatList.classList.toggle("hidden", state.activeList !== "chats");
+        friendList.classList.toggle("hidden", state.activeList !== "friends");
+        shortsView.classList.toggle("hidden", state.activeList !== "shorts");
+        renderChats();
+        renderFriends();
+        renderDirectory();
+        renderShorts();
+        renderShortShareBar();
+      }
+
+      function applyMessengerData(data) {
+        const incomingMessages = [];
+        const rooms = data.rooms || [];
+        rooms.forEach((room) => {
+          const message = room.last_message;
+          if (!message?.id) return;
+          const previousMessageId = state.lastSeenRoomMessageIds[room.id];
+          if (state.liveSyncInitialized && previousMessageId !== message.id && message.username !== data.user?.username) {
+            incomingMessages.push({ roomId: room.id, message });
+          }
+          state.lastSeenRoomMessageIds[room.id] = message.id;
+        });
+        state.liveSyncInitialized = true;
+        state.messenger = {
+          user: data.user,
+          friends: data.friends || [],
+          discoverableUsers: data.discoverable_users || [],
+          rooms,
+        };
+        return incomingMessages;
+      }
+
+      async function loadMessenger(render = true) {
+        const data = await api("/messenger");
+        const incomingMessages = applyMessengerData(data);
+        if (render) renderMessenger();
+        return incomingMessages;
+      }
+
+      async function syncLiveState() {
+        if (!state.session?.user || state.liveSyncBusy) return;
+        state.liveSyncBusy = true;
+        try {
+          const isShortsView = state.activeList === "shorts";
+          const incomingMessages = await loadMessenger(!isShortsView);
+          if (state.selectedRoomId) await loadChatMessages();
+          if (isShortsView) {
+            const incoming = incomingMessages[0];
+            const room = incoming && state.messenger.rooms.find((candidate) => candidate.id === incoming.roomId);
+            if (!state.shortInlineReply && incoming && room) showShortMessageNotice(room, incoming.message);
+            else if (!state.shortInlineReply) renderShortShareBar();
+          } else {
+            renderChatRoom();
+          }
+        } catch (_) {
+        } finally {
+          state.liveSyncBusy = false;
+        }
+      }
+
+      function startLiveSync() {
+        window.clearInterval(state.liveSyncTimer);
+        state.liveSyncTimer = window.setInterval(syncLiveState, 1500);
+      }
+
       async function startApp() {
+        state.isGuest = false;
         showApp();
-        await fetchBootstrap();
-        connectEvents();
-        setStatus("메신저 준비가 끝났어요.", "success");
+        try {
+          await loadMessenger();
+          connectEvents();
+          startLiveSync();
+          openStatusEmojiPicker();
+          setAppStatus("친구를 추가하거나 새 대화를 시작해 보세요.");
+        } catch (error) {
+          showAuth();
+          setAuthStatus(error.message, "error");
+        }
+      }
+
+      function setActiveList(listName) {
+        if (listName === "shorts") {
+          state.youtube.feedVersion += 1;
+          state.youtube.guestVideos = [];
+          state.youtube.guestCursor = "";
+          state.youtube.guestError = "";
+          state.youtube.guestLoading = false;
+          shortsView.scrollTop = 0;
+        }
+        state.activeList = listName;
+        renderMessenger();
+        if (listName === "shorts") {
+          loadGuestShorts(true);
+        }
+      }
+
+      function openDirectory() {
+        renderDirectory();
+        directorySheet.classList.remove("hidden");
+        friendCodeInput.focus();
+      }
+
+      function closeDirectory() {
+        directorySheet.classList.add("hidden");
+      }
+
+      async function addFriend(friendCode) {
+        const normalizedFriendCode = friendCode.trim();
+        if (!normalizedFriendCode) {
+          setAppStatus("친구 ID를 입력해 주세요.", "error");
+          friendCodeInput.focus();
+          return;
+        }
+        try {
+          const data = await api("/friends", {
+            method: "POST",
+            body: JSON.stringify({ friendCode: normalizedFriendCode }),
+          });
+          await loadMessenger();
+          friendCodeInput.value = "";
+          closeDirectory();
+          setAppStatus(`${data.friend.username} 님을 친구로 추가했어요.`, "success");
+        } catch (error) {
+          setAppStatus(error.message, "error");
+        }
+      }
+
+      async function openDirectChat(userId) {
+        try {
+          const data = await api("/direct-rooms", {
+            method: "POST",
+            body: JSON.stringify({ userId }),
+          });
+          state.activeList = "chats";
+          const existingIndex = state.messenger.rooms.findIndex((room) => room.id === data.room.id);
+          if (existingIndex >= 0) state.messenger.rooms.splice(existingIndex, 1, data.room);
+          else state.messenger.rooms.unshift(data.room);
+          renderMessenger();
+          await openChatRoom(data.room.id);
+          loadMessenger(false).then(() => {
+            if (state.activeList === "shorts") renderShortShareBar();
+            else {
+              renderChats();
+              renderFriends();
+              renderChatRoom();
+            }
+          }).catch(() => {});
+          setAppStatus(data.created ? `${data.room.name} 님과의 채팅방을 만들었어요.` : "기존 채팅방을 열었어요.", "success");
+        } catch (error) {
+          setAppStatus(error.message, "error");
+        }
+      }
+
+      function setAuthMode(mode) {
+        const showSignup = mode === "signup";
+        signupBanner.classList.toggle("hidden", showSignup);
+        signupCard.classList.toggle("hidden", !showSignup);
+        setAuthStatus(showSignup
+          ? "휴대폰 인증을 완료한 뒤 비밀번호 계정을 만들 수 있어요."
+          : "SNS 로그인 또는 기존 계정 로그인을 선택해 주세요.");
       }
 
       async function loadProviders() {
@@ -1057,12 +2666,14 @@
           googleLoginButton.disabled = !googleEnabled;
           kakaoLoginButton.disabled = !kakaoEnabled;
           demoLoginButton.disabled = !demoEnabled;
+
           if (googleEnabled) {
-            setProviderStatus("구글 로그인 버튼이 준비됐어요. 구글 클라이언트 ID와 시크릿이 연결되면 실제 OAuth로 이동합니다.", "success");
+            await renderGoogleButton();
+            setProviderStatus("");
           } else if (kakaoEnabled) {
-            setProviderStatus("카카오 로그인 버튼이 준비됐어요. 카카오 앱 키를 연결하면 실제 OAuth로 이동합니다.", "success");
+            setProviderStatus("카카오 로그인이 준비됐어요.", "success");
           } else {
-            setProviderStatus("아직 구글/카카오 앱 키가 없어서 개발용 SNS 로그인만 바로 테스트할 수 있어요.");
+            setProviderStatus("구글/카카오 앱 키를 연결하면 SNS 로그인을 사용할 수 있어요.");
           }
         } catch (error) {
           setProviderStatus(error.message, "error");
@@ -1072,20 +2683,17 @@
       function consumeAuthQuery() {
         const url = new URL(window.location.href);
         const authError = url.searchParams.get("auth_error");
-        if (!authError) {
-          return;
-        }
+        if (!authError) return;
 
         const messages = {
-          google_not_configured: "구글 클라이언트 ID와 시크릿이 아직 연결되지 않았어요. 개발용 SNS 로그인으로 먼저 테스트할 수 있어요.",
+          google_not_configured: "구글 클라이언트 ID와 시크릿이 아직 연결되지 않았어요.",
           google_access_denied: "구글 로그인 동의가 취소됐어요.",
-          kakao_not_configured: "카카오 앱 키가 아직 연결되지 않았어요. 개발용 SNS 로그인으로 먼저 테스트할 수 있어요.",
+          kakao_not_configured: "카카오 앱 키가 아직 연결되지 않았어요.",
           kakao_access_denied: "카카오 로그인 동의가 취소됐어요.",
           oauth_state_invalid: "로그인 보안 검증에 실패했어요. 다시 시도해 주세요.",
           google_login_failed: "구글 로그인 처리 중 문제가 생겼어요.",
           kakao_login_failed: "카카오 로그인 처리 중 문제가 생겼어요.",
         };
-
         setAuthStatus(messages[authError] || "SNS 로그인 처리 중 문제가 생겼어요.", "error");
         url.searchParams.delete("auth_error");
         window.history.replaceState({}, document.title, `${url.pathname}${url.search ? `?${url.searchParams.toString()}` : ""}`);
@@ -1094,13 +2702,10 @@
       async function submitLogin(event) {
         event.preventDefault();
         try {
-          state.session = await api("/login", {
+          rememberSession(await api("/login", {
             method: "POST",
-            body: JSON.stringify({
-              username: loginUsername.value.trim(),
-              password: loginPassword.value,
-            }),
-          });
+            body: JSON.stringify({ username: loginUsername.value.trim(), password: loginPassword.value }),
+          }));
           loginForm.reset();
           await startApp();
         } catch (error) {
@@ -1108,12 +2713,87 @@
         }
       }
 
-      function startGoogleLogin() {
-        if (!state.providers.google?.enabled) {
-          setAuthStatus("구글 로그인은 클라이언트 ID와 시크릿을 연결한 뒤 사용할 수 있어요.", "error");
+      async function logout() {
+        try {
+          await api("/logout", { method: "POST", body: JSON.stringify({}) });
+          state.sessionToken = "";
+          sessionStorage.removeItem("free-danny-session-token");
+          showAuth();
+          setAuthStatus("로그아웃했어요. 쇼츠를 보려면 로그인해 주세요.");
+        } catch (error) {
+          setAuthStatus(error.message, "error");
+        }
+      }
+
+      function loadGoogleIdentityLibrary() {
+        if (window.google?.accounts?.id) {
+          return Promise.resolve();
+        }
+        if (window.googleIdentityLibraryPromise) {
+          return window.googleIdentityLibraryPromise;
+        }
+
+        window.googleIdentityLibraryPromise = new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://accounts.google.com/gsi/client";
+          script.async = true;
+          script.defer = true;
+          script.onload = resolve;
+          script.onerror = () => reject(new Error("구글 로그인 도구를 불러오지 못했어요."));
+          document.head.appendChild(script);
+        });
+        return window.googleIdentityLibraryPromise;
+      }
+
+      async function handleGoogleCredential(response) {
+        if (!response.credential) {
+          setAuthStatus("구글 인증 정보를 받지 못했어요.", "error");
           return;
         }
-        window.location.href = state.providers.google.login_url || "/auth/google/start";
+        try {
+          rememberSession(await api("/auth/google/credential", {
+            method: "POST",
+            body: JSON.stringify({ credential: response.credential }),
+          }));
+          await startApp();
+        } catch (error) {
+          setAuthStatus(error.message, "error");
+        }
+      }
+
+      async function startGoogleLogin() {
+        if (!state.providers.google?.enabled) {
+          setAuthStatus("구글 로그인은 앱 키를 연결한 뒤 사용할 수 있어요.", "error");
+          return;
+        }
+        try {
+          await renderGoogleButton();
+          googleButtonContainer.querySelector("div")?.click();
+        } catch (error) {
+          setAuthStatus(error.message, "error");
+        }
+      }
+
+      async function renderGoogleButton() {
+        if (!state.providers.google?.enabled || googleButtonContainer.childElementCount) {
+          return;
+        }
+        await loadGoogleIdentityLibrary();
+        window.google.accounts.id.initialize({
+          client_id: state.providers.google.client_id,
+          auto_select: false,
+          login_uri: `${window.location.origin}/auth/google/callback`,
+          ux_mode: "redirect",
+        });
+        window.google.accounts.id.renderButton(googleButtonContainer, {
+          theme: "outline",
+          size: "large",
+          text: "continue_with",
+          shape: "rectangular",
+          width: Math.floor(googleLoginButton.getBoundingClientRect().width || 320),
+        });
+        googleLoginButton.classList.add("hidden");
+        googleButtonContainer.classList.remove("hidden");
       }
 
       function startKakaoLogin() {
@@ -1126,10 +2806,10 @@
 
       async function startDemoLogin() {
         try {
-          state.session = await api("/auth/demo-login", {
+          rememberSession(await api("/auth/demo-login", {
             method: "POST",
             body: JSON.stringify({ provider: "demo" }),
-          });
+          }));
           await startApp();
         } catch (error) {
           setAuthStatus(error.message, "error");
@@ -1154,7 +2834,7 @@
           resetPhoneVerification();
           state.phoneVerification.phone = phone;
           const devCodeText = response.devCode ? ` 개발용 인증번호: ${response.devCode}` : "";
-          updatePhoneHelp(`${response.phoneMasked} 번호로 인증번호를 준비했어요.${devCodeText}`);
+          phoneHelp.textContent = `${response.phoneMasked} 번호로 인증번호를 준비했어요.${devCodeText}`;
           setAuthStatus("인증번호를 확인하고 아래에서 인증해 주세요.", "success");
           signupCode.focus();
         } catch (error) {
@@ -1169,15 +2849,8 @@
         const code = signupCode.value.replace(/\D/g, "").slice(0, 6);
         signupPhone.value = phone;
         signupCode.value = code;
-
-        if (phone.length < 10) {
-          setAuthStatus("휴대폰 번호를 먼저 입력해 주세요.", "error");
-          signupPhone.focus();
-          return;
-        }
-        if (code.length !== 6) {
-          setAuthStatus("인증번호 6자리를 입력해 주세요.", "error");
-          signupCode.focus();
+        if (phone.length < 10 || code.length !== 6) {
+          setAuthStatus("휴대폰 번호와 인증번호 6자리를 입력해 주세요.", "error");
           return;
         }
 
@@ -1187,13 +2860,9 @@
             method: "POST",
             body: JSON.stringify({ phone, code }),
           });
-          state.phoneVerification = {
-            phone,
-            token: response.verificationToken,
-            verified: true,
-          };
+          state.phoneVerification = { phone, token: response.verificationToken, verified: true };
           phoneVerifiedBadge.classList.remove("hidden");
-          updatePhoneHelp(`${response.phoneMasked} 번호 인증이 완료됐어요.`);
+          phoneHelp.textContent = `${response.phoneMasked} 번호 인증이 완료됐어요.`;
           setAuthStatus("휴대폰 인증이 완료됐어요. 이제 비밀번호 계정을 만들 수 있어요.", "success");
         } catch (error) {
           resetPhoneVerification();
@@ -1207,13 +2876,11 @@
         event.preventDefault();
         const phone = normalizePhone(signupPhone.value);
         signupPhone.value = phone;
-
         if (signupPassword.value !== signupPasswordConfirm.value) {
           setAuthStatus("비밀번호 확인이 일치하지 않습니다.", "error");
           signupPasswordConfirm.focus();
           return;
         }
-
         if (!state.phoneVerification.verified || state.phoneVerification.phone !== phone || !state.phoneVerification.token) {
           setAuthStatus("휴대폰 인증을 먼저 완료해 주세요.", "error");
           signupPhone.focus();
@@ -1221,88 +2888,25 @@
         }
 
         try {
-          state.session = await api("/signup", {
+          rememberSession(await api("/signup", {
             method: "POST",
             body: JSON.stringify({
               username: signupUsername.value.trim(),
+              friendCode: signupFriendCode.value.trim(),
               password: signupPassword.value,
-              statusMessage: signupStatus.value.trim(),
+              statusMessage: "",
               phone,
               verificationToken: state.phoneVerification.token,
+              ageGroup: signupAgeGroup.value,
+              gender: signupGender.value,
             }),
-          });
+          }));
           signupForm.reset();
           resetPhoneVerification();
-          updatePhoneHelp("개발 환경에서는 인증번호가 화면에 표시됩니다.");
+          phoneHelp.textContent = "개발 환경에서는 인증번호가 화면에 표시됩니다.";
           await startApp();
         } catch (error) {
           setAuthStatus(error.message, "error");
-        }
-      }
-
-      async function logout() {
-        try {
-          await api("/logout", { method: "POST", body: JSON.stringify({}) });
-        } catch (error) {
-          console.error(error);
-        }
-        showAuth("login");
-        setAuthStatus("로그아웃했어요.", "success");
-      }
-
-      async function createRoom(event) {
-        event.preventDefault();
-        const name = roomNameInput.value.trim();
-        if (!name) {
-          setStatus("채팅방 이름을 입력해 주세요.", "error");
-          roomNameInput.focus();
-          return;
-        }
-
-        try {
-          const room = await api("/rooms", {
-            method: "POST",
-            body: JSON.stringify({
-              name,
-              description: roomDescriptionInput.value.trim(),
-            }),
-          });
-          roomForm.reset();
-          updateRoom(room);
-          await selectRoom(room.id);
-          setStatus("새 채팅방을 만들었어요.", "success");
-        } catch (error) {
-          setStatus(error.message, "error");
-        }
-      }
-
-      async function sendMessage(event) {
-        event.preventDefault();
-        if (!state.activeRoomId) {
-          setStatus("먼저 채팅방을 선택해 주세요.", "error");
-          return;
-        }
-
-        const text = messageInput.value.trim();
-        if (!text) {
-          setStatus("메시지를 입력해 주세요.", "error");
-          messageInput.focus();
-          return;
-        }
-
-        try {
-          await api("/messages", {
-            method: "POST",
-            body: JSON.stringify({
-              roomId: state.activeRoomId,
-              text,
-            }),
-          });
-          messageInput.value = "";
-          messageInput.focus();
-          setStatus("메시지를 보냈어요.", "success");
-        } catch (error) {
-          setStatus(error.message, "error");
         }
       }
 
@@ -1310,15 +2914,14 @@
         try {
           const session = await api("/session", { headers: {} });
           if (session.authenticated) {
-            state.session = session;
+            rememberSession(session);
             await startApp();
           } else {
-            showAuth("login");
-            setAuthStatus("SNS 로그인 또는 기존 계정 로그인을 선택해 주세요.");
+            showAuth();
           }
         } catch (error) {
-          showAuth("login");
-          setAuthStatus("세션 확인에 실패했어요.", "error");
+          showAuth();
+          setAuthStatus("로그인 상태를 확인할 수 없어요. 다시 로그인해 주세요.", "error");
         }
       }
 
@@ -1327,14 +2930,12 @@
         signupPhone.value = normalizePhone(signupPhone.value);
         if (signupPhone.value !== previousPhone) {
           resetPhoneVerification();
-          updatePhoneHelp("개발 환경에서는 인증번호가 화면에 표시됩니다.");
+          phoneHelp.textContent = "개발 환경에서는 인증번호가 화면에 표시됩니다.";
         }
       });
-
       signupCode.addEventListener("input", () => {
         signupCode.value = signupCode.value.replace(/\D/g, "").slice(0, 6);
       });
-
       signupToggle.addEventListener("click", () => setAuthMode("signup"));
       signupClose.addEventListener("click", () => setAuthMode("login"));
       googleLoginButton.addEventListener("click", startGoogleLogin);
@@ -1345,18 +2946,172 @@
       loginForm.addEventListener("submit", submitLogin);
       signupForm.addEventListener("submit", submitSignup);
       logoutButton.addEventListener("click", logout);
-      roomForm.addEventListener("submit", createRoom);
-      messageForm.addEventListener("submit", sendMessage);
-      messageInput.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" && !event.shiftKey) {
+      openLoginButton.addEventListener("click", () => showAuth());
+      closeChatRoomButton.addEventListener("click", closeChatRoom);
+      chatMessageForm.addEventListener("submit", sendChatMessage);
+      chatAttachmentButton.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        if (state.chatAttachmentGuideTimer) {
+          clearTimeout(state.chatAttachmentGuideTimer);
+          state.chatAttachmentGuideTimer = null;
+        }
+        state.chatAttachmentDrag = { active: true, kind: "", startX: event.clientX, startY: event.clientY };
+        chatAttachmentButton.setPointerCapture(event.pointerId);
+        showAttachmentGuide();
+      });
+      chatAttachmentButton.addEventListener("pointermove", (event) => {
+        if (state.chatAttachmentDrag.active) updateAttachmentSwipe(event);
+      });
+      chatAttachmentButton.addEventListener("pointerup", (event) => {
+        if (!state.chatAttachmentDrag.active) return;
+        const kind = state.chatAttachmentDrag.kind;
+        if (chatAttachmentButton.hasPointerCapture(event.pointerId)) chatAttachmentButton.releasePointerCapture(event.pointerId);
+        if (kind) {
+          resetAttachmentSwipe();
+          openAttachmentPicker(kind);
+          return;
+        }
+        state.chatAttachmentDrag.active = false;
+        chatAttachmentButton.classList.remove("swiping");
+        state.chatAttachmentGuideTimer = setTimeout(resetAttachmentSwipe, 1600);
+      });
+      chatAttachmentButton.addEventListener("pointercancel", resetAttachmentSwipe);
+      chatAttachmentButton.addEventListener("click", (event) => event.preventDefault());
+      chatAttachmentRemove.addEventListener("click", clearChatAttachment);
+      chatAttachmentInput.addEventListener("change", () => {
+        const file = chatAttachmentInput.files?.[0];
+        if (!file) return;
+        const supportedTypes = ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"];
+        if (!supportedTypes.includes(file.type)) {
+          clearChatAttachment();
+          setAppStatus("사진 또는 PDF 파일만 보낼 수 있어요.", "error");
+          return;
+        }
+        if (file.size > 8 * 1024 * 1024) {
+          clearChatAttachment();
+          setAppStatus("파일은 8MB 이하만 보낼 수 있어요.", "error");
+          return;
+        }
+        state.chatAttachment = file;
+        state.chatAttachmentTrayOpen = false;
+        renderChatAttachmentTray();
+        renderChatAttachmentPreview();
+      });
+      chatMessageInput.addEventListener("input", () => {
+        if (state.selectedRoomId) state.chatDrafts[state.selectedRoomId] = chatMessageInput.value;
+      });
+      chatMessageInput.addEventListener("compositionend", () => {
+        if (state.selectedRoomId) state.chatDrafts[state.selectedRoomId] = chatMessageInput.value;
+      });
+      shortMessageToggle.addEventListener("click", toggleShortMessages);
+      shortShareSend.addEventListener("click", handleShortShareAction);
+      let shortShareTouch = null;
+      shortShareBar.addEventListener("touchstart", (event) => {
+        const touch = event.touches[0];
+        if (!touch) return;
+        shortShareTouch = { startX: touch.clientX, startY: touch.clientY, scrollLeft: shortShareList.scrollLeft };
+      }, { passive: true });
+      shortShareBar.addEventListener("touchmove", (event) => {
+        if (!shortShareTouch) return;
+        const touch = event.touches[0];
+        if (!touch) return;
+        event.preventDefault();
+        const distanceX = touch.clientX - shortShareTouch.startX;
+        const distanceY = touch.clientY - shortShareTouch.startY;
+        if (Math.abs(distanceX) > Math.abs(distanceY)) {
+          shortShareList.scrollLeft = shortShareTouch.scrollLeft - distanceX;
+        }
+      }, { passive: false });
+      shortShareBar.addEventListener("touchend", () => { shortShareTouch = null; }, { passive: true });
+      shortShareBar.addEventListener("touchcancel", () => { shortShareTouch = null; }, { passive: true });
+      document.addEventListener("visibilitychange", updatePresence);
+      chatsTab.addEventListener("click", () => setActiveList("chats"));
+      friendsTab.addEventListener("click", () => setActiveList("friends"));
+      shortsTab.addEventListener("click", () => setActiveList("shorts"));
+      shortsSoundToggle.addEventListener("click", () => {
+        state.youtube.soundEnabled = !state.youtube.soundEnabled;
+        syncActiveShortAudio();
+      });
+      shortsView.addEventListener("scroll", () => {
+        maybeLoadMoreGuestShorts();
+        syncActiveShortAudio();
+      }, { passive: true });
+      openDirectoryButton.addEventListener("click", openDirectory);
+      closeDirectoryButton.addEventListener("click", closeDirectory);
+      friendCodeAddButton.addEventListener("click", () => addFriend(friendCodeInput.value));
+      friendCodeInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
           event.preventDefault();
-          messageForm.requestSubmit();
+          addFriend(friendCodeInput.value);
+        }
+      });
+      openProfileButton.addEventListener("click", openProfileEditor);
+      closeProfileButton.addEventListener("click", closeProfileEditor);
+      clearProfileButton.addEventListener("click", () => {
+        state.profilePixels = blankProfilePixels();
+        state.lastPixelTapIndex = -1;
+        buildProfileEditor();
+      });
+      profilePaletteSelect.addEventListener("change", () => {
+        state.selectedProfilePalette = profilePaletteSelect.value;
+        const colors = getActiveProfilePalette();
+        if (colors.length) state.selectedProfileColor = colors[0];
+        customProfileColor.value = state.selectedProfileColor;
+        renderProfilePalette();
+      });
+
+      togglePalettePickerButton.addEventListener("click", () => {
+        state.palettePickerOpen = !state.palettePickerOpen;
+        renderPalettePicker();
+      });
+
+      customProfileColor.addEventListener("input", () => {
+        const color = customProfileColor.value.toLowerCase();
+        state.selectedProfileColor = color;
+        renderProfilePalette();
+        addCustomPaletteColor(color);
+      });
+statusEmojiAdd.addEventListener("click", () => {
+  profileStatusEmoji.value = "";
+  profileStatusEmoji.focus({ preventScroll: true });
+});
+statusEmojiPicker.addEventListener("pointerdown", () => {
+  state.statusPickerTouched = true;
+});
+statusEmojiPicker.addEventListener("touchstart", () => {
+  state.statusPickerTouched = true;
+}, { passive: true });
+statusEmojiPicker.addEventListener("scroll", () => {
+  if (!state.statusPickerTouched) return;
+  window.clearTimeout(state.statusPickerTimer);
+  state.statusPickerTimer = window.setTimeout(selectCenteredStatusEmoji, 150);
+}, { passive: true });
+profileStatusEmoji.addEventListener("input", () => {
+        const emoji = normalizeStatusEmoji(profileStatusEmoji.value);
+        profileStatusEmoji.value = emoji;
+        if (emoji) chooseStatusEmoji(emoji);
+      });
+      saveProfileButton.addEventListener("click", saveProfilePixels);
+      window.addEventListener("pointerup", () => { state.profilePainting = false; });
+      directorySheet.addEventListener("click", (event) => {
+        if (event.target === directorySheet) {
+          closeDirectory();
+        }
+      });
+      profileSheet.addEventListener("click", (event) => {
+        if (event.target === profileSheet) {
+          closeProfileEditor();
         }
       });
 
-      consumeAuthQuery();
-      loadProviders();
-      checkSession();
+      if (window.location.protocol === "file:") {
+        showAuth();
+        setAuthStatus("이 파일을 직접 열면 로그인할 수 없어요. http://127.0.0.1:8765/ 주소로 열어 주세요.", "error");
+      } else {
+        consumeAuthQuery();
+        loadProviders();
+        checkSession();
+      }
     </script>
   </body>
 </html>

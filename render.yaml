@@ -3,7 +3,7 @@ services:
     name: codex-talk
     runtime: python
     rootDir: outputs/chat-app
-    plan: starter
+    plan: free
     buildCommand: python -m py_compile server.py
     startCommand: python server.py
     healthCheckPath: /health
@@ -12,9 +12,3 @@ services:
         value: 0.0.0.0
       - key: PORT
         value: 10000
-      - key: DATA_DIR
-        value: /var/data
-    disk:
-      name: chat-state
-      mountPath: /var/data
-      sizeGB: 1
