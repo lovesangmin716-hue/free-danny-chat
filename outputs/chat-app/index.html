@@ -2766,33 +2766,13 @@ function selectCenteredStatusEmoji() {
           setAuthStatus("구글 로그인은 앱 키를 연결한 뒤 사용할 수 있어요.", "error");
           return;
         }
-        try {
-          await renderGoogleButton();
-          googleButtonContainer.querySelector("div")?.click();
-        } catch (error) {
-          setAuthStatus(error.message, "error");
-        }
+        window.location.href = "/auth/google/start";
       }
 
       async function renderGoogleButton() {
-        if (!state.providers.google?.enabled || googleButtonContainer.childElementCount) {
-          return;
-        }
-        await loadGoogleIdentityLibrary();
-        window.google.accounts.id.initialize({
-          client_id: state.providers.google.client_id,
-          auto_select: false,
-          callback: handleGoogleCredential,
-        });
-        window.google.accounts.id.renderButton(googleButtonContainer, {
-          theme: "outline",
-          size: "large",
-          text: "continue_with",
-          shape: "rectangular",
-          width: Math.floor(googleLoginButton.getBoundingClientRect().width || 320),
-        });
-        googleLoginButton.classList.add("hidden");
-        googleButtonContainer.classList.remove("hidden");
+        googleButtonContainer.replaceChildren();
+        googleButtonContainer.classList.add("hidden");
+        googleLoginButton.classList.remove("hidden");
       }
 
       function startKakaoLogin() {
