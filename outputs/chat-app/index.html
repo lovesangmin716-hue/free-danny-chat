@@ -2782,8 +2782,7 @@ function selectCenteredStatusEmoji() {
         window.google.accounts.id.initialize({
           client_id: state.providers.google.client_id,
           auto_select: false,
-          login_uri: `${window.location.origin}/auth/google/callback`,
-          ux_mode: "redirect",
+          callback: handleGoogleCredential,
         });
         window.google.accounts.id.renderButton(googleButtonContainer, {
           theme: "outline",
