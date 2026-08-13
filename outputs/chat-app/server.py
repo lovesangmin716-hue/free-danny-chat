@@ -770,6 +770,7 @@ class StateStore:
 
     def _user_public(self, user: dict) -> dict:
         provider = user.get("auth_provider", "local")
+        profile_pixels = normalize_profile_pixels(user.get("profile_pixels"))
         return {
             "id": user["id"],
             "username": user["username"],
@@ -785,7 +786,7 @@ class StateStore:
                 "demo": "개발용 SNS",
             }.get(provider, provider),
             "created_at": user["created_at"],
-            "profile_pixels": normalize_profile_pixels(user.get("profile_pixels")),
+            "profile_pixels": [] if all(color == "#ffffff" for color in profile_pixels) else profile_pixels,
             "custom_palette": normalize_custom_palette(user.get("custom_palette")),
         }
 
