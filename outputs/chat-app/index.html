@@ -2805,10 +2805,12 @@ function selectCenteredStatusEmoji() {
       }
 
       async function startDemoLogin() {
+        const adminPassword = window.prompt("관리자 비밀번호를 입력하세요.");
+        if (adminPassword === null) return;
         try {
           rememberSession(await api("/auth/demo-login", {
             method: "POST",
-            body: JSON.stringify({ provider: "demo" }),
+            body: JSON.stringify({ provider: "demo", adminPassword }),
           }));
           await startApp();
         } catch (error) {

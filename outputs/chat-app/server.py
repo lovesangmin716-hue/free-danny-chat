@@ -75,6 +75,7 @@ GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "").strip()
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
 SOCIAL_DEMO_LOGIN_ENABLED = os.getenv("SOCIAL_DEMO_LOGIN_ENABLED", "true").lower() != "false"
+SOCIAL_DEMO_ADMIN_PASSWORD = os.getenv("SOCIAL_DEMO_ADMIN_PASSWORD", "").strip()
 SUBSCRIBERS: set[queue.Queue] = set()
 SUBSCRIBERS_LOCK = threading.Lock()
 SHORTS_FEED_LOCK = threading.Lock()
@@ -1248,8 +1249,8 @@ def social_provider_config(google_redirect_uri: str, kakao_redirect_uri: str) ->
         },
         "demo": {
             "name": "개발용 SNS",
-            "enabled": SOCIAL_DEMO_LOGIN_ENABLED,
-            "configured": SOCIAL_DEMO_LOGIN_ENABLED,
+            "enabled": SOCIAL_DEMO_LOGIN_ENABLED and bool(SOCIAL_DEMO_ADMIN_PASSWORD),
+            "configured": bool(SOCIAL_DEMO_ADMIN_PASSWORD),
             "login_url": "/auth/demo-login",
             "mode": "local",
         },
@@ -1793,9 +1794,16 @@ class ChatHandler(BaseHTTPRequestHandler):
         )
 
     def demo_social_login(self) -> None:
-        self.discard_request_body()
-        if not SOCIAL_DEMO_LOGIN_ENABLED:
+        payload = self.read_json_body()
+        if payload is None:
+            return
+        if not SOCIAL_DEMO_LOGIN_ENABLED or not SOCIAL_DEMO_ADMIN_PASSWORD:
             self.send_json({"error": "개발용 SNS 로그인이 비활성화되어 있습니다."}, HTTPStatus.BAD_REQUEST)
+            return
+
+        password = str(payload.get("adminPassword", ""))
+        if not hmac.compare_digest(password, SOCIAL_DEMO_ADMIN_PASSWORD):
+            self.send_json({"error": "Administrator password is incorrect."}, HTTPStatus.FORBIDDEN)
             return
 
         suffix = secrets.token_hex(3)
