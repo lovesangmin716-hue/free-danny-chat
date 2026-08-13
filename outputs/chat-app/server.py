@@ -1477,7 +1477,7 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.google_id_token_login()
             return
         if path == "/auth/google/callback":
-            self.google_id_token_login()
+            self.finish_google_login(query)
             return
         if path == "/profile":
             user = self.require_auth()
