@@ -357,10 +357,7 @@ def fetch_bytes(
 
 
 def supabase_headers(content_type: str | None = None) -> dict[str, str]:
-    headers = {
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-    }
+    headers = {"apikey": SUPABASE_SERVICE_ROLE_KEY}
     if content_type:
         headers["Content-Type"] = content_type
     return headers
