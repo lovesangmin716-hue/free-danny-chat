@@ -552,6 +552,7 @@
       .attachment-guide-sector { fill: #f3f3f3; stroke: var(--light-gray); stroke-width: 1; }
       .attachment-guide-sector.active { fill: var(--black); }
       .attachment-guide-label { color: var(--black); font-size: 12px; font-weight: 700; position: absolute; }
+      label.attachment-guide-label { cursor: pointer; pointer-events: auto; }
       .attachment-guide-label.active { color: var(--white); }
       .attachment-guide-label[data-kind="photo"] { left: 20px; top: 40px; }
       .attachment-guide-label[data-kind="pdf"] { left: 84px; top: 78px; }
@@ -574,6 +575,16 @@
           height: min(844px, calc(100vh - 32px));
           min-height: min(844px, calc(100vh - 32px));
           border: 1px solid var(--black);
+        }
+      }
+
+      @media (max-width: 479px) {
+        .app {
+          left: 50%;
+          margin: 0;
+          position: fixed;
+          top: 0;
+          transform: translateX(-50%);
         }
       }
     </style>
@@ -748,8 +759,8 @@
             <path class="attachment-guide-sector" data-kind="file" d="M 0 240 L 169.8 70.2 A 240 240 0 0 1 221.8 148.2 Z" />
             <path class="attachment-guide-sector" data-kind="camera" d="M 0 240 L 221.8 148.2 A 240 240 0 0 1 240 240 Z" />
           </svg>
-          <span class="attachment-guide-label" data-kind="photo">사진</span>
-          <span class="attachment-guide-label" data-kind="pdf">PDF</span>
+          <label class="attachment-guide-label" data-kind="photo" for="chat-attachment-input">사진</label>
+          <label class="attachment-guide-label" data-kind="pdf" for="chat-attachment-input">PDF</label>
           <span class="attachment-guide-label" data-kind="file">파일</span>
           <span class="attachment-guide-label" data-kind="camera">카메라</span>
         </div>
@@ -1153,12 +1164,11 @@ function selectCenteredStatusEmoji() {
 
       function syncAppViewportHeight() {
         const height = Math.round(window.visualViewport?.height || window.innerHeight);
-        if (height > 0) document.documentElement.style.setProperty("--app-viewport-height", `${height}px`);
+        if (height >= 240) document.documentElement.style.setProperty("--app-viewport-height", `${height}px`);
       }
 
       syncAppViewportHeight();
       window.visualViewport?.addEventListener("resize", syncAppViewportHeight);
-      window.visualViewport?.addEventListener("scroll", syncAppViewportHeight);
       window.addEventListener("orientationchange", () => window.setTimeout(syncAppViewportHeight, 120));
 
       async function api(url, options = {}) {
@@ -3039,9 +3049,13 @@ function selectCenteredStatusEmoji() {
       chatAttachmentGuide.addEventListener("click", (event) => {
         const kind = event.target.closest?.("[data-kind]")?.dataset.kind;
         if (!kind) return;
+        if (kind === "photo" || kind === "pdf") {
+          chatAttachmentInput.accept = kind === "pdf" ? "application/pdf" : "image/*";
+          chatAttachmentInput.value = "";
+          return;
+        }
         event.preventDefault();
-        resetAttachmentSwipe();
-        openAttachmentPicker(kind);
+        setAppStatus("준비 중인 기능이에요.");
       });
       chatAttachmentRemove.addEventListener("click", clearChatAttachment);
       chatAttachmentInput.addEventListener("change", () => {
@@ -3061,6 +3075,7 @@ function selectCenteredStatusEmoji() {
         state.chatAttachment = file;
         state.chatAttachmentType = contentType;
         state.chatAttachmentTrayOpen = false;
+        resetAttachmentSwipe();
         renderChatAttachmentTray();
         renderChatAttachmentPreview();
       });
