@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import gzip
 import hashlib
 import hmac
 import json
@@ -9,10 +10,12 @@ import os
 import queue
 import re
 import secrets
+import shutil
+import sqlite3
 import threading
 import time
 import uuid
-from collections import deque
+from collections import OrderedDict, deque
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -47,17 +50,22 @@ PORT = int(os.getenv("PORT", "8765"))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 INDEX_FILE = BASE_DIR / "index.html"
 ASSETS_DIR = BASE_DIR / "assets"
+INDEX_CONTENT = INDEX_FILE.read_bytes()
+INDEX_GZIP_CONTENT = gzip.compress(INDEX_CONTENT, compresslevel=6)
 DATA_DIR = Path(os.getenv("DATA_DIR", str(BASE_DIR)))
 STATE_FILE = Path(os.getenv("STATE_FILE", str(DATA_DIR / "chat_state.json")))
 UPLOADS_DIR = Path(os.getenv("UPLOADS_DIR", str(DATA_DIR / "uploads")))
 MAX_MESSAGES_PER_ROOM = 200
 MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 MAX_PROFILE_IMAGE_BYTES = 3 * 1024 * 1024
+MAX_PROFILE_THUMBNAIL_BYTES = 256 * 1024
 MAX_JSON_REQUEST_BYTES = 1024 * 1024
 MAX_FORM_REQUEST_BYTES = 64 * 1024
 MAX_SHORTS_SEEN_IDS = 500
 MAX_SSE_QUEUE_SIZE = 64
+MAX_SSE_CONNECTIONS = int(os.getenv("MAX_SSE_CONNECTIONS", "256"))
 SSE_HEARTBEAT_SECONDS = 15
+SESSION_CLEANUP_INTERVAL_SECONDS = 60
 SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 SESSION_REFRESH_THRESHOLD_SECONDS = 24 * 60 * 60
 MAX_SESSIONS = 10_000
@@ -74,7 +82,8 @@ ATTACHMENT_TYPES = {
 PROFILE_PIXEL_SIDE = 32
 PROFILE_PIXEL_COUNT = PROFILE_PIXEL_SIDE * PROFILE_PIXEL_SIDE
 PROFILE_IMAGE_SIDE = 1024
-PROFILE_IMAGE_NAME_PATTERN = re.compile(r"profile_[0-9a-f]{24}\.webp")
+PROFILE_THUMBNAIL_SIDE = 128
+PROFILE_IMAGE_NAME_PATTERN = re.compile(r"profile_[0-9a-f]{24}(?:_thumb)?\.webp")
 PROFILE_PALETTE = ("#ffffff", "#000000", "#777777", "#d9d9d9", "#e53935", "#fb8c00", "#fdd835", "#43a047", "#1e88e5", "#8e24aa", "#6d4c41", "#ec407a")
 SESSION_COOKIE_NAME = "codex_talk_session"
 OAUTH_STATE_COOKIE_NAME = "colorless_oauth_state"
@@ -100,6 +109,7 @@ SUPABASE_UPLOAD_BUCKET = "chat-uploads"
 SUPABASE_ENABLED = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
 SUBSCRIBERS: dict[queue.Queue, str] = {}
 SUBSCRIBERS_LOCK = threading.Lock()
+SSE_CONNECTION_SLOTS = threading.BoundedSemaphore(MAX_SSE_CONNECTIONS)
 SHORTS_FEED_LOCK = threading.Lock()
 APP_NAME = "Colorless"
 AGE_GROUPS = {"10대", "20대", "30대", "40대", "50대 이상"}
@@ -193,9 +203,10 @@ def normalize_profile_image_url(value: object) -> str:
     return f"/uploads/{filename}"
 
 
-def profile_image_filename(user_id: str) -> str:
+def profile_image_filename(user_id: str, thumbnail: bool = False) -> str:
     digest = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:24]
-    return f"profile_{digest}.webp"
+    suffix = "_thumb" if thumbnail else ""
+    return f"profile_{digest}{suffix}.webp"
 
 
 def webp_dimensions(content: bytes) -> tuple[int, int] | None:
@@ -439,6 +450,63 @@ def fetch_bytes(
         raise ConnectionError(str(error.reason)) from error
 
 
+class BoundedTTLCache:
+    def __init__(self, max_entries: int = 256, ttl_seconds: int = 300) -> None:
+        self.max_entries = max_entries
+        self.ttl_seconds = ttl_seconds
+        self.lock = threading.Lock()
+        self.entries: OrderedDict[str, tuple[float, object]] = OrderedDict()
+        self.in_flight: dict[str, threading.Event] = {}
+
+    def get_or_fetch(self, key: str, fetcher) -> object:
+        while True:
+            now = time.monotonic()
+            with self.lock:
+                cached = self.entries.get(key)
+                if cached is not None and cached[0] > now:
+                    self.entries.move_to_end(key)
+                    return cached[1]
+                if cached is not None:
+                    self.entries.pop(key, None)
+
+                waiter = self.in_flight.get(key)
+                if waiter is None:
+                    waiter = threading.Event()
+                    self.in_flight[key] = waiter
+                    is_owner = True
+                else:
+                    is_owner = False
+
+            if is_owner:
+                break
+            if not waiter.wait(20):
+                raise ConnectionError("Cached upstream request timed out")
+
+        try:
+            value = fetcher()
+        except Exception:
+            with self.lock:
+                self.in_flight.pop(key, None)
+                waiter.set()
+            raise
+
+        with self.lock:
+            self.entries[key] = (time.monotonic() + self.ttl_seconds, value)
+            self.entries.move_to_end(key)
+            while len(self.entries) > self.max_entries:
+                self.entries.popitem(last=False)
+            self.in_flight.pop(key, None)
+            waiter.set()
+        return value
+
+
+YOUTUBE_RESPONSE_CACHE = BoundedTTLCache()
+
+
+def fetch_youtube_json(url: str) -> object:
+    return YOUTUBE_RESPONSE_CACHE.get_or_fetch(url, lambda: fetch_json(url))
+
+
 def supabase_headers(content_type: str | None = None) -> dict[str, str]:
     headers = {
         "apikey": SUPABASE_SERVICE_ROLE_KEY,
@@ -465,6 +533,7 @@ class SessionStore:
         self.max_sessions = max_sessions
         self.state_store = state_store
         self.sessions: dict[str, dict] = {}
+        self.cleanup_deadline = 0.0
 
     @staticmethod
     def _token_hash(token: str) -> str:
@@ -481,6 +550,7 @@ class SessionStore:
             oldest = sorted(self.sessions, key=lambda token: self.sessions[token]["created_at"])[:overflow]
             for token in oldest:
                 self.sessions.pop(token, None)
+        self.cleanup_deadline = now + SESSION_CLEANUP_INTERVAL_SECONDS
 
     def create(self, username: str) -> str:
         token = secrets.token_urlsafe(32)
@@ -509,9 +579,11 @@ class SessionStore:
 
         now = time.time()
         with self.lock:
-            self._cleanup_locked(now)
+            if now >= self.cleanup_deadline:
+                self._cleanup_locked(now)
             session = self.sessions.get(token_hash)
-            if session is None:
+            if session is None or session["expires_at"] <= now:
+                self.sessions.pop(token_hash, None)
                 return None
             session["expires_at"] = now + self.ttl_seconds
             return str(session["username"])
@@ -585,15 +657,36 @@ class PresenceStore:
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.sessions: dict[str, dict] = {}
+        self.tokens_by_username: dict[str, set[str]] = {}
+
+    def _remove_token_locked(self, token: str, username: str) -> None:
+        tokens = self.tokens_by_username.get(username)
+        if tokens is None:
+            return
+        tokens.discard(token)
+        if not tokens:
+            self.tokens_by_username.pop(username, None)
 
     def connect(self, token: str | None, username: str) -> bool:
         if not token:
             return False
         with self.lock:
-            entry = self.sessions.setdefault(token, {"username": username, "connections": 0, "active_room_id": "", "emoji": ""})
+            entry = self.sessions.get(token)
+            if entry is None:
+                entry = {"username": username, "connections": 0, "active_room_id": "", "emoji": "", "updated_at": 0.0}
+                self.sessions[token] = entry
+                self.tokens_by_username.setdefault(username, set()).add(token)
+            elif entry["username"] != username:
+                self._remove_token_locked(token, entry["username"])
+                self.tokens_by_username.setdefault(username, set()).add(token)
             entry["username"] = username
-            was_online = any(item["username"] == username and item["connections"] > 0 for item in self.sessions.values())
+            was_online = any(
+                self.sessions[candidate]["connections"] > 0
+                for candidate in self.tokens_by_username.get(username, set())
+                if candidate != token
+            ) or entry["connections"] > 0
             entry["connections"] += 1
+            entry["updated_at"] = time.monotonic()
             return not was_online
 
     def disconnect(self, token: str | None) -> tuple[str, bool]:
@@ -607,35 +700,55 @@ class PresenceStore:
             entry["connections"] = max(0, entry["connections"] - 1)
             if entry["connections"] == 0:
                 self.sessions.pop(token, None)
-            is_online = any(item["username"] == username and item["connections"] > 0 for item in self.sessions.values())
+                self._remove_token_locked(token, username)
+            is_online = any(
+                self.sessions[candidate]["connections"] > 0
+                for candidate in self.tokens_by_username.get(username, set())
+            )
             return username, not is_online
 
     def update(self, token: str | None, username: str, active_room_id: str, emoji: str) -> bool:
         if not token:
             return False
         with self.lock:
-            entry = self.sessions.setdefault(token, {"username": username, "connections": 0, "active_room_id": "", "emoji": ""})
+            entry = self.sessions.get(token)
+            if entry is None:
+                entry = {"username": username, "connections": 0, "active_room_id": "", "emoji": "", "updated_at": 0.0}
+                self.sessions[token] = entry
+                self.tokens_by_username.setdefault(username, set()).add(token)
+            elif entry["username"] != username:
+                self._remove_token_locked(token, entry["username"])
+                self.tokens_by_username.setdefault(username, set()).add(token)
             changed = entry["active_room_id"] != active_room_id or entry["emoji"] != emoji
             entry["username"] = username
             entry["active_room_id"] = active_room_id
             entry["emoji"] = emoji
+            entry["updated_at"] = time.monotonic()
             return changed
 
     def for_user(self, username: str) -> dict:
         with self.lock:
-            entries = [item for item in self.sessions.values() if item["username"] == username and item["connections"] > 0]
+            entries = [
+                self.sessions[token]
+                for token in self.tokens_by_username.get(username, set())
+                if self.sessions[token]["connections"] > 0
+            ]
             active_room_ids = sorted({item["active_room_id"] for item in entries if item["active_room_id"]})
-            emoji = next((item["emoji"] for item in reversed(entries) if item["emoji"]), "")
+            emoji_entries = [item for item in entries if item["emoji"]]
+            emoji = max(emoji_entries, key=lambda item: item["updated_at"])["emoji"] if emoji_entries else ""
             return {"online": bool(entries), "active_room_ids": active_room_ids, "emoji": emoji}
 
     def set_demo_active(self, username: str, emoji: str) -> None:
         with self.lock:
-            self.sessions[f"demo:{username}"] = {
+            token = f"demo:{username}"
+            self.sessions[token] = {
                 "username": username,
                 "connections": 1,
                 "active_room_id": "",
                 "emoji": emoji,
+                "updated_at": time.monotonic(),
             }
+            self.tokens_by_username.setdefault(username, set()).add(token)
 
 
 class OAuthStateStore:
@@ -745,6 +858,7 @@ class PhoneVerificationStore:
 class StateStore:
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.database_path = path.with_suffix(f"{path.suffix}.sqlite3")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
         self._persist_condition = threading.Condition(self.lock)
@@ -753,6 +867,8 @@ class StateStore:
         self._revision = 0
         self._persisted_revision = 0
         self._persist_error: Exception | None = None
+        self._pending_parts: set[str] = set()
+        self._session_cleanup_deadline = 0.0
         self.state = self._load_state()
         self._rebuild_indexes_locked()
         self._persist_thread = threading.Thread(
@@ -807,10 +923,10 @@ class StateStore:
             "last_read_by": {},
         }
 
-    def _write_state(self, state: dict) -> None:
+    def _write_state(self, parts: dict[str, object]) -> None:
         if SUPABASE_ENABLED:
             payload = json.dumps(
-                {"id": SUPABASE_STATE_ID, "state": state},
+                [{"id": part_id, "state": value} for part_id, value in parts.items()],
                 ensure_ascii=False,
                 separators=(",", ":"),
             ).encode("utf-8")
@@ -823,21 +939,108 @@ class StateStore:
                 data=payload,
             )
             return
-        temp_path = self.path.with_suffix(".tmp")
-        temp_path.write_text(
-            json.dumps(state, ensure_ascii=False, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        temp_path.replace(self.path)
+
+        database = sqlite3.connect(self.database_path, timeout=15)
+        try:
+            database.execute("PRAGMA journal_mode=WAL")
+            database.execute("PRAGMA synchronous=NORMAL")
+            database.execute(
+                "CREATE TABLE IF NOT EXISTS state_parts (id TEXT PRIMARY KEY, state_json TEXT NOT NULL)"
+            )
+            with database:
+                database.executemany(
+                    "INSERT INTO state_parts(id, state_json) VALUES(?, ?) "
+                    "ON CONFLICT(id) DO UPDATE SET state_json=excluded.state_json",
+                    [
+                        (part_id, json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+                        for part_id, value in parts.items()
+                    ],
+                )
+        finally:
+            database.close()
+
+    @staticmethod
+    def _state_to_parts(state: dict) -> dict[str, object]:
+        parts: dict[str, object] = {
+            "users": state["users"],
+            "friendships": state["friendships"],
+            "rooms": state["rooms"],
+            "sessions": state["sessions"],
+        }
+        for username, feed in state["shorts_feeds"].items():
+            parts[f"shorts:{username}"] = feed
+        for room_id, messages in state["messages"].items():
+            parts[f"messages:{room_id}"] = messages
+        return parts
+
+    def _state_part_locked(self, part_id: str) -> object:
+        if part_id.startswith("messages:"):
+            return self.state["messages"].get(part_id.removeprefix("messages:"), [])
+        if part_id.startswith("shorts:"):
+            return self.state["shorts_feeds"].get(part_id.removeprefix("shorts:"), {})
+        return self.state[part_id]
+
+    def _register_user_locked(self, user: dict) -> None:
+        self._users_by_username[user["username"]] = user
+        self._users_by_id[user["id"]] = user
+        if user.get("friend_code"):
+            self._users_by_friend_code[user["friend_code"]] = user
+        if user.get("provider_user_id"):
+            self._users_by_social_key[(user.get("auth_provider", "local"), user["provider_user_id"])] = user
+
+    def _register_friendship_locked(self, first_id: str, second_id: str) -> None:
+        pair = tuple(sorted((first_id, second_id)))
+        self._friendship_pairs.add(pair)
+        self._friend_ids_by_user.setdefault(first_id, set()).add(second_id)
+        self._friend_ids_by_user.setdefault(second_id, set()).add(first_id)
+
+    def _register_room_locked(self, room: dict) -> None:
+        self._rooms_by_id[room["id"]] = room
+        participant_ids = room.get("participant_ids", [])
+        for user_id in participant_ids:
+            self._room_ids_by_user.setdefault(user_id, set()).add(room["id"])
+        if room.get("kind") == "direct" and len(participant_ids) == 2:
+            self._direct_rooms_by_pair[tuple(sorted(participant_ids))] = room
 
     def _rebuild_indexes_locked(self) -> None:
         self._users_by_username = {user["username"]: user for user in self.state["users"]}
         self._users_by_id = {user["id"]: user for user in self.state["users"]}
+        self._users_by_friend_code = {
+            user["friend_code"]: user for user in self.state["users"] if user.get("friend_code")
+        }
+        self._users_by_social_key = {
+            (user.get("auth_provider", "local"), user.get("provider_user_id", "")): user
+            for user in self.state["users"]
+            if user.get("provider_user_id")
+        }
         self._rooms_by_id = {room["id"]: room for room in self.state["rooms"]}
+        self._friend_ids_by_user: dict[str, set[str]] = {}
+        self._friendship_pairs: set[tuple[str, str]] = set()
+        for friendship in self.state["friendships"]:
+            user_ids = sorted(friendship.get("user_ids", []))
+            if len(user_ids) != 2:
+                continue
+            first_id, second_id = user_ids
+            self._friendship_pairs.add((first_id, second_id))
+            self._friend_ids_by_user.setdefault(first_id, set()).add(second_id)
+            self._friend_ids_by_user.setdefault(second_id, set()).add(first_id)
+
+        self._room_ids_by_user: dict[str, set[str]] = {}
+        self._direct_rooms_by_pair: dict[tuple[str, str], dict] = {}
+        for room in self.state["rooms"]:
+            participant_ids = room.get("participant_ids", [])
+            for user_id in participant_ids:
+                self._room_ids_by_user.setdefault(user_id, set()).add(room["id"])
+            if room.get("kind") == "direct" and len(participant_ids) == 2:
+                self._direct_rooms_by_pair[tuple(sorted(participant_ids))] = room
         self._profile_images = {
             Path(image_url).name
             for user in self.state["users"]
-            if (image_url := normalize_profile_image_url(user.get("profile_image_url")))
+            for image_url in (
+                normalize_profile_image_url(user.get("profile_image_url")),
+                normalize_profile_image_url(user.get("profile_thumbnail_url")),
+            )
+            if image_url
         }
         self._attachment_rooms: dict[str, set[str]] = {}
         for room_id, messages in self.state["messages"].items():
@@ -862,12 +1065,18 @@ class StateStore:
                         return
                     continue
                 revision = self._revision
-                snapshot = copy.deepcopy(self.state)
+                pending_parts = self._pending_parts
+                self._pending_parts = set()
+                snapshot = {
+                    part_id: copy.deepcopy(self._state_part_locked(part_id))
+                    for part_id in pending_parts
+                }
 
             try:
                 self._write_state(snapshot)
             except Exception as error:
                 with self.lock:
+                    self._pending_parts.update(pending_parts)
                     self._persist_error = error
                     self._persist_condition.notify_all()
                 if self._persist_stop.wait(0.5):
@@ -932,6 +1141,7 @@ class StateStore:
             user["profile_pixels"] = normalize_profile_pixels(user.get("profile_pixels"))
             user["profile_pixels_blank"] = all(color == "#ffffff" for color in user["profile_pixels"])
             user["profile_image_url"] = normalize_profile_image_url(user.get("profile_image_url"))
+            user["profile_thumbnail_url"] = normalize_profile_image_url(user.get("profile_thumbnail_url"))
             profile_image_version = user.get("profile_image_version", 0)
             user["profile_image_version"] = profile_image_version if isinstance(profile_image_version, int) and profile_image_version >= 0 else 0
             user["custom_palette"] = normalize_custom_palette(user.get("custom_palette"))
@@ -1022,40 +1232,88 @@ class StateStore:
 
         return state
 
-    def _load_state(self) -> dict:
+    def _state_from_parts(self, parts: dict[str, object]) -> dict | None:
+        if not {"users", "friendships", "rooms", "sessions"}.issubset(parts):
+            return None
+        state = {
+            "users": parts["users"],
+            "friendships": parts["friendships"],
+            "rooms": parts["rooms"],
+            "messages": {},
+            "shorts_feeds": {},
+            "sessions": parts["sessions"],
+        }
+        for part_id, value in parts.items():
+            if part_id.startswith("messages:"):
+                state["messages"][part_id.removeprefix("messages:")] = value
+            elif part_id.startswith("shorts:"):
+                state["shorts_feeds"][part_id.removeprefix("shorts:")] = value
+        return self._migrate_state(state)
+
+    def _load_persisted_parts(self) -> tuple[dict[str, object], dict | None]:
         if SUPABASE_ENABLED:
             rows = fetch_json(
-                f"{SUPABASE_URL}/rest/v1/{SUPABASE_STATE_TABLE}?id=eq.{SUPABASE_STATE_ID}&select=state",
+                f"{SUPABASE_URL}/rest/v1/{SUPABASE_STATE_TABLE}?select=id,state",
                 headers=supabase_headers(),
             )
-            if isinstance(rows, list) and rows and isinstance(rows[0], dict) and isinstance(rows[0].get("state"), dict):
-                state = self._migrate_state(rows[0]["state"])
-            else:
-                state = self._default_state()
-            self._write_state(state)
-            return state
+            if not isinstance(rows, list):
+                return {}, None
+            parts: dict[str, object] = {}
+            legacy_state = None
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                part_id = row.get("id")
+                value = row.get("state")
+                if part_id == SUPABASE_STATE_ID and isinstance(value, dict):
+                    legacy_state = value
+                elif isinstance(part_id, str):
+                    parts[part_id] = value
+            return parts, legacy_state
 
+        if not self.database_path.exists():
+            return {}, None
+        try:
+            database = sqlite3.connect(self.database_path, timeout=15)
+            try:
+                rows = database.execute("SELECT id, state_json FROM state_parts").fetchall()
+            finally:
+                database.close()
+        except (sqlite3.Error, OSError):
+            return {}, None
+        parts = {}
+        for part_id, state_json in rows:
+            try:
+                parts[str(part_id)] = json.loads(state_json)
+            except (TypeError, json.JSONDecodeError):
+                continue
+        return parts, None
+
+    def _load_legacy_state(self, legacy_state: dict | None) -> dict:
+        if legacy_state is not None:
+            return self._migrate_state(legacy_state)
         if not self.path.exists():
-            state = self._default_state()
-            self._write_state(state)
-            return state
-
+            return self._default_state()
         try:
             state = json.loads(self.path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            state = self._default_state()
-            self._write_state(state)
+            return self._default_state()
+        return self._migrate_state(state) if isinstance(state, dict) else self._default_state()
+
+    def _load_state(self) -> dict:
+        parts, legacy_state = self._load_persisted_parts()
+        state = self._state_from_parts(parts)
+        if state is not None:
             return state
 
-        if not isinstance(state, dict):
-            state = self._default_state()
-        else:
-            state = self._migrate_state(state)
-
-        self._write_state(state)
+        state = self._load_legacy_state(legacy_state)
+        self._write_state(self._state_to_parts(state))
         return state
 
-    def _save_locked(self) -> None:
+    def _save_locked(self, *part_ids: str) -> None:
+        if not part_ids:
+            part_ids = tuple(self._state_to_parts(self.state))
+        self._pending_parts.update(part_ids)
         self._revision += 1
         self._persist_event.set()
 
@@ -1074,46 +1332,51 @@ class StateStore:
             oldest = sorted(sessions, key=lambda token_hash: float(sessions[token_hash].get("created_at", 0)))[:overflow]
             for token_hash in oldest:
                 sessions.pop(token_hash, None)
+        self._session_cleanup_deadline = now + SESSION_CLEANUP_INTERVAL_SECONDS
         return bool(expired or overflow > 0)
 
     def create_session(self, token_hash: str, username: str, ttl_seconds: int, max_sessions: int) -> None:
         now = time.time()
         with self.lock:
-            self._cleanup_sessions_locked(now, max_sessions)
+            changed = self._cleanup_sessions_locked(now, max_sessions) if now >= self._session_cleanup_deadline else False
             self.state["sessions"][token_hash] = {
                 "username": username,
                 "created_at": now,
                 "expires_at": now + ttl_seconds,
             }
-            self._cleanup_sessions_locked(now, max_sessions)
-            self._save_locked()
+            if len(self.state["sessions"]) > max_sessions:
+                changed = self._cleanup_sessions_locked(now, max_sessions) or changed
+            self._save_locked("sessions")
 
     def get_session_username(self, token_hash: str, ttl_seconds: int) -> str | None:
         now = time.time()
         with self.lock:
-            changed = self._cleanup_sessions_locked(now, MAX_SESSIONS)
+            changed = self._cleanup_sessions_locked(now, MAX_SESSIONS) if now >= self._session_cleanup_deadline else False
             session = self.state["sessions"].get(token_hash)
-            if session is None:
+            if session is None or float(session.get("expires_at", 0)) <= now:
+                if session is not None:
+                    self.state["sessions"].pop(token_hash, None)
+                    changed = True
                 if changed:
-                    self._save_locked()
+                    self._save_locked("sessions")
                 return None
             username = str(session.get("username", ""))
             if username not in self._users_by_username:
                 self.state["sessions"].pop(token_hash, None)
-                self._save_locked()
+                self._save_locked("sessions")
                 return None
             refresh_threshold = min(SESSION_REFRESH_THRESHOLD_SECONDS, max(1, ttl_seconds // 2))
             if float(session["expires_at"]) - now <= refresh_threshold:
                 session["expires_at"] = now + ttl_seconds
                 changed = True
             if changed:
-                self._save_locked()
+                self._save_locked("sessions")
             return username
 
     def destroy_session(self, token_hash: str) -> None:
         with self.lock:
             if self.state["sessions"].pop(token_hash, None) is not None:
-                self._save_locked()
+                self._save_locked("sessions")
 
     def get_shorts_feed(self, username: str) -> tuple[list[str], str]:
         with self.lock:
@@ -1127,12 +1390,13 @@ class StateStore:
                 "seen_ids": bounded_seen_ids,
                 "next_cursor": next_cursor[:200],
             }
-            self._save_locked()
+            self._save_locked(f"shorts:{username}")
 
     def _user_public(self, user: dict) -> dict:
         provider = user.get("auth_provider", "local")
         profile_pixels = user.get("profile_pixels", [])
         profile_image_url = normalize_profile_image_url(user.get("profile_image_url"))
+        profile_thumbnail_url = normalize_profile_image_url(user.get("profile_thumbnail_url"))
         profile_image_version = user.get("profile_image_version", 0)
         return {
             "id": user["id"],
@@ -1151,6 +1415,7 @@ class StateStore:
             "created_at": user["created_at"],
             "profile_pixels": [] if user.get("profile_pixels_blank", False) else profile_pixels,
             "profile_image_url": f"{profile_image_url}?v={profile_image_version}" if profile_image_url else "",
+            "profile_thumbnail_url": f"{profile_thumbnail_url}?v={profile_image_version}" if profile_thumbnail_url else "",
             "custom_palette": user.get("custom_palette", []),
         }
 
@@ -1187,19 +1452,22 @@ class StateStore:
             peer = self._users_by_id.get(peer_id)
             if peer is not None:
                 summary["name"] = peer.get("display_name") or peer["username"]
-                summary["peer"] = self._user_public(peer)
+                peer_public = self._user_public(peer)
+                peer_public.pop("profile_pixels", None)
+                peer_public.pop("custom_palette", None)
+                summary["peer"] = peer_public
                 summary["peer"]["presence"] = self._presence_for_user(peer)
         return summary
 
     def get_user_record(self, username: str) -> dict | None:
         with self.lock:
-            return self._users_by_username.get(username)
+            user = self._users_by_username.get(username)
+            return dict(user) if user is not None else None
 
     def get_user_public(self, username: str) -> dict | None:
-        user = self.get_user_record(username)
-        if user is None:
-            return None
-        return self._user_public(user)
+        with self.lock:
+            user = self._users_by_username.get(username)
+            return self._user_public(user) if user is not None else None
 
     def update_profile_pixels(self, username: str, pixels: object) -> dict | None:
         if not valid_profile_pixels(pixels):
@@ -1210,25 +1478,34 @@ class StateStore:
                 return None
             user["profile_pixels"] = normalize_profile_pixels(pixels)
             user["profile_pixels_blank"] = all(color == "#ffffff" for color in user["profile_pixels"])
-            self._save_locked()
+            self._save_locked("users")
             return self._user_public(user)
 
-    def update_profile_image(self, username: str, image_url: str) -> dict | None:
+    def update_profile_image(self, username: str, image_url: str, thumbnail_url: str = "") -> dict | None:
         normalized_url = normalize_profile_image_url(image_url)
+        normalized_thumbnail_url = normalize_profile_image_url(thumbnail_url)
         if image_url and not normalized_url:
+            return None
+        if thumbnail_url and not normalized_thumbnail_url:
             return None
         with self.lock:
             user = self._users_by_username.get(username)
             if user is None:
                 return None
             previous_filename = Path(normalize_profile_image_url(user.get("profile_image_url"))).name
+            previous_thumbnail_filename = Path(normalize_profile_image_url(user.get("profile_thumbnail_url"))).name
             user["profile_image_url"] = normalized_url
+            user["profile_thumbnail_url"] = normalized_thumbnail_url
             user["profile_image_version"] = time.time_ns() if normalized_url else 0
             if previous_filename:
                 self._profile_images.discard(previous_filename)
+            if previous_thumbnail_filename:
+                self._profile_images.discard(previous_thumbnail_filename)
             if normalized_url:
                 self._profile_images.add(Path(normalized_url).name)
-            self._save_locked()
+            if normalized_thumbnail_url:
+                self._profile_images.add(Path(normalized_thumbnail_url).name)
+            self._save_locked("users")
             return self._user_public(user)
 
     def update_profile(self, username: str, display_name: str, status_message: str, friend_code: str, pixels: object) -> tuple[dict | None, str | None]:
@@ -1246,14 +1523,19 @@ class StateStore:
             user = self._users_by_username.get(username)
             if user is None:
                 return None, "사용자를 찾을 수 없습니다."
-            if any(candidate["username"] != username and candidate.get("friend_code") == normalized_friend_code for candidate in self.state["users"]):
+            code_owner = self._users_by_friend_code.get(normalized_friend_code)
+            if code_owner is not None and code_owner["username"] != username:
                 return None, "이미 사용 중인 친구 ID입니다."
+            previous_friend_code = user.get("friend_code", "")
             user["display_name"] = normalized_display_name
             user["status_message"] = normalized_status_message
             user["friend_code"] = normalized_friend_code
             user["profile_pixels"] = normalize_profile_pixels(pixels)
             user["profile_pixels_blank"] = all(color == "#ffffff" for color in user["profile_pixels"])
-            self._save_locked()
+            if previous_friend_code != normalized_friend_code:
+                self._users_by_friend_code.pop(previous_friend_code, None)
+                self._users_by_friend_code[normalized_friend_code] = user
+            self._save_locked("users")
             return self._user_public(user), None
 
     def update_custom_palette(self, username: str, colors: object) -> tuple[dict | None, str | None]:
@@ -1265,19 +1547,12 @@ class StateStore:
             if user is None:
                 return None, "사용자를 찾을 수 없습니다."
             user["custom_palette"] = normalize_custom_palette(colors)
-            self._save_locked()
+            self._save_locked("users")
             return self._user_public(user), None
 
     def find_social_user(self, provider: str, provider_user_id: str) -> dict | None:
         with self.lock:
-            return next(
-                (
-                    item
-                    for item in self.state["users"]
-                    if item.get("auth_provider") == provider and item.get("provider_user_id") == provider_user_id
-                ),
-                None,
-            )
+            return self._users_by_social_key.get((provider, provider_user_id))
 
     def _unique_username_locked(self, seed: str, provider: str, provider_user_id: str) -> str:
         base_seed = sanitize_username_seed(seed) or f"{provider}_{provider_user_id[-6:]}"
@@ -1287,17 +1562,15 @@ class StateStore:
 
         candidate = base
         index = 1
-        existing_names = {user["username"] for user in self.state["users"]}
-        while candidate in existing_names:
+        while candidate in self._users_by_username:
             suffix = f"_{index}"
             candidate = f"{base[: max(2, 24 - len(suffix))]}{suffix}"
             index += 1
         return candidate[:24]
 
     def _new_friend_code_locked(self) -> str:
-        existing_codes = {str(user.get("friend_code", "")) for user in self.state["users"]}
         friend_code = new_friend_code()
-        while friend_code in existing_codes:
+        while friend_code in self._users_by_friend_code:
             friend_code = new_friend_code()
         return friend_code
 
@@ -1305,13 +1578,7 @@ class StateStore:
         return self._users_by_id.get(user_id)
 
     def _friend_ids_locked(self, user_id: str) -> set[str]:
-        friend_ids: set[str] = set()
-        for friendship in self.state["friendships"]:
-            user_ids = friendship.get("user_ids", [])
-            if user_id not in user_ids:
-                continue
-            friend_ids.update(candidate for candidate in user_ids if candidate != user_id)
-        return friend_ids
+        return set(self._friend_ids_by_user.get(user_id, set()))
 
     def _can_access_room_locked(self, room: dict, user: dict) -> bool:
         return bool(room.get("is_public")) or user["id"] in room.get("participant_ids", [])
@@ -1343,11 +1610,11 @@ class StateStore:
             friends = [self._user_public(friend) for friend in raw_friends]
             for friend, raw_friend in zip(friends, raw_friends):
                 friend["presence"] = self._presence_for_user(raw_friend)
-            rooms = [
-                self._room_summary(room, user)
-                for room in self.state["rooms"]
-                if room.get("kind") == "direct" and self._can_access_room_locked(room, user)
-            ]
+            rooms = []
+            for room_id in self._room_ids_by_user.get(user["id"], set()):
+                room = self._rooms_by_id.get(room_id)
+                if room is not None and room.get("kind") == "direct":
+                    rooms.append(self._room_summary(room, user))
         return {
             "app_name": APP_NAME,
             "user": self._user_public(user),
@@ -1394,7 +1661,7 @@ class StateStore:
             if last_read_by.get(user["id"]) == last_message_id:
                 return self._room_summary(room, user), False
             last_read_by[user["id"]] = last_message_id
-            self._save_locked()
+            self._save_locked("rooms")
             return self._room_summary(room, user), True
 
     def room_event_recipients(self, room_id: str) -> set[str]:
@@ -1437,7 +1704,7 @@ class StateStore:
 
     def add_friend(self, username: str, friend_user_id: str) -> tuple[dict | None, str | None]:
         with self.lock:
-            user = next((candidate for candidate in self.state["users"] if candidate["username"] == username), None)
+            user = self._users_by_username.get(username)
             friend = self._user_by_id_locked(friend_user_id)
             if user is None or friend is None:
                 return None, "사용자를 찾을 수 없습니다."
@@ -1445,10 +1712,10 @@ class StateStore:
                 return None, "자기 자신은 친구로 추가할 수 없습니다."
 
             user_ids = sorted([user["id"], friend["id"]])
-            exists = any(sorted(friendship.get("user_ids", [])) == user_ids for friendship in self.state["friendships"])
-            if not exists:
+            if tuple(user_ids) not in self._friendship_pairs:
                 self.state["friendships"].append({"user_ids": user_ids, "created_at": utc_now_iso()})
-                self._save_locked()
+                self._register_friendship_locked(user_ids[0], user_ids[1])
+                self._save_locked("friendships")
             return self._user_public(friend), None
 
     def add_friend_by_code(self, username: str, friend_code: str) -> tuple[dict | None, str | None]:
@@ -1457,23 +1724,23 @@ class StateStore:
             return None, "올바른 친구 ID를 입력해 주세요."
 
         with self.lock:
-            user = next((candidate for candidate in self.state["users"] if candidate["username"] == username), None)
-            friend = next((candidate for candidate in self.state["users"] if candidate.get("friend_code") == normalized_friend_code), None)
+            user = self._users_by_username.get(username)
+            friend = self._users_by_friend_code.get(normalized_friend_code)
             if user is None or friend is None:
                 return None, "해당 친구 ID의 사용자를 찾을 수 없습니다."
             if user["id"] == friend["id"]:
                 return None, "자기 자신은 친구로 추가할 수 없습니다."
 
             user_ids = sorted([user["id"], friend["id"]])
-            exists = any(sorted(friendship.get("user_ids", [])) == user_ids for friendship in self.state["friendships"])
-            if not exists:
+            if tuple(user_ids) not in self._friendship_pairs:
                 self.state["friendships"].append({"user_ids": user_ids, "created_at": utc_now_iso()})
-                self._save_locked()
+                self._register_friendship_locked(user_ids[0], user_ids[1])
+                self._save_locked("friendships")
             return self._user_public(friend), None
 
     def create_or_get_direct_room(self, username: str, friend_user_id: str) -> tuple[dict | None, bool, str | None]:
         with self.lock:
-            user = next((candidate for candidate in self.state["users"] if candidate["username"] == username), None)
+            user = self._users_by_username.get(username)
             friend = self._user_by_id_locked(friend_user_id)
             if user is None or friend is None:
                 return None, False, "사용자를 찾을 수 없습니다."
@@ -1482,14 +1749,7 @@ class StateStore:
             if friend["id"] not in self._friend_ids_locked(user["id"]):
                 return None, False, "먼저 친구로 추가해 주세요."
 
-            room = next(
-                (
-                    candidate
-                    for candidate in self.state["rooms"]
-                    if candidate.get("kind") == "direct" and sorted(candidate.get("participant_ids", [])) == participant_ids
-                ),
-                None,
-            )
+            room = self._direct_rooms_by_pair.get(tuple(participant_ids))
             if room is not None:
                 return self._room_summary(room, user), False, None
 
@@ -1497,9 +1757,9 @@ class StateStore:
             room["kind"] = "direct"
             room["participant_ids"] = participant_ids
             self.state["rooms"].append(room)
-            self._rooms_by_id[room["id"]] = room
+            self._register_room_locked(room)
             self.state["messages"][room["id"]] = []
-            self._save_locked()
+            self._save_locked("rooms", f"messages:{room['id']}")
             return self._room_summary(room, user), True, None
 
     def create_local_user(
@@ -1532,14 +1792,14 @@ class StateStore:
         with self.lock:
             if normalized_username in self._users_by_username:
                 return None, "이미 존재하는 사용자 이름입니다."
-            if any(candidate.get("friend_code") == normalized_friend_code for candidate in self.state["users"]):
+            if normalized_friend_code in self._users_by_friend_code:
                 return None, "이미 사용 중인 친구 ID입니다."
 
         salt_hex, digest = hash_password(password)
         with self.lock:
             if normalized_username in self._users_by_username:
                 return None, "이미 존재하는 사용자 이름입니다."
-            if any(candidate.get("friend_code") == normalized_friend_code for candidate in self.state["users"]):
+            if normalized_friend_code in self._users_by_friend_code:
                 return None, "이미 사용 중인 친구 ID입니다."
             user = {
                 "id": new_id("user"),
@@ -1556,15 +1816,15 @@ class StateStore:
                 "profile_pixels": blank_profile_pixels(),
                 "profile_pixels_blank": True,
                 "profile_image_url": "",
+                "profile_thumbnail_url": "",
                 "profile_image_version": 0,
                 "custom_palette": [],
                 "age_group": age_group,
                 "gender": gender,
             }
             self.state["users"].append(user)
-            self._users_by_username[user["username"]] = user
-            self._users_by_id[user["id"]] = user
-            self._save_locked()
+            self._register_user_locked(user)
+            self._save_locked("users")
             return self._user_public(user), None
 
     def create_or_update_social_user(
@@ -1576,14 +1836,7 @@ class StateStore:
         status_message: str = "",
     ) -> dict:
         with self.lock:
-            user = next(
-                (
-                    item
-                    for item in self.state["users"]
-                    if item.get("auth_provider") == provider and item.get("provider_user_id") == provider_user_id
-                ),
-                None,
-            )
+            user = self._users_by_social_key.get((provider, provider_user_id))
             if user is None:
                 username = self._unique_username_locked(nickname, provider, provider_user_id)
                 user = {
@@ -1601,18 +1854,18 @@ class StateStore:
                 "profile_pixels": blank_profile_pixels(),
                 "profile_pixels_blank": True,
                 "profile_image_url": "",
+                "profile_thumbnail_url": "",
                 "profile_image_version": 0,
                 "custom_palette": [],
                 "age_group": "",
                 "gender": "",
                 }
                 self.state["users"].append(user)
-                self._users_by_username[user["username"]] = user
-                self._users_by_id[user["id"]] = user
+                self._register_user_locked(user)
             else:
                 if status_message:
                     user["status_message"] = status_message[:40]
-            self._save_locked()
+            self._save_locked("users")
             return self._user_public(user)
 
     def authenticate_user(self, username: str, password: str) -> dict | None:
@@ -1639,18 +1892,12 @@ class StateStore:
                 return
 
             changed = False
+            created_room_ids: list[str] = []
             contacts: list[dict] = []
             active_emojis = ["\U0001F600", "\U0001F60E", "\U0001F970", "\U0001F622", "\U0001F620"]
             for index in range(1, 21):
                 provider_user_id = f"demo-contact-{index:02d}"
-                contact = next(
-                    (
-                        item
-                        for item in self.state["users"]
-                        if item.get("auth_provider") == "demo" and item.get("provider_user_id") == provider_user_id
-                    ),
-                    None,
-                )
+                contact = self._users_by_social_key.get(("demo", provider_user_id))
                 if contact is None:
                     contact = {
                         "id": new_id("user"),
@@ -1667,14 +1914,14 @@ class StateStore:
                         "profile_pixels": blank_profile_pixels(),
                         "profile_pixels_blank": True,
                         "profile_image_url": "",
+                        "profile_thumbnail_url": "",
                         "profile_image_version": 0,
                         "custom_palette": [],
                         "age_group": "",
                         "gender": "",
                     }
                     self.state["users"].append(contact)
-                    self._users_by_username[contact["username"]] = contact
-                    self._users_by_id[contact["id"]] = contact
+                    self._register_user_locked(contact)
                     changed = True
                 if index <= len(active_emojis):
                     emoji = active_emojis[index - 1]
@@ -1686,27 +1933,28 @@ class StateStore:
 
             for contact in contacts:
                 user_ids = sorted([user["id"], contact["id"]])
-                if not any(sorted(item.get("user_ids", [])) == user_ids for item in self.state["friendships"]):
+                pair = tuple(user_ids)
+                if pair not in self._friendship_pairs:
                     self.state["friendships"].append({"user_ids": user_ids, "created_at": utc_now_iso()})
+                    self._register_friendship_locked(user_ids[0], user_ids[1])
                     changed = True
-                room = next(
-                    (
-                        item
-                        for item in self.state["rooms"]
-                        if item.get("kind") == "direct" and sorted(item.get("participant_ids", [])) == user_ids
-                    ),
-                    None,
-                )
+                room = self._direct_rooms_by_pair.get(pair)
                 if room is None:
                     room = self._new_room(new_id("room"), contact["username"], "", username)
                     room["kind"] = "direct"
                     room["participant_ids"] = user_ids
                     self.state["rooms"].append(room)
-                    self._rooms_by_id[room["id"]] = room
+                    self._register_room_locked(room)
                     self.state["messages"][room["id"]] = []
+                    created_room_ids.append(room["id"])
                     changed = True
             if changed:
-                self._save_locked()
+                self._save_locked(
+                    "users",
+                    "friendships",
+                    "rooms",
+                    *(f"messages:{room_id}" for room_id in created_room_ids),
+                )
 
     def create_room(self, name: str, description: str, created_by: str) -> dict:
         with self.lock:
@@ -1714,9 +1962,9 @@ class StateStore:
             creator = self._users_by_username.get(created_by)
             room["participant_ids"] = [creator["id"]] if creator else []
             self.state["rooms"].append(room)
-            self._rooms_by_id[room["id"]] = room
+            self._register_room_locked(room)
             self.state["messages"][room["id"]] = []
-            self._save_locked()
+            self._save_locked("rooms", f"messages:{room['id']}")
             return self._room_summary(room)
 
     def add_message(self, room_id: str, username: str, text: str, attachment: dict | None = None) -> tuple[dict, dict] | None:
@@ -1760,7 +2008,7 @@ class StateStore:
                         if not rooms:
                             self._attachment_rooms.pop(removed_filename, None)
             room["updated_at"] = message["timestamp"]
-            self._save_locked()
+            self._save_locked("rooms", f"messages:{room_id}")
             return message, self._room_summary(room)
 
 
@@ -2051,14 +2299,18 @@ class ChatHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def serve_index(self) -> None:
-        content = INDEX_FILE.read_bytes()
+        accepts_gzip = "gzip" in self.headers.get("Accept-Encoding", "").lower()
+        response_content = INDEX_GZIP_CONTENT if accepts_gzip else INDEX_CONTENT
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Content-Length", str(len(response_content)))
+        self.send_header("Vary", "Accept-Encoding")
+        if accepts_gzip:
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("Cache-Control", "no-store, max-age=0")
         self.send_header("Pragma", "no-cache")
         self.end_headers()
-        self.wfile.write(content)
+        self.wfile.write(response_content)
 
     def serve_asset(self, request_path: str) -> None:
         relative_path = unquote(request_path.removeprefix("/assets/"))
@@ -2074,16 +2326,23 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
             return
 
-        content = asset_path.read_bytes()
         content_type = {
             ".ttf": "font/ttf",
             ".otf": "font/otf",
+            ".woff2": "font/woff2",
         }.get(asset_path.suffix.lower(), mimetypes.guess_type(asset_path.name)[0] or "application/octet-stream")
+        content_length = asset_path.stat().st_size
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Content-Length", str(content_length))
+        self.send_header("Cache-Control", "public, max-age=604800, stale-while-revalidate=86400")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
-        self.wfile.write(content)
+        try:
+            with asset_path.open("rb") as asset_file:
+                shutil.copyfileobj(asset_file, self.wfile, length=64 * 1024)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
 
     def serve_upload(self, request_path: str, user: dict) -> None:
         filename = Path(unquote(request_path.removeprefix("/uploads/"))).name
@@ -2102,7 +2361,8 @@ class ChatHandler(BaseHTTPRequestHandler):
                 upload_path.relative_to(UPLOADS_DIR.resolve())
                 if not upload_path.is_file():
                     raise FileNotFoundError(filename)
-                content = upload_path.read_bytes()
+                content = None
+                content_length = upload_path.stat().st_size
         except (ConnectionError, FileNotFoundError, ValueError):
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
             return
@@ -2113,12 +2373,19 @@ class ChatHandler(BaseHTTPRequestHandler):
         )
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(content)))
-        self.send_header("Cache-Control", "private, max-age=86400")
+        self.send_header("Content-Length", str(len(content) if content is not None else content_length))
+        self.send_header("Cache-Control", "private, max-age=31536000, immutable")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Security-Policy", "sandbox")
         self.end_headers()
-        self.wfile.write(content)
+        try:
+            if content is not None:
+                self.wfile.write(content)
+            else:
+                with upload_path.open("rb") as upload_file:
+                    shutil.copyfileobj(upload_file, self.wfile, length=64 * 1024)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
 
     def serve_session(self) -> None:
         user = self.current_user()
@@ -2137,11 +2404,18 @@ class ChatHandler(BaseHTTPRequestHandler):
         self.send_json(messages, HTTPStatus.OK)
 
     def serve_events(self, user: dict) -> None:
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
-        self.end_headers()
+        if not SSE_CONNECTION_SLOTS.acquire(blocking=False):
+            self.send_json({"error": "실시간 연결이 혼잡합니다. 잠시 후 다시 시도해 주세요."}, HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        try:
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            SSE_CONNECTION_SLOTS.release()
+            return
 
         subscriber: queue.Queue = queue.Queue(maxsize=MAX_SSE_QUEUE_SIZE)
         token = self.read_session_token()
@@ -2150,7 +2424,11 @@ class ChatHandler(BaseHTTPRequestHandler):
 
         if PRESENCE.connect(token, user["username"]):
             push_event(
-                {"type": "presence_updated", "username": user["username"]},
+                {
+                    "type": "presence_updated",
+                    "username": user["username"],
+                    "presence": PRESENCE.for_user(user["username"]),
+                },
                 STORE.presence_event_recipients(user["username"]),
             )
 
@@ -2181,9 +2459,10 @@ class ChatHandler(BaseHTTPRequestHandler):
             username, went_offline = PRESENCE.disconnect(token)
             if went_offline:
                 push_event(
-                    {"type": "presence_updated", "username": username},
+                    {"type": "presence_updated", "username": username, "presence": PRESENCE.for_user(username)},
                     STORE.presence_event_recipients(username),
                 )
+            SSE_CONNECTION_SLOTS.release()
 
     def start_google_login(self) -> None:
         if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
@@ -2498,7 +2777,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                 search_params["pageToken"] = cursor
 
             try:
-                search_payload = fetch_json(f"https://www.googleapis.com/youtube/v3/search?{urlencode(search_params)}")
+                search_payload = fetch_youtube_json(f"https://www.googleapis.com/youtube/v3/search?{urlencode(search_params)}")
             except ValueError:
                 if cursor:
                     return [], ""
@@ -2518,7 +2797,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                 "maxResults": "50",
             }
             try:
-                video_payload = fetch_json(f"https://www.googleapis.com/youtube/v3/videos?{urlencode(video_params)}")
+                video_payload = fetch_youtube_json(f"https://www.googleapis.com/youtube/v3/videos?{urlencode(video_params)}")
             except ValueError:
                 if cursor:
                     return [], ""
@@ -2554,7 +2833,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                 popular_params["videoCategoryId"] = category
             if cursor:
                 popular_params["pageToken"] = cursor
-            payload = fetch_json(f"https://www.googleapis.com/youtube/v3/videos?{urlencode(popular_params)}")
+            payload = fetch_youtube_json(f"https://www.googleapis.com/youtube/v3/videos?{urlencode(popular_params)}")
             items = []
             for video in payload.get("items", []):
                 duration = youtube_duration_seconds(str(video.get("contentDetails", {}).get("duration", "")))
@@ -2812,11 +3091,31 @@ class ChatHandler(BaseHTTPRequestHandler):
     def upload_profile_image(self, user: dict) -> None:
         if not self.allow_request(f"profile-image:{user['username']}", 12, 60 * 60):
             return
-        content = self.read_request_body(MAX_PROFILE_IMAGE_BYTES)
+        content = self.read_request_body(MAX_PROFILE_IMAGE_BYTES + MAX_PROFILE_THUMBNAIL_BYTES + 4)
         if content is None:
             return
         content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-        if content_type != "image/webp" or webp_dimensions(content) != (PROFILE_IMAGE_SIDE, PROFILE_IMAGE_SIDE):
+        image_content = content
+        thumbnail_content = b""
+        if content_type == "application/x-colorless-profile-bundle" and len(content) >= 4:
+            image_size = int.from_bytes(content[:4], "big")
+            image_content = content[4:4 + image_size]
+            thumbnail_content = content[4 + image_size:]
+        elif content_type != "image/webp":
+            image_content = b""
+
+        is_valid_image = (
+            0 < len(image_content) <= MAX_PROFILE_IMAGE_BYTES
+            and webp_dimensions(image_content) == (PROFILE_IMAGE_SIDE, PROFILE_IMAGE_SIDE)
+        )
+        is_valid_thumbnail = (
+            not thumbnail_content
+            or (
+                len(thumbnail_content) <= MAX_PROFILE_THUMBNAIL_BYTES
+                and webp_dimensions(thumbnail_content) == (PROFILE_THUMBNAIL_SIDE, PROFILE_THUMBNAIL_SIDE)
+            )
+        )
+        if not is_valid_image or not is_valid_thumbnail:
             self.send_json(
                 {"error": "프로필 사진은 1024×1024 WebP 형식이어야 합니다."},
                 HTTPStatus.BAD_REQUEST,
@@ -2824,6 +3123,7 @@ class ChatHandler(BaseHTTPRequestHandler):
             return
 
         filename = profile_image_filename(user["id"])
+        thumbnail_filename = profile_image_filename(user["id"], thumbnail=True)
         try:
             if SUPABASE_ENABLED:
                 headers = supabase_headers("image/webp")
@@ -2832,8 +3132,15 @@ class ChatHandler(BaseHTTPRequestHandler):
                     supabase_object_url(filename),
                     method="POST",
                     headers=headers,
-                    data=content,
+                    data=image_content,
                 )
+                if thumbnail_content:
+                    fetch_json(
+                        supabase_object_url(thumbnail_filename),
+                        method="POST",
+                        headers=headers,
+                        data=thumbnail_content,
+                    )
             else:
                 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
                 upload_path = (UPLOADS_DIR / filename).resolve()
@@ -2841,15 +3148,29 @@ class ChatHandler(BaseHTTPRequestHandler):
                 temp_path = (UPLOADS_DIR / f".{filename}.{uuid.uuid4().hex}.tmp").resolve()
                 temp_path.relative_to(UPLOADS_DIR.resolve())
                 try:
-                    temp_path.write_bytes(content)
+                    temp_path.write_bytes(image_content)
                     temp_path.replace(upload_path)
                 finally:
                     temp_path.unlink(missing_ok=True)
+                if thumbnail_content:
+                    thumbnail_path = (UPLOADS_DIR / thumbnail_filename).resolve()
+                    thumbnail_path.relative_to(UPLOADS_DIR.resolve())
+                    thumbnail_temp_path = (UPLOADS_DIR / f".{thumbnail_filename}.{uuid.uuid4().hex}.tmp").resolve()
+                    thumbnail_temp_path.relative_to(UPLOADS_DIR.resolve())
+                    try:
+                        thumbnail_temp_path.write_bytes(thumbnail_content)
+                        thumbnail_temp_path.replace(thumbnail_path)
+                    finally:
+                        thumbnail_temp_path.unlink(missing_ok=True)
         except (ConnectionError, OSError, ValueError):
             self.send_json({"error": "프로필 사진을 저장하지 못했어요."}, HTTPStatus.BAD_GATEWAY)
             return
 
-        profile = STORE.update_profile_image(user["username"], f"/uploads/{filename}")
+        profile = STORE.update_profile_image(
+            user["username"],
+            f"/uploads/{filename}",
+            f"/uploads/{thumbnail_filename}" if thumbnail_content else "",
+        )
         if profile is None:
             self.send_json({"error": "사용자를 찾을 수 없습니다."}, HTTPStatus.NOT_FOUND)
             return
@@ -2864,17 +3185,20 @@ class ChatHandler(BaseHTTPRequestHandler):
             return
 
         filename = profile_image_filename(user["id"])
+        thumbnail_filename = profile_image_filename(user["id"], thumbnail=True)
         try:
             if SUPABASE_ENABLED:
-                fetch_bytes(
-                    supabase_object_url(filename),
-                    method="DELETE",
-                    headers=supabase_headers(),
-                )
+                for stored_filename in (filename, thumbnail_filename):
+                    fetch_bytes(
+                        supabase_object_url(stored_filename),
+                        method="DELETE",
+                        headers=supabase_headers(),
+                    )
             else:
-                upload_path = (UPLOADS_DIR / filename).resolve()
-                upload_path.relative_to(UPLOADS_DIR.resolve())
-                upload_path.unlink(missing_ok=True)
+                for stored_filename in (filename, thumbnail_filename):
+                    upload_path = (UPLOADS_DIR / stored_filename).resolve()
+                    upload_path.relative_to(UPLOADS_DIR.resolve())
+                    upload_path.unlink(missing_ok=True)
         except (ConnectionError, OSError, ValueError):
             pass
         self.send_json({"user": profile}, HTTPStatus.OK)
@@ -3070,7 +3394,11 @@ class ChatHandler(BaseHTTPRequestHandler):
         changed = PRESENCE.update(self.read_session_token(), user["username"], active_room_id, emoji)
         if changed:
             push_event(
-                {"type": "presence_updated", "username": user["username"]},
+                {
+                    "type": "presence_updated",
+                    "username": user["username"],
+                    "presence": PRESENCE.for_user(user["username"]),
+                },
                 STORE.presence_event_recipients(user["username"]),
             )
         self.send_json({"presence": PRESENCE.for_user(user["username"])}, HTTPStatus.OK)

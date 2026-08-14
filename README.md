@@ -9,9 +9,9 @@
 - 친구 ID 검색과 친구 추가
 - 1:1 채팅, 읽음 상태, 접속 상태, 실시간 이벤트
 - 이미지 및 PDF 첨부와 채팅 입력창 붙여넣기(이미지 원본은 최대 50MB까지 선택 가능하며 브라우저에서 WebP로 줄인 뒤 8MB 이하만 전송, PDF와 GIF는 최대 8MB)
-- 픽셀 아바타 편집과 프로필 사진 업로드(크기와 위치를 조정해 1024×1024 WebP로 저장)
+- 픽셀 아바타 편집과 프로필 사진 업로드(크기와 위치를 조정해 1024×1024 WebP로 저장하고 목록용 128×128 썸네일 생성)
 - YouTube Data API v3 기반 Shorts 피드와 채팅 공유
-- 로컬 JSON 파일 또는 Supabase를 이용한 상태 저장
+- 로컬 SQLite 또는 Supabase를 이용한 증분 상태 저장
 - Render Blueprint 배포 설정과 `/health` 상태 확인 엔드포인트
 
 ## 빠른 시작
@@ -71,14 +71,15 @@ cp outputs/chat-app/.env.example outputs/chat-app/.env
 | `PORT` | `8765` | 서버 포트 |
 | `PUBLIC_BASE_URL` | 요청 주소에서 계산 | OAuth 콜백에 사용할 공개 기준 URL |
 | `DATA_DIR` | `outputs/chat-app` | 로컬 상태와 업로드 파일을 저장할 디렉터리 |
-| `STATE_FILE` | `<DATA_DIR>/chat_state.json` | 로컬 JSON 상태 파일 경로 |
+| `STATE_FILE` | `<DATA_DIR>/chat_state.json` | 기존 JSON을 가져올 경로이자 SQLite 파일 이름의 기준 경로. 실제 DB는 `<STATE_FILE>.sqlite3`에 생성 |
 | `UPLOADS_DIR` | `<DATA_DIR>/uploads` | 로컬 첨부 파일 디렉터리 |
+| `MAX_SSE_CONNECTIONS` | `256` | 프로세스당 동시 실시간 이벤트 연결 상한 |
 | `SUPABASE_URL` | 미설정 | Supabase 프로젝트 URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | 미설정 | 서버 전용 Supabase service role key |
 
-`SUPABASE_URL`과 `SUPABASE_SERVICE_ROLE_KEY`를 모두 설정하면 JSON 파일 대신 Supabase의 `app_state` 테이블을 사용하고 첨부 파일을 `chat-uploads` 버킷에 저장합니다. 먼저 Supabase SQL Editor에서 [`outputs/chat-app/supabase-schema.sql`](outputs/chat-app/supabase-schema.sql)을 실행하세요.
+`SUPABASE_URL`과 `SUPABASE_SERVICE_ROLE_KEY`를 모두 설정하면 Supabase의 `app_state` 테이블에 사용자, 채팅방, 채팅방별 메시지를 나눠 저장하고 첨부 파일은 `chat-uploads` 버킷에 저장합니다. 기존 테이블에도 분할 상태 키를 허용해야 하므로 최신 [`outputs/chat-app/supabase-schema.sql`](outputs/chat-app/supabase-schema.sql)을 SQL Editor에서 다시 실행하세요.
 
-두 변수가 없으면 상태는 `outputs/chat-app/chat_state.json`, 첨부 파일은 `outputs/chat-app/uploads/`에 저장됩니다. 둘 다 `.gitignore`에 포함되어 있습니다.
+두 변수가 없으면 상태는 `outputs/chat-app/chat_state.json.sqlite3`, 첨부 파일은 `outputs/chat-app/uploads/`에 저장됩니다. 이전 버전의 `chat_state.json`이 있으면 첫 실행 때 SQLite로 가져옵니다. 런타임 상태와 업로드 파일은 `.gitignore`에 포함되어 있습니다.
 
 ### Google 로그인과 YouTube Shorts
 
@@ -173,7 +174,7 @@ Render의 임시 파일 시스템만 사용하면 재배포 때 로컬 JSON 상�
 python -m unittest discover -s tests -v
 ```
 
-테스트는 채팅방별 이벤트 권한, 읽음 상태 중복 알림 방지, 첨부 파일 접근 권한, 세션 만료와 재시작 복원, 요청 제한, 비동기 상태 저장을 확인합니다. 문법 검사와 실행 중인 서버의 상태 확인은 다음 명령을 사용하세요.
+테스트는 채팅방별 이벤트 권한, 읽음 상태 중복 알림 방지, 첨부 파일 접근 권한, 세션 만료와 재시작 복원, 요청 제한, 증분 상태 저장, 접속 상태 인덱스, 외부 API 요청 병합을 확인합니다. 문법 검사와 실행 중인 서버의 상태 확인은 다음 명령을 사용하세요.
 
 ```bash
 python -m py_compile outputs/chat-app/server.py
@@ -186,7 +187,7 @@ curl http://localhost:8765/health
 
 - 휴대폰 인증은 개발용 코드 미리보기만 구현되어 있습니다.
 - CI는 아직 설정되어 있지 않습니다.
-- 로컬 모드는 변경 사항을 묶어 단일 JSON 문서에 저장하므로 다중 인스턴스 운영에는 적합하지 않습니다.
+- 로컬 SQLite 모드는 단일 서버 프로세스용입니다. 여러 인스턴스를 운영하려면 Supabase 같은 공유 저장소가 필요합니다.
 - 세션 토큰 해시는 상태 저장소에 보관됩니다. 실시간 접속 상태만 서버 재시작 시 초기화됩니다.
 - `index.html`과 `server.py`에 기능이 집중되어 있어 규모가 커지면 모듈 분리가 필요합니다.
 

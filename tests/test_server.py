@@ -5,6 +5,7 @@ import os
 import queue
 import shutil
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -83,17 +84,54 @@ class StateStoreTestCase(unittest.TestCase):
 
     def test_profile_image_is_available_to_authenticated_users(self) -> None:
         filename = server.profile_image_filename(self.alice["id"])
-        updated_user = self.store.update_profile_image("alice", f"/uploads/{filename}")
+        thumbnail_filename = server.profile_image_filename(self.alice["id"], thumbnail=True)
+        updated_user = self.store.update_profile_image(
+            "alice",
+            f"/uploads/{filename}",
+            f"/uploads/{thumbnail_filename}",
+        )
 
         self.assertIsNotNone(updated_user)
         assert updated_user is not None
         self.assertTrue(updated_user["profile_image_url"].startswith(f"/uploads/{filename}?v="))
+        self.assertTrue(updated_user["profile_thumbnail_url"].startswith(f"/uploads/{thumbnail_filename}?v="))
         self.assertTrue(self.store.can_access_attachment(filename, "alice"))
+        self.assertTrue(self.store.can_access_attachment(thumbnail_filename, "alice"))
         self.assertTrue(self.store.can_access_attachment(filename, "bob"))
         self.assertTrue(self.store.can_access_attachment(filename, "eve"))
 
         self.store.update_profile_image("alice", "")
         self.assertFalse(self.store.can_access_attachment(filename, "alice"))
+        self.assertFalse(self.store.can_access_attachment(thumbnail_filename, "alice"))
+
+    def test_message_persistence_only_snapshots_affected_parts(self) -> None:
+        self.assertTrue(self.store.flush())
+        written_part_sets = []
+        original_write = self.store._write_state
+
+        def capture_write(parts: dict) -> None:
+            written_part_sets.append(set(parts))
+            original_write(parts)
+
+        self.store._write_state = capture_write
+        self.store.add_message(self.room_id, "alice", "incremental")
+        self.assertTrue(self.store.flush())
+
+        self.assertEqual(written_part_sets, [{"rooms", f"messages:{self.room_id}"}])
+
+    def test_incremental_message_survives_restart(self) -> None:
+        saved = self.store.add_message(self.room_id, "alice", "persisted")
+        self.assertIsNotNone(saved)
+        self.assertTrue(self.store.flush())
+
+        state_path = self.store.path
+        self.assertTrue(self.store.close())
+        self.store = server.StateStore(state_path)
+
+        messages = self.store.get_messages(self.room_id, "bob")
+        self.assertIsNotNone(messages)
+        assert messages is not None
+        self.assertEqual(messages[-1]["text"], "persisted")
 
     def test_shorts_history_is_bounded_and_persisted(self) -> None:
         seen_ids = [f"video-{index}" for index in range(600)]
@@ -175,6 +213,44 @@ class BoundedStoresTestCase(unittest.TestCase):
         allowed, retry_after = limiter.allow("login", 2, 60)
         self.assertFalse(allowed)
         self.assertGreater(retry_after, 0)
+
+    def test_presence_uses_per_user_index(self) -> None:
+        presence = server.PresenceStore()
+        self.assertTrue(presence.connect("alice-1", "alice"))
+        self.assertFalse(presence.connect("alice-2", "alice"))
+        self.assertTrue(presence.connect("bob-1", "bob"))
+        presence.update("alice-1", "alice", "room-1", "😀")
+
+        self.assertEqual(presence.tokens_by_username["alice"], {"alice-1", "alice-2"})
+        self.assertEqual(presence.for_user("alice")["active_room_ids"], ["room-1"])
+        self.assertEqual(presence.for_user("alice")["emoji"], "😀")
+
+    def test_ttl_cache_coalesces_concurrent_fetches(self) -> None:
+        cache = server.BoundedTTLCache(max_entries=2, ttl_seconds=60)
+        fetch_count = 0
+        fetch_lock = threading.Lock()
+        barrier = threading.Barrier(5)
+        results = []
+
+        def fetch() -> dict:
+            nonlocal fetch_count
+            with fetch_lock:
+                fetch_count += 1
+            time.sleep(0.03)
+            return {"ok": True}
+
+        def worker() -> None:
+            barrier.wait()
+            results.append(cache.get_or_fetch("same", fetch))
+
+        threads = [threading.Thread(target=worker) for _ in range(5)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(fetch_count, 1)
+        self.assertEqual(results, [{"ok": True}] * 5)
 
 
 def tearDownModule() -> None:

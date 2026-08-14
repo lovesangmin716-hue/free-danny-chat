@@ -10,28 +10,32 @@
         font-family: "The Jamsil";
         font-style: normal;
         font-weight: 400;
-        src: url("assets/fonts/The%20Jamsil%202%20Light.ttf") format("truetype");
+        font-display: swap;
+        src: url("assets/fonts/The%20Jamsil%202%20Light.woff2") format("woff2");
       }
 
       @font-face {
         font-family: "The Jamsil";
         font-style: normal;
         font-weight: 500;
-        src: url("assets/fonts/The%20Jamsil%203%20Regular.ttf") format("truetype");
+        font-display: swap;
+        src: url("assets/fonts/The%20Jamsil%203%20Regular.woff2") format("woff2");
       }
 
       @font-face {
         font-family: "The Jamsil";
         font-style: normal;
         font-weight: 700;
-        src: url("assets/fonts/The%20Jamsil%204%20Medium.ttf") format("truetype");
+        font-display: swap;
+        src: url("assets/fonts/The%20Jamsil%204%20Medium.woff2") format("woff2");
       }
 
       @font-face {
         font-family: "The Jamsil";
         font-style: normal;
         font-weight: 800;
-        src: url("assets/fonts/The%20Jamsil%205%20Bold.ttf") format("truetype");
+        font-display: swap;
+        src: url("assets/fonts/The%20Jamsil%205%20Bold.woff2") format("woff2");
       }
 
       :root {
@@ -950,6 +954,7 @@
         chatAttachmentGuideTimer: null,
         eventSource: null,
         eventConnected: false,
+        eventEverConnected: false,
         eventReconnectTimer: null,
         sessionCheckTimer: null,
         sessionCheckRetryCount: 0,
@@ -1007,15 +1012,19 @@
       const IMAGE_SOURCE_BYTES_MAX = 50 * 1024 * 1024;
       const IMAGE_OPTIMIZE_BYTES_MIN = 512 * 1024;
       const IMAGE_EDGE_PIXELS_MAX = 2560;
-      const IMAGE_TOTAL_PIXELS_MAX = 64 * 1000 * 1000;
+      const IMAGE_TOTAL_PIXELS_MAX = 32 * 1000 * 1000;
       const IMAGE_WEBP_QUALITY = 0.82;
       const IMAGE_REQUIRED_SAVINGS_RATIO = 0.9;
       const PROFILE_IMAGE_SOURCE_BYTES_MAX = 50 * 1024 * 1024;
       const PROFILE_IMAGE_UPLOAD_BYTES_MAX = 3 * 1024 * 1024;
       const PROFILE_IMAGE_SIDE = 1024;
+      const PROFILE_THUMBNAIL_SIDE = 128;
       const PROFILE_IMAGE_WEBP_QUALITIES = [0.86, 0.74, 0.62];
       const PIXEL_SIDE = 32;
       const PROFILE_PIXEL_COUNT = PIXEL_SIDE * PIXEL_SIDE;
+      const PROFILE_PIXEL_CACHE_MAX = 128;
+      const MAX_SHORTS_FEED_ITEMS = 200;
+      const profilePixelCanvasCache = new Map();
       const DEFAULT_PROFILE_PALETTE = ["#ffffff", "#000000", "#777777", "#d9d9d9", "#e53935", "#fb8c00", "#fdd835", "#43a047", "#1e88e5", "#8e24aa", "#6d4c41", "#ec407a"];
       const PROFILE_PALETTES = [
         ["#ff77b7", "#ffb3d9", "#ffe7f2", "#7cf0ff", "#2a2a3a"],
@@ -1341,6 +1350,7 @@ function selectCenteredStatusEmoji() {
           state.eventSource = null;
         }
         state.eventConnected = false;
+        state.eventEverConnected = false;
         window.clearTimeout(state.eventReconnectTimer);
         state.eventReconnectTimer = null;
         window.clearTimeout(state.sessionCheckTimer);
@@ -1415,7 +1425,19 @@ function selectCenteredStatusEmoji() {
         avatar.width = PIXEL_SIDE;
         avatar.height = PIXEL_SIDE;
         avatar.setAttribute("aria-label", `profile-${value}`);
-        drawProfilePixels(avatar, pixels);
+        const cacheKey = Array.isArray(pixels) ? pixels.join("") : "blank";
+        let cachedCanvas = profilePixelCanvasCache.get(cacheKey);
+        if (!cachedCanvas) {
+          cachedCanvas = document.createElement("canvas");
+          cachedCanvas.width = PIXEL_SIDE;
+          cachedCanvas.height = PIXEL_SIDE;
+          drawProfilePixels(cachedCanvas, pixels);
+          profilePixelCanvasCache.set(cacheKey, cachedCanvas);
+          if (profilePixelCanvasCache.size > PROFILE_PIXEL_CACHE_MAX) {
+            profilePixelCanvasCache.delete(profilePixelCanvasCache.keys().next().value);
+          }
+        }
+        avatar.getContext("2d").drawImage(cachedCanvas, 0, 0);
         return avatar;
       }
 
@@ -1788,13 +1810,28 @@ function selectCenteredStatusEmoji() {
           geometry.drawHeight,
         );
 
+        let imageFile = null;
         for (const quality of PROFILE_IMAGE_WEBP_QUALITIES) {
           const blob = await canvasToWebpBlob(canvas, quality);
           if (blob.type === "image/webp" && blob.size > 0 && blob.size <= PROFILE_IMAGE_UPLOAD_BYTES_MAX) {
-            return new File([blob], "profile.webp", { type: "image/webp", lastModified: Date.now() });
+            imageFile = new File([blob], "profile.webp", { type: "image/webp", lastModified: Date.now() });
+            break;
           }
         }
-        throw new Error("profile-image-too-large");
+        if (!imageFile) throw new Error("profile-image-too-large");
+
+        const thumbnailCanvas = createImageCanvas(PROFILE_THUMBNAIL_SIDE, PROFILE_THUMBNAIL_SIDE);
+        const thumbnailContext = thumbnailCanvas.getContext("2d", { alpha: false });
+        if (!thumbnailContext) throw new Error("image-canvas-unavailable");
+        thumbnailContext.imageSmoothingEnabled = true;
+        thumbnailContext.imageSmoothingQuality = "high";
+        thumbnailContext.drawImage(canvas, 0, 0, PROFILE_THUMBNAIL_SIDE, PROFILE_THUMBNAIL_SIDE);
+        const thumbnailBlob = await canvasToWebpBlob(thumbnailCanvas, 0.8);
+        const thumbnailFile = new File([thumbnailBlob], "profile-thumb.webp", {
+          type: "image/webp",
+          lastModified: Date.now(),
+        });
+        return { imageFile, thumbnailFile };
       }
 
       async function uploadSelectedProfileImage(file) {
@@ -1817,7 +1854,7 @@ function selectCenteredStatusEmoji() {
         setAppStatus("프로필 사진을 불러오는 중이에요.");
         let decodedImage = null;
         try {
-          decodedImage = await decodeAttachmentImage(file);
+          decodedImage = await decodeAttachmentImage(file, 4096);
           const { width, height } = decodedImageSize(decodedImage);
           if (!width || !height || width * height > IMAGE_TOTAL_PIXELS_MAX) {
             throw new Error("image-dimensions-too-large");
@@ -1860,12 +1897,17 @@ function selectCenteredStatusEmoji() {
         setProfileImagePreparing(true);
         setAppStatus("프로필 사진을 1024×1024로 저장하는 중이에요.");
         try {
-          const preparedFile = await createProfileImageFile();
+          const { imageFile, thumbnailFile } = await createProfileImageFile();
           if (state.profileImageSelectionId !== selectionId) return;
+          const sizeHeader = new ArrayBuffer(4);
+          new DataView(sizeHeader).setUint32(0, imageFile.size, false);
+          const profileBundle = new Blob([sizeHeader, imageFile, thumbnailFile], {
+            type: "application/x-colorless-profile-bundle",
+          });
           const data = await api("/profile/image", {
             method: "POST",
-            headers: { "Content-Type": "image/webp" },
-            body: preparedFile,
+            headers: { "Content-Type": profileBundle.type },
+            body: profileBundle,
           });
           if (state.profileImageSelectionId !== selectionId) return;
           state.messenger.user = data.user;
@@ -2057,7 +2099,7 @@ function selectCenteredStatusEmoji() {
           const time = document.createElement("time");
           time.className = "item-time";
           time.textContent = formatTime(room.updated_at);
-          item.append(createAvatar(room.name, room.peer?.profile_pixels, room.peer?.presence, room.peer?.status_message, room.peer?.profile_image_url), copy, time);
+          item.append(createAvatar(room.name, room.peer?.profile_pixels, room.peer?.presence, room.peer?.status_message, room.peer?.profile_thumbnail_url || room.peer?.profile_image_url), copy, time);
           chatList.appendChild(item);
         });
       }
@@ -2182,17 +2224,38 @@ function selectCenteredStatusEmoji() {
         });
       }
 
-      async function decodeAttachmentImage(file) {
+      async function decodeAttachmentImage(file, maxEdge = 0) {
+        let image;
         if (typeof createImageBitmap === "function") {
           try {
-            return await createImageBitmap(file, { imageOrientation: "from-image" });
+            image = await createImageBitmap(file, { imageOrientation: "from-image" });
           } catch {
             try {
-              return await createImageBitmap(file);
+              image = await createImageBitmap(file);
             } catch {}
           }
         }
-        return decodeImageElement(file);
+        if (!image) image = await decodeImageElement(file);
+        const { width, height } = decodedImageSize(image);
+        if (!width || !height || width * height > IMAGE_TOTAL_PIXELS_MAX) {
+          image.close?.();
+          throw new Error("image-dimensions-too-large");
+        }
+        if (!maxEdge || Math.max(width, height) <= maxEdge || typeof createImageBitmap !== "function") {
+          return image;
+        }
+        const scale = maxEdge / Math.max(width, height);
+        try {
+          const resized = await createImageBitmap(image, {
+            resizeWidth: Math.max(1, Math.round(width * scale)),
+            resizeHeight: Math.max(1, Math.round(height * scale)),
+            resizeQuality: "high",
+          });
+          image.close?.();
+          return resized;
+        } catch {
+          return image;
+        }
       }
 
       function createImageCanvas(width, height) {
@@ -2217,7 +2280,7 @@ function selectCenteredStatusEmoji() {
       }
 
       async function optimizeAttachmentImage(file) {
-        const bitmap = await decodeAttachmentImage(file);
+        const bitmap = await decodeAttachmentImage(file, IMAGE_EDGE_PIXELS_MAX);
         try {
           const width = bitmap.width;
           const height = bitmap.height;
@@ -2369,7 +2432,7 @@ function selectCenteredStatusEmoji() {
         renderChatAttachmentPreview();
         const draft = state.chatDrafts[room.id] || "";
         if (chatMessageInput.value !== draft) chatMessageInput.value = draft;
-        chatRoomAvatar.replaceChildren(createAvatar(room.name, room.peer?.profile_pixels, presence, room.peer?.status_message, room.peer?.profile_image_url));
+        chatRoomAvatar.replaceChildren(createAvatar(room.name, room.peer?.profile_pixels, presence, room.peer?.status_message, room.peer?.profile_thumbnail_url || room.peer?.profile_image_url));
         chatRoomName.textContent = room.name; /*
         chatRoomPresence.textContent = isInThisRoom ? "대화방에 접속 중" : (presence?.online ? "활동 중" : "");
 
@@ -2478,8 +2541,10 @@ function selectCenteredStatusEmoji() {
         state.messages = [];
         chatMessageInput.value = state.chatDrafts[roomId] || "";
         renderChatRoom();
-        await updatePresence();
-        await loadChatMessages({ scrollToBottom: true });
+        await Promise.all([
+          updatePresence(),
+          loadChatMessages({ scrollToBottom: true }),
+        ]);
         chatMessageInput.focus({ preventScroll: true });
       }
 
@@ -2538,15 +2603,18 @@ function selectCenteredStatusEmoji() {
               state.messages = state.messages.map((candidate) => candidate.id === pendingId ? message : candidate);
               renderChatRoom();
             }
+          const room = state.messenger.rooms.find((candidate) => candidate.id === roomId);
+          if (room) {
+            room.last_message = message;
+            room.updated_at = message.timestamp;
+            state.messenger.rooms.sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)));
+            if (state.activeList !== "shorts") renderChats();
+          }
           if (state.shortMessageNotice?.roomId === roomId) {
             clearShortMessageNotice();
             if (state.activeList === "shorts") renderShortShareBar();
           }
-          if (state.activeList === "shorts") {
-            loadMessenger(false).then(() => renderShortShareBar()).catch(() => {});
-          } else {
-            loadMessenger(false).catch(() => {});
-          }
+          if (state.activeList === "shorts") renderShortShareBar();
         } catch (error) {
             if (state.selectedRoomId === roomId) {
               state.messages = state.messages.map((candidate) => candidate.id === pendingId
@@ -2561,16 +2629,48 @@ function selectCenteredStatusEmoji() {
         })();
       }
 
+      function mergeRoomPeer(room) {
+        if (!room?.peer?.id) return room;
+        const friend = state.messenger.friends.find((candidate) => candidate.id === room.peer.id);
+        return friend ? { ...room, peer: { ...friend, ...room.peer } } : room;
+      }
+
+      function upsertMessengerRoom(incomingRoom) {
+        if (!incomingRoom?.id) return null;
+        const index = state.messenger.rooms.findIndex((room) => room.id === incomingRoom.id);
+        const existing = index >= 0 ? state.messenger.rooms[index] : {};
+        const room = mergeRoomPeer({ ...existing, ...incomingRoom });
+        if (index >= 0) state.messenger.rooms[index] = room;
+        else state.messenger.rooms.push(room);
+        state.messenger.rooms.sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)));
+        return room;
+      }
+
+      function applyPresenceEvent(payload) {
+        if (!payload.username || !payload.presence) return;
+        state.messenger.friends = state.messenger.friends.map((friend) => (
+          friend.username === payload.username ? { ...friend, presence: payload.presence } : friend
+        ));
+        state.messenger.rooms = state.messenger.rooms.map((room) => (
+          room.peer?.username === payload.username
+            ? { ...room, peer: { ...room.peer, presence: payload.presence } }
+            : room
+        ));
+      }
+
       function connectEvents() {
         if (state.eventSource || !state.session?.user) return;
         const source = new EventSource("/events");
         state.eventSource = source;
         source.onopen = () => {
           if (state.eventSource !== source) return;
+          const isReconnect = state.eventEverConnected;
+          state.eventEverConnected = true;
           state.eventConnected = true;
           stopLiveSync();
+          if (isReconnect) void syncLiveState();
         };
-        source.onmessage = async (event) => {
+        source.onmessage = (event) => {
           let payload;
           try {
             payload = JSON.parse(event.data);
@@ -2585,25 +2685,44 @@ function selectCenteredStatusEmoji() {
           if (payload.type === "message_created") {
             const isIncoming = payload.message?.username !== state.messenger.user?.username;
             if (!isIncoming) return;
-            await loadMessenger(!isShortsView);
-            if (payload.roomId === state.selectedRoomId) await loadChatMessages({ markRead: true });
+            const room = upsertMessengerRoom(payload.room);
+            state.lastSeenRoomMessageIds[payload.roomId] = payload.message?.id || "";
+            if (payload.roomId === state.selectedRoomId && payload.message?.id) {
+              if (!state.messages.some((message) => message.id === payload.message.id)) {
+                state.messages.push(payload.message);
+              }
+              renderChatRoom({ scrollToBottom: true });
+              void api("/rooms/read", {
+                method: "POST",
+                body: JSON.stringify({ roomId: payload.roomId }),
+              }).catch(() => {});
+            } else if (!isShortsView) {
+              renderChats();
+            }
             if (isShortsView) {
-              const room = state.messenger.rooms.find((candidate) => candidate.id === payload.roomId);
               if (!state.shortInlineReply && isIncoming && room) showShortMessageNotice(room, payload.message);
               else if (!state.shortInlineReply) renderShortShareBar();
             }
             return;
           }
-          if (payload.type === "room_read" && payload.username !== state.messenger.user?.username && payload.roomId === state.selectedRoomId) {
-            await loadChatMessages({ markRead: false });
+          if (payload.type === "room_read") {
+            if (payload.username !== state.messenger.user?.username && payload.roomId === state.selectedRoomId) {
+              state.messages = state.messages.map((message) => (
+                message.username === state.messenger.user?.username ? { ...message, read: true } : message
+              ));
+              renderChatRoom();
+            }
             return;
           }
-          await loadMessenger(!isShortsView);
-          if (isShortsView) {
-            if (!state.shortInlineReply) renderShortShareBar();
-          } else {
-            renderChatRoom();
+          if (payload.type === "presence_updated") {
+            applyPresenceEvent(payload);
+            if (isShortsView) renderShortShareBar();
+            else renderMessenger();
+            return;
           }
+          void loadMessenger(!isShortsView).then(() => {
+            if (isShortsView && !state.shortInlineReply) renderShortShareBar();
+          }).catch(() => {});
         };
         source.onerror = () => {
           source.close();
@@ -2659,7 +2778,7 @@ function selectCenteredStatusEmoji() {
           startButton.textContent = "대화 시작";
           startButton.addEventListener("click", () => createDirectRoom(friend.id));
           item.append(createAvatar(getDisplayName(friend), friend.profile_pixels, friend.presence), copy, startButton); */
-          item.append(createAvatar(getDisplayName(friend), friend.profile_pixels, friend.presence, friend.status_message, friend.profile_image_url), copy);
+          item.append(createAvatar(getDisplayName(friend), friend.profile_pixels, friend.presence, friend.status_message, friend.profile_thumbnail_url || friend.profile_image_url), copy);
           friendList.appendChild(item);
         });
       }
@@ -2692,7 +2811,7 @@ function selectCenteredStatusEmoji() {
           addButton.className = "friend-action";
           addButton.textContent = "친구 추가";
           addButton.addEventListener("click", () => addFriend(user.friend_code || user.friendCode || ""));
-          item.append(createAvatar(getDisplayName(user), user.profile_pixels, null, "", user.profile_image_url), copy, addButton);
+          item.append(createAvatar(getDisplayName(user), user.profile_pixels, null, "", user.profile_thumbnail_url || user.profile_image_url), copy, addButton);
           userDirectory.appendChild(item);
         });
       }
@@ -2901,7 +3020,7 @@ function selectCenteredStatusEmoji() {
           person.className = "short-share-person"; /*
           person.title = `${room.name}에게 현재 쇼츠 보내기`;
           */ person.title = `Share to ${room.name}`;
-          person.appendChild(createAvatar(room.name, room.peer?.profile_pixels, room.peer?.presence, room.peer?.status_message, room.peer?.profile_image_url));
+          person.appendChild(createAvatar(room.name, room.peer?.profile_pixels, room.peer?.presence, room.peer?.status_message, room.peer?.profile_thumbnail_url || room.peer?.profile_image_url));
           const name = document.createElement("span");
           name.textContent = room.name;
           person.appendChild(name);
@@ -2984,71 +3103,58 @@ function selectCenteredStatusEmoji() {
         }
       }
 
-      let shortFrameObserver = null;
-
       function shortEmbedSource(videoId, soundEnabled) {
-        return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?autoplay=1&mute=${soundEnabled ? "0" : "1"}&playsinline=1&rel=0`;
+        const origin = encodeURIComponent(window.location.origin);
+        return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?autoplay=1&mute=${soundEnabled ? "0" : "1"}&playsinline=1&rel=0&enablejsapi=1&origin=${origin}`;
       }
 
       function setShortFrameSound(frame, soundEnabled, forceLoad = false) {
-        if (frame.dataset.soundEnabled === String(soundEnabled) && (frame.dataset.src || frame.src)) return;
-        const source = shortEmbedSource(frame.dataset.videoId, soundEnabled);
-        frame.dataset.soundEnabled = String(soundEnabled);
-        if (frame.dataset.src && !forceLoad) {
-          frame.dataset.src = source;
-          return;
+        if (forceLoad && frame.dataset.src) {
+          frame.src = frame.dataset.src;
+          delete frame.dataset.src;
         }
-        frame.src = source;
-        delete frame.dataset.src;
+        if (!frame.src) return;
+        const command = soundEnabled ? "unMute" : "mute";
+        const sendCommand = () => frame.contentWindow?.postMessage(JSON.stringify({
+          event: "command",
+          func: command,
+          args: [],
+        }), "https://www.youtube-nocookie.com");
+        frame.dataset.soundEnabled = String(soundEnabled);
+        sendCommand();
+        frame.addEventListener("load", sendCommand, { once: true });
       }
 
       function syncActiveShortAudio() {
         const cards = Array.from(shortsFeed.querySelectorAll(".short-card:not(.short-empty-card)"));
         if (!cards.length) return;
-        const activeCard = cards.reduce((closest, card) => (
-          Math.abs(card.offsetTop - shortsView.scrollTop) < Math.abs(closest.offsetTop - shortsView.scrollTop)
-            ? card
-            : closest
-        ));
+        const activeIndex = Math.max(0, Math.min(cards.length - 1, Math.round(
+          shortsView.scrollTop / Math.max(shortsView.clientHeight, 1),
+        )));
 
-        cards.forEach((card) => {
+        cards.forEach((card, index) => {
           const frame = card.querySelector("iframe");
           if (!frame) return;
-          const enableSound = state.youtube.soundEnabled && card === activeCard;
-          setShortFrameSound(frame, enableSound, enableSound);
+          const shouldLoad = Math.abs(index - activeIndex) <= 2;
+          if (shouldLoad && frame.dataset.src) {
+            frame.src = frame.dataset.src;
+            delete frame.dataset.src;
+          } else if (!shouldLoad && frame.src) {
+            frame.dataset.src = shortEmbedSource(frame.dataset.videoId, false);
+            frame.removeAttribute("src");
+            frame.dataset.soundEnabled = "false";
+          }
+          if (shouldLoad) {
+            const enableSound = state.youtube.soundEnabled && index === activeIndex;
+            if (frame.dataset.soundEnabled !== String(enableSound)) setShortFrameSound(frame, enableSound);
+          }
         });
         shortsSoundToggle.textContent = state.youtube.soundEnabled ? "🔊" : "🔇";
         shortsSoundToggle.setAttribute("aria-label", state.youtube.soundEnabled ? "쇼츠 소리 끄기" : "쇼츠 소리 켜기");
       }
 
       function loadVisibleShortFrames() {
-        shortFrameObserver?.disconnect();
-
-        const frames = shortsFeed.querySelectorAll("iframe[data-src]");
-        const activate = (frame) => {
-          const source = frame.dataset.src;
-          if (!source) return;
-          frame.src = source;
-          delete frame.dataset.src;
-        };
-
-        if (!("IntersectionObserver" in window)) {
-          frames.forEach(activate);
-          return;
-        }
-
-        shortFrameObserver = new IntersectionObserver((entries) => {
-          entries.forEach((entry) => {
-            if (!entry.isIntersecting) return;
-            activate(entry.target);
-            shortFrameObserver?.unobserve(entry.target);
-          });
-        }, {
-          root: shortsView,
-          rootMargin: "150% 0px",
-        });
-
-        frames.forEach((frame) => shortFrameObserver.observe(frame));
+        syncActiveShortAudio();
       }
 
       function createShortEmptyCard(titleText, copyText, action) {
@@ -3132,8 +3238,9 @@ function selectCenteredStatusEmoji() {
           if (feedVersion !== state.youtube.feedVersion) return;
           const existingIds = new Set(state.youtube.guestVideos.map((video) => video.id));
           const newVideos = (payload.items || []).filter((video) => video?.id && !existingIds.has(video.id));
-          state.youtube.guestVideos.push(...newVideos);
-          state.youtube.guestCursor = payload.next_cursor || "";
+          const remainingCapacity = MAX_SHORTS_FEED_ITEMS - state.youtube.guestVideos.length;
+          state.youtube.guestVideos.push(...newVideos.slice(0, Math.max(0, remainingCapacity)));
+          state.youtube.guestCursor = remainingCapacity > newVideos.length ? (payload.next_cursor || "") : "";
           const retryAfter = Number(payload.retry_after || 0);
           if (!newVideos.length && (state.youtube.guestCursor || retryAfter > 0)) {
             window.setTimeout(() => {
@@ -3153,7 +3260,7 @@ function selectCenteredStatusEmoji() {
       }
 
       function maybeLoadMoreGuestShorts() {
-        if (state.youtube.guestLoading) return;
+        if (state.youtube.guestLoading || state.youtube.guestVideos.length >= MAX_SHORTS_FEED_ITEMS) return;
         const remaining = shortsView.scrollHeight - shortsView.scrollTop - shortsView.clientHeight;
         if (remaining < shortsView.clientHeight * 1.5) {
           loadGuestShorts(!state.youtube.guestCursor);
@@ -3286,7 +3393,12 @@ function selectCenteredStatusEmoji() {
 
       function applyMessengerData(data) {
         const incomingMessages = [];
-        const rooms = data.rooms || [];
+        const friends = data.friends || [];
+        const friendsById = new Map(friends.map((friend) => [friend.id, friend]));
+        const rooms = (data.rooms || []).map((room) => {
+          const friend = room.peer?.id ? friendsById.get(room.peer.id) : null;
+          return friend ? { ...room, peer: { ...friend, ...room.peer } } : room;
+        });
         rooms.forEach((room) => {
           const message = room.last_message;
           if (!message?.id) return;
@@ -3299,7 +3411,7 @@ function selectCenteredStatusEmoji() {
         state.liveSyncInitialized = true;
         state.messenger = {
           user: data.user,
-          friends: data.friends || [],
+          friends,
           discoverableUsers: data.discoverable_users || [],
           rooms,
         };
@@ -3318,8 +3430,10 @@ function selectCenteredStatusEmoji() {
         state.liveSyncBusy = true;
         try {
           const isShortsView = state.activeList === "shorts";
-          const incomingMessages = await loadMessenger(!isShortsView);
-          if (state.selectedRoomId) await loadChatMessages();
+          const [incomingMessages] = await Promise.all([
+            loadMessenger(!isShortsView),
+            state.selectedRoomId ? loadChatMessages() : Promise.resolve(),
+          ]);
           if (isShortsView) {
             const incoming = incomingMessages[0];
             const room = incoming && state.messenger.rooms.find((candidate) => candidate.id === incoming.roomId);

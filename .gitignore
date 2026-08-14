@@ -25,6 +25,9 @@ dist/
 # Colorless runtime data
 outputs/chat-app/chat_state.json
 outputs/chat-app/chat_state.json.tmp
+outputs/chat-app/chat_state.json.sqlite3
+outputs/chat-app/chat_state.json.sqlite3-shm
+outputs/chat-app/chat_state.json.sqlite3-wal
 outputs/chat-app/uploads/
 outputs/chat-app/*.log
 

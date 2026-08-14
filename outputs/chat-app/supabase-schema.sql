@@ -1,8 +1,10 @@
 create table if not exists public.app_state (
-  id text primary key check (id = 'primary'),
+  id text primary key,
   state jsonb not null,
   updated_at timestamptz not null default timezone('utc', now())
 );
+
+alter table public.app_state drop constraint if exists app_state_id_check;
 
 alter table public.app_state enable row level security;
 
