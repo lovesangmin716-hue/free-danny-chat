@@ -2,7 +2,7 @@
 <html lang="ko">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#ffffff" />
     <title>Colorless</title>
     <style>
@@ -211,7 +211,7 @@
 
       .app {
         width: min(100%, 430px);
-        height: var(--app-viewport-height, 100dvh);
+        height: 100svh;
         min-height: 0;
         margin: 0 auto;
         background: var(--white);
@@ -530,7 +530,7 @@
       .chat-room-title { display: grid; gap: 3px; min-width: 0; }
       .chat-room-title strong { font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .chat-presence { color: var(--gray); font-size: 12px; }
-      .chat-message-list { display: flex; flex: 1; flex-direction: column; gap: 9px; min-height: 0; overflow-y: auto; padding: 18px; }
+      .chat-message-list { display: flex; flex: 1; flex-direction: column; gap: 9px; min-height: 0; overflow-y: auto; padding: 18px 18px calc(96px + var(--keyboard-inset, 0px)); }
       .chat-empty { color: var(--gray); margin: auto; text-align: center; }
       .message-row { display: flex; flex-direction: column; gap: 3px; max-width: 82%; }
       .message-row.mine { align-self: flex-end; align-items: flex-end; }
@@ -564,7 +564,7 @@
       .message-meta { color: var(--gray); display: flex; font-size: 11px; gap: 6px; }
       .message-read { color: var(--black); font-weight: 700; }
       .message-unread { color: var(--gray); font-weight: 700; }
-      .chat-message-form { border-top: 1px solid var(--black); display: grid; flex: 0 0 auto; gap: 8px; grid-template-columns: auto minmax(0, 1fr) auto; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); }
+      .chat-message-form { background: var(--white); border-top: 1px solid var(--black); bottom: var(--keyboard-inset, 0px); display: grid; gap: 8px; grid-template-columns: auto minmax(0, 1fr) auto; left: 0; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); position: absolute; right: 0; z-index: 10; }
       .chat-message-form input { min-height: 44px; }
       .chat-message-form button { min-height: 44px; padding-inline: 15px; }
       }
@@ -1162,14 +1162,30 @@ function selectCenteredStatusEmoji() {
         appStatus.className = `app-status${tone === "default" ? "" : ` ${tone}`}`;
       }
 
-      function syncAppViewportHeight() {
-        const height = Math.round(window.visualViewport?.height || window.innerHeight);
-        if (height >= 240) document.documentElement.style.setProperty("--app-viewport-height", `${height}px`);
+      let layoutViewportHeight = Math.max(window.innerHeight, document.documentElement.clientHeight);
+
+      function syncKeyboardInset() {
+        const visualViewport = window.visualViewport;
+        const isTextField = document.activeElement?.matches("input:not([type=file]), textarea");
+        if (!visualViewport || !isTextField || visualViewport.height < 200) {
+          document.documentElement.style.setProperty("--keyboard-inset", "0px");
+          return;
+        }
+        const keyboardInset = Math.max(0, Math.round(layoutViewportHeight - visualViewport.height - visualViewport.offsetTop));
+        const safeInset = keyboardInset > 110
+          ? Math.min(keyboardInset, Math.max(0, layoutViewportHeight - 280))
+          : 0;
+        document.documentElement.style.setProperty("--keyboard-inset", `${safeInset}px`);
       }
 
-      syncAppViewportHeight();
-      window.visualViewport?.addEventListener("resize", syncAppViewportHeight);
-      window.addEventListener("orientationchange", () => window.setTimeout(syncAppViewportHeight, 120));
+      window.visualViewport?.addEventListener("resize", syncKeyboardInset);
+      window.visualViewport?.addEventListener("scroll", syncKeyboardInset);
+      document.addEventListener("focusin", () => window.setTimeout(syncKeyboardInset, 0));
+      document.addEventListener("focusout", () => window.setTimeout(syncKeyboardInset, 120));
+      window.addEventListener("orientationchange", () => window.setTimeout(() => {
+        layoutViewportHeight = Math.max(window.innerHeight, document.documentElement.clientHeight);
+        syncKeyboardInset();
+      }, 180));
 
       async function api(url, options = {}) {
         const response = await fetch(url, {
@@ -1633,6 +1649,12 @@ function selectCenteredStatusEmoji() {
           ? "application/pdf"
           : "image/*";
         chatAttachmentInput.value = "";
+        try {
+          if (typeof chatAttachmentInput.showPicker === "function") {
+            chatAttachmentInput.showPicker();
+            return;
+          }
+        } catch {}
         chatAttachmentInput.click();
       }
 
