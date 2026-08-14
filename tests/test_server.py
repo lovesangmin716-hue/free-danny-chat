@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import queue
+import re
 import shutil
 import tempfile
 import threading
@@ -21,6 +22,40 @@ SPEC = importlib.util.spec_from_file_location("colorless_server", SERVER_PATH)
 assert SPEC is not None and SPEC.loader is not None
 server = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(server)
+
+
+class StaticAppStructureTestCase(unittest.TestCase):
+    def test_feature_scripts_are_loaded_in_dependency_order(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        script_sources = re.findall(r'<script defer src="([^"]+)"></script>', index_html)
+
+        self.assertEqual(
+            [source.split("?", 1)[0] for source in script_sources],
+            [
+                "assets/js/core.js",
+                "assets/js/profile.js",
+                "assets/js/messenger.js",
+                "assets/js/attachments.js",
+                "assets/js/room-settings.js",
+                "assets/js/chat.js",
+                "assets/js/shorts.js",
+                "assets/js/app.js",
+                "assets/js/auth.js",
+                "assets/js/bootstrap.js",
+            ],
+        )
+        self.assertNotIn("<script>", index_html)
+        source_bytes = 0
+        compressed_bytes = 0
+        for source in script_sources:
+            asset_path = server.BASE_DIR / source.split("?", 1)[0]
+            self.assertTrue(asset_path.is_file(), source)
+            self.assertLess(asset_path.stat().st_size, 32 * 1024, source)
+            source_bytes += asset_path.stat().st_size
+            compressed_content = server.ASSET_GZIP_CONTENT.get(asset_path.resolve(), b"")
+            self.assertTrue(compressed_content, source)
+            compressed_bytes += len(compressed_content)
+        self.assertLess(compressed_bytes, source_bytes)
 
 
 class StateStoreTestCase(unittest.TestCase):
@@ -48,6 +83,9 @@ class StateStoreTestCase(unittest.TestCase):
         with server.SUBSCRIBERS_LOCK:
             server.SUBSCRIBERS.clear()
             server.SUBSCRIBERS.update({subscriber: name for name, subscriber in subscribers.items()})
+            server.SUBSCRIBERS_BY_USERNAME.clear()
+            for name, subscriber in subscribers.items():
+                server.SUBSCRIBERS_BY_USERNAME.setdefault(name, set()).add(subscriber)
         try:
             server.push_event({"type": "message_created"}, recipients)
             self.assertEqual(subscribers["alice"].get_nowait()["type"], "message_created")
@@ -57,6 +95,7 @@ class StateStoreTestCase(unittest.TestCase):
         finally:
             with server.SUBSCRIBERS_LOCK:
                 server.SUBSCRIBERS.clear()
+                server.SUBSCRIBERS_BY_USERNAME.clear()
 
     def test_mark_room_read_only_changes_once_per_last_message(self) -> None:
         result = self.store.add_message(self.room_id, "bob", "hello")
@@ -68,6 +107,116 @@ class StateStoreTestCase(unittest.TestCase):
 
         _, changed_again = self.store.mark_room_read(self.room_id, "alice")
         self.assertFalse(changed_again)
+
+    def test_group_room_requires_friends_and_enforces_membership(self) -> None:
+        group, error = self.store.create_group_room(
+            "alice",
+            "Project Team",
+            [self.bob["id"], self.eve["id"]],
+        )
+        self.assertIsNone(group)
+        self.assertIsNotNone(error)
+
+        self.store.add_friend_by_code("alice", self.eve["friend_code"])
+        group, error = self.store.create_group_room(
+            "alice",
+            "Project Team",
+            [self.bob["id"], self.eve["id"]],
+        )
+        self.assertIsNone(error)
+        self.assertIsNotNone(group)
+        assert group is not None
+        self.assertEqual(group["kind"], "group")
+        self.assertEqual(group["participant_count"], 3)
+        self.assertEqual(len(group["participants"]), 3)
+        self.assertEqual(self.store.room_event_recipients(group["id"]), {"alice", "bob", "eve"})
+
+        bob_rooms = self.store.get_messenger_bootstrap(self.bob)["rooms"]
+        self.assertIn(group["id"], {room["id"] for room in bob_rooms})
+        self.store.add_message(group["id"], "eve", "hello group")
+        self.assertEqual((self.store.get_messages(group["id"], "bob") or [])[-1]["text"], "hello group")
+
+        outsider = self.store.create_or_update_social_user("demo", "mallory-id", nickname="mallory")
+        self.assertIsNone(self.store.get_messages(group["id"], outsider["username"]))
+
+    def test_group_message_is_read_after_every_other_member_reads(self) -> None:
+        self.store.add_friend_by_code("alice", self.eve["friend_code"])
+        group, error = self.store.create_group_room(
+            "alice",
+            "Read Team",
+            [self.bob["id"], self.eve["id"]],
+        )
+        self.assertIsNone(error)
+        assert group is not None
+        self.store.add_message(group["id"], "alice", "check read state")
+
+        self.store.mark_room_read(group["id"], "bob")
+        alice_messages = self.store.get_messages(group["id"], "alice") or []
+        self.assertFalse(alice_messages[-1]["read"])
+
+        self.store.mark_room_read(group["id"], "eve")
+        alice_messages = self.store.get_messages(group["id"], "alice") or []
+        self.assertTrue(alice_messages[-1]["read"])
+
+    def test_group_settings_and_leave_revoke_access_and_transfer_owner(self) -> None:
+        self.store.add_friend_by_code("alice", self.eve["friend_code"])
+        group, error = self.store.create_group_room(
+            "alice",
+            "Original Team",
+            [self.bob["id"], self.eve["id"]],
+        )
+        self.assertIsNone(error)
+        assert group is not None
+        room_id = group["id"]
+
+        self.assertEqual(self.store.group_room_access("alice", room_id), "owner")
+        self.assertEqual(self.store.group_room_access("bob", room_id), "member")
+        updated, error = self.store.update_group_room_name("bob", room_id, "Not Allowed")
+        self.assertIsNone(updated)
+        self.assertEqual(error, "forbidden")
+
+        updated, error = self.store.update_group_room_name("alice", room_id, "Renamed Team")
+        self.assertIsNone(error)
+        assert updated is not None
+        self.assertEqual(updated["name"], "Renamed Team")
+
+        image_filename = server.room_image_filename(room_id)
+        thumbnail_filename = server.room_image_filename(room_id, thumbnail=True)
+        updated, error = self.store.update_group_room_image(
+            "alice",
+            room_id,
+            f"/uploads/{image_filename}",
+            f"/uploads/{thumbnail_filename}",
+        )
+        self.assertIsNone(error)
+        assert updated is not None
+        self.assertTrue(updated["image_url"].startswith(f"/uploads/{image_filename}?v="))
+        self.assertTrue(self.store.can_access_attachment(image_filename, "bob"))
+
+        attachment = {
+            "url": "/uploads/upload_group_test.pdf",
+            "name": "group-test.pdf",
+            "type": "application/pdf",
+            "size": 5,
+        }
+        self.store.add_message(room_id, "alice", "private", attachment)
+        room_after_leave, recipients, error = self.store.leave_group_room("alice", room_id)
+        self.assertIsNone(error)
+        self.assertEqual(recipients, {"alice", "bob", "eve"})
+        assert room_after_leave is not None
+        self.assertEqual(room_after_leave["created_by"], "bob")
+        self.assertEqual(room_after_leave["participant_count"], 2)
+        self.assertIsNone(self.store.get_messages(room_id, "alice"))
+        self.assertFalse(self.store.can_access_attachment(image_filename, "alice"))
+        self.assertFalse(self.store.can_access_attachment("upload_group_test.pdf", "alice"))
+        self.assertEqual(self.store.room_event_recipients(room_id), {"bob", "eve"})
+        self.assertEqual(self.store.group_room_access("bob", room_id), "owner")
+
+        direct_room, recipients, error = self.store.leave_group_room("bob", self.room_id)
+        self.assertIsNone(direct_room)
+        self.assertEqual(recipients, set())
+        self.assertEqual(error, "not_found")
+        self.assertIsNotNone(self.store.get_messages(self.room_id, "bob"))
 
     def test_attachment_access_follows_room_membership(self) -> None:
         attachment = {
@@ -132,6 +281,74 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertIsNotNone(messages)
         assert messages is not None
         self.assertEqual(messages[-1]["text"], "persisted")
+
+    def test_client_message_id_is_idempotent(self) -> None:
+        client_message_id = "message_retry_key_1234"
+        first = self.store.add_message(
+            self.room_id,
+            "alice",
+            "only once",
+            client_message_id=client_message_id,
+        )
+        second = self.store.add_message(
+            self.room_id,
+            "alice",
+            "only once",
+            client_message_id=client_message_id,
+        )
+
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        assert first is not None and second is not None
+        self.assertTrue(first[2])
+        self.assertFalse(second[2])
+        self.assertEqual(first[0]["id"], second[0]["id"])
+        self.assertEqual(len(self.store.get_messages(self.room_id, "alice") or []), 1)
+
+        self.assertTrue(self.store.flush())
+        state_path = self.store.path
+        self.assertTrue(self.store.close())
+        self.store = server.StateStore(state_path)
+        after_restart = self.store.add_message(
+            self.room_id,
+            "alice",
+            "only once",
+            client_message_id=client_message_id,
+        )
+        self.assertIsNotNone(after_restart)
+        assert after_restart is not None
+        self.assertFalse(after_restart[2])
+
+        with self.assertRaises(ValueError):
+            self.store.add_message(
+                self.room_id,
+                "alice",
+                "different content",
+                client_message_id=client_message_id,
+            )
+
+    def test_message_pages_are_bounded_and_cursor_based(self) -> None:
+        for index in range(45):
+            self.store.add_message(self.room_id, "alice", f"message-{index}")
+
+        latest = self.store.get_messages_page(self.room_id, "bob", limit=30)
+        self.assertIsNotNone(latest)
+        assert latest is not None
+        self.assertEqual(len(latest["items"]), 30)
+        self.assertEqual(latest["items"][0]["text"], "message-15")
+        self.assertTrue(latest["next_cursor"])
+
+        older = self.store.get_messages_page(
+            self.room_id,
+            "bob",
+            limit=30,
+            before=latest["next_cursor"],
+        )
+        self.assertIsNotNone(older)
+        assert older is not None
+        self.assertEqual(len(older["items"]), 15)
+        self.assertEqual(older["items"][0]["text"], "message-0")
+        self.assertEqual(older["next_cursor"], "")
 
     def test_shorts_history_is_bounded_and_persisted(self) -> None:
         seen_ids = [f"video-{index}" for index in range(600)]
@@ -251,6 +468,11 @@ class BoundedStoresTestCase(unittest.TestCase):
 
         self.assertEqual(fetch_count, 1)
         self.assertEqual(results, [{"ok": True}] * 5)
+
+    def test_expired_upload_grant_cannot_be_consumed(self) -> None:
+        grants = server.UploadGrantStore(ttl_seconds=-1)
+        grants.create("upload_test.pdf", "alice")
+        self.assertFalse(grants.consume("upload_test.pdf", "alice"))
 
 
 def tearDownModule() -> None:

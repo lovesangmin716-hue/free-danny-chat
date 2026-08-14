@@ -52,10 +52,20 @@ INDEX_FILE = BASE_DIR / "index.html"
 ASSETS_DIR = BASE_DIR / "assets"
 INDEX_CONTENT = INDEX_FILE.read_bytes()
 INDEX_GZIP_CONTENT = gzip.compress(INDEX_CONTENT, compresslevel=6)
+COMPRESSIBLE_ASSET_SUFFIXES = {".css", ".js", ".json", ".svg"}
+ASSET_GZIP_CONTENT = {
+    asset_path.resolve(): gzip.compress(asset_path.read_bytes(), compresslevel=6)
+    for asset_path in ASSETS_DIR.rglob("*")
+    if asset_path.is_file() and asset_path.suffix.lower() in COMPRESSIBLE_ASSET_SUFFIXES
+}
 DATA_DIR = Path(os.getenv("DATA_DIR", str(BASE_DIR)))
 STATE_FILE = Path(os.getenv("STATE_FILE", str(DATA_DIR / "chat_state.json")))
 UPLOADS_DIR = Path(os.getenv("UPLOADS_DIR", str(DATA_DIR / "uploads")))
 MAX_MESSAGES_PER_ROOM = 200
+DEFAULT_MESSAGES_PAGE_SIZE = 30
+MAX_MESSAGES_PAGE_SIZE = 50
+MIN_GROUP_PARTICIPANTS = 3
+MAX_GROUP_PARTICIPANTS = 50
 MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 MAX_PROFILE_IMAGE_BYTES = 3 * 1024 * 1024
 MAX_PROFILE_THUMBNAIL_BYTES = 256 * 1024
@@ -84,6 +94,12 @@ PROFILE_PIXEL_COUNT = PROFILE_PIXEL_SIDE * PROFILE_PIXEL_SIDE
 PROFILE_IMAGE_SIDE = 1024
 PROFILE_THUMBNAIL_SIDE = 128
 PROFILE_IMAGE_NAME_PATTERN = re.compile(r"profile_[0-9a-f]{24}(?:_thumb)?\.webp")
+ROOM_IMAGE_NAME_PATTERN = re.compile(r"room_[0-9a-f]{24}(?:_thumb)?\.webp")
+ROOM_ID_PATTERN = re.compile(r"room_[0-9a-f]{8}")
+MESSAGE_ID_PATTERN = re.compile(r"msg_[0-9a-f]{8}")
+USER_ID_PATTERN = re.compile(r"user_[0-9a-f]{8}")
+CLIENT_MESSAGE_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{16,64}")
+UPLOAD_NAME_PATTERN = re.compile(r"upload_[0-9a-f]{32}\.(?:jpg|png|gif|webp|heic|heif|avif|pdf)")
 PROFILE_PALETTE = ("#ffffff", "#000000", "#777777", "#d9d9d9", "#e53935", "#fb8c00", "#fdd835", "#43a047", "#1e88e5", "#8e24aa", "#6d4c41", "#ec407a")
 SESSION_COOKIE_NAME = "codex_talk_session"
 OAUTH_STATE_COOKIE_NAME = "colorless_oauth_state"
@@ -108,6 +124,7 @@ SUPABASE_STATE_ID = "primary"
 SUPABASE_UPLOAD_BUCKET = "chat-uploads"
 SUPABASE_ENABLED = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
 SUBSCRIBERS: dict[queue.Queue, str] = {}
+SUBSCRIBERS_BY_USERNAME: dict[str, set[queue.Queue]] = {}
 SUBSCRIBERS_LOCK = threading.Lock()
 SSE_CONNECTION_SLOTS = threading.BoundedSemaphore(MAX_SSE_CONNECTIONS)
 SHORTS_FEED_LOCK = threading.Lock()
@@ -207,6 +224,22 @@ def profile_image_filename(user_id: str, thumbnail: bool = False) -> str:
     digest = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:24]
     suffix = "_thumb" if thumbnail else ""
     return f"profile_{digest}{suffix}.webp"
+
+
+def normalize_room_image_url(value: object) -> str:
+    url = str(value or "").strip()
+    if not url.startswith("/uploads/"):
+        return ""
+    filename = Path(unquote(url.removeprefix("/uploads/"))).name
+    if not ROOM_IMAGE_NAME_PATTERN.fullmatch(filename):
+        return ""
+    return f"/uploads/{filename}"
+
+
+def room_image_filename(room_id: str, thumbnail: bool = False) -> str:
+    digest = hashlib.sha256(room_id.encode("utf-8")).hexdigest()[:24]
+    suffix = "_thumb" if thumbnail else ""
+    return f"room_{digest}{suffix}.webp"
 
 
 def webp_dimensions(content: bytes) -> tuple[int, int] | None:
@@ -624,7 +657,9 @@ class UploadGrantStore:
             return grant is not None and hmac.compare_digest(grant[0], username)
 
     def consume(self, filename: str, username: str) -> bool:
+        now = time.monotonic()
         with self.lock:
+            self._cleanup_locked(now)
             grant = self.grants.get(filename)
             if grant is None or not hmac.compare_digest(grant[0], username):
                 return False
@@ -914,6 +949,9 @@ class StateStore:
             "id": room_id,
             "name": name,
             "description": description,
+            "image_url": "",
+            "image_thumbnail_url": "",
+            "image_version": 0,
             "created_by": created_by,
             "created_at": timestamp,
             "updated_at": timestamp,
@@ -1042,9 +1080,23 @@ class StateStore:
             )
             if image_url
         }
+        self._room_images = {
+            Path(image_url).name: room["id"]
+            for room in self.state["rooms"]
+            for image_url in (
+                normalize_room_image_url(room.get("image_url")),
+                normalize_room_image_url(room.get("image_thumbnail_url")),
+            )
+            if image_url
+        }
         self._attachment_rooms: dict[str, set[str]] = {}
+        self._messages_by_client_id: dict[tuple[str, str, str], dict] = {}
         for room_id, messages in self.state["messages"].items():
             for message in messages:
+                client_message_id = str(message.get("client_message_id", ""))
+                message_username = str(message.get("username", ""))
+                if CLIENT_MESSAGE_ID_PATTERN.fullmatch(client_message_id) and message_username:
+                    self._messages_by_client_id[(room_id, message_username, client_message_id)] = message
                 attachment = message.get("attachment")
                 if not isinstance(attachment, dict):
                     continue
@@ -1169,6 +1221,10 @@ class StateStore:
         users_by_name = {user["username"]: user for user in state["users"]}
         for room in state["rooms"]:
             room.setdefault("description", "")
+            room["image_url"] = normalize_room_image_url(room.get("image_url"))
+            room["image_thumbnail_url"] = normalize_room_image_url(room.get("image_thumbnail_url"))
+            image_version = room.get("image_version", 0)
+            room["image_version"] = image_version if isinstance(image_version, int) and image_version >= 0 else 0
             room.setdefault("created_by", "system")
             room.setdefault("created_at", utc_now_iso())
             room.setdefault("updated_at", room["created_at"])
@@ -1179,9 +1235,19 @@ class StateStore:
                 room["last_read_by"] = {}
             if not isinstance(room.get("participant_ids"), list):
                 room["participant_ids"] = []
-            if not room["participant_ids"] and not room["is_public"]:
+            room["participant_ids"] = list(dict.fromkeys(
+                user_id
+                for user_id in room["participant_ids"]
+                if isinstance(user_id, str) and user_id in user_ids
+            ))[:MAX_GROUP_PARTICIPANTS]
+            if not room["participant_ids"] and not room["is_public"] and not room.get("archived_at"):
                 creator = users_by_name.get(room["created_by"])
                 room["participant_ids"] = [creator["id"]] if creator else []
+            room["last_read_by"] = {
+                user_id: message_id
+                for user_id, message_id in room["last_read_by"].items()
+                if user_id in room["participant_ids"] and isinstance(message_id, str)
+            }
             state["messages"].setdefault(room["id"], [])
             default_room = defaults_by_id.get(room.get("id"))
             if default_room and room.get("created_by") == "system":
@@ -1196,6 +1262,14 @@ class StateStore:
         for room_id, messages in list(state["messages"].items()):
             if not isinstance(messages, list):
                 state["messages"][room_id] = []
+                continue
+            state["messages"][room_id] = [
+                message for message in messages if isinstance(message, dict)
+            ][-MAX_MESSAGES_PER_ROOM:]
+            for message in state["messages"][room_id]:
+                client_message_id = str(message.get("client_message_id", ""))
+                if client_message_id and not CLIENT_MESSAGE_ID_PATTERN.fullmatch(client_message_id):
+                    message.pop("client_message_id", None)
 
         valid_usernames = {user["username"] for user in state["users"]}
         now = time.time()
@@ -1428,6 +1502,9 @@ class StateStore:
 
     def _room_summary(self, room: dict, viewer: dict | None = None) -> dict:
         messages = self.state["messages"].get(room["id"], [])
+        image_url = normalize_room_image_url(room.get("image_url"))
+        image_thumbnail_url = normalize_room_image_url(room.get("image_thumbnail_url"))
+        image_version = room.get("image_version", 0)
         participant_count = len(room.get("participant_ids", []))
         if not participant_count:
             participants = {message["username"] for message in messages if message.get("username")}
@@ -1439,6 +1516,8 @@ class StateStore:
             "id": room["id"],
             "name": room["name"],
             "description": room["description"],
+            "image_url": f"{image_url}?v={image_version}" if image_url else "",
+            "image_thumbnail_url": f"{image_thumbnail_url}?v={image_version}" if image_thumbnail_url else "",
             "created_by": room["created_by"],
             "created_at": room["created_at"],
             "updated_at": room["updated_at"],
@@ -1457,6 +1536,17 @@ class StateStore:
                 peer_public.pop("custom_palette", None)
                 summary["peer"] = peer_public
                 summary["peer"]["presence"] = self._presence_for_user(peer)
+        elif room.get("kind") == "group" and viewer is not None:
+            summary["participants"] = [
+                {
+                    "id": participant["id"],
+                    "username": participant["username"],
+                    "display_name": participant.get("display_name") or participant["username"],
+                    "profile_thumbnail_url": self._user_public(participant)["profile_thumbnail_url"],
+                }
+                for user_id in room.get("participant_ids", [])
+                if (participant := self._users_by_id.get(user_id)) is not None
+            ]
         return summary
 
     def get_user_record(self, username: str) -> dict | None:
@@ -1613,7 +1703,7 @@ class StateStore:
             rooms = []
             for room_id in self._room_ids_by_user.get(user["id"], set()):
                 room = self._rooms_by_id.get(room_id)
-                if room is not None and room.get("kind") == "direct":
+                if room is not None and room.get("kind") in {"direct", "group"}:
                     rooms.append(self._room_summary(room, user))
         return {
             "app_name": APP_NAME,
@@ -1623,6 +1713,56 @@ class StateStore:
             "rooms": sorted(rooms, key=lambda room: room["updated_at"], reverse=True),
         }
 
+    def _messages_with_read_state_locked(
+        self,
+        room: dict,
+        user: dict,
+        messages: list[dict],
+    ) -> list[dict]:
+        reader_ids: list[str] = []
+        if room.get("kind") == "direct":
+            reader_id = next(
+                (user_id for user_id in room.get("participant_ids", []) if user_id != user["id"]),
+                "",
+            )
+            if reader_id:
+                reader_ids.append(reader_id)
+        elif room.get("kind") == "group":
+            reader_ids = [
+                user_id
+                for user_id in room.get("participant_ids", [])
+                if user_id != user["id"]
+            ]
+
+        read_message_ids: set[str] = set()
+        all_messages = self.state["messages"].get(room["id"], [])
+        if room.get("kind") == "group" and not reader_ids:
+            read_message_ids = {message["id"] for message in all_messages}
+        elif reader_ids and all_messages:
+            message_positions = {
+                message["id"]: index
+                for index, message in enumerate(all_messages)
+            }
+            reader_positions: list[int] = []
+            last_read_by = room.get("last_read_by", {})
+            for reader_id in reader_ids:
+                position = message_positions.get(str(last_read_by.get(reader_id, "")))
+                if position is None:
+                    reader_positions = []
+                    break
+                reader_positions.append(position)
+            if len(reader_positions) == len(reader_ids):
+                read_through_index = min(reader_positions)
+                read_message_ids = {
+                    message["id"]
+                    for message in all_messages[:read_through_index + 1]
+                }
+
+        return [
+            {**message, "read": message.get("username") == user["username"] and message.get("id") in read_message_ids}
+            for message in messages
+        ]
+
     def get_messages(self, room_id: str, username: str) -> list[dict] | None:
         with self.lock:
             user = self._users_by_username.get(username)
@@ -1630,22 +1770,34 @@ class StateStore:
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None
             messages = self.state["messages"].get(room_id, [])
-            peer_read_message_id = ""
-            if room.get("kind") == "direct":
-                peer_id = next((user_id for user_id in room.get("participant_ids", []) if user_id != user["id"]), "")
-                peer_read_message_id = str(room.get("last_read_by", {}).get(peer_id, ""))
+            return self._messages_with_read_state_locked(room, user, messages)
 
-            read_message_ids: set[str] = set()
-            if peer_read_message_id:
-                for message in messages:
-                    read_message_ids.add(message["id"])
-                    if message["id"] == peer_read_message_id:
-                        break
-
-            return [
-                {**message, "read": message.get("username") == username and message.get("id") in read_message_ids}
-                for message in messages
-            ]
+    def get_messages_page(
+        self,
+        room_id: str,
+        username: str,
+        *,
+        limit: int,
+        before: str = "",
+    ) -> dict | None:
+        with self.lock:
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
+            if user is None or room is None or not self._can_access_room_locked(room, user):
+                return None
+            messages = self.state["messages"].get(room_id, [])
+            end = len(messages)
+            if before:
+                end = next(
+                    (index for index, message in enumerate(messages) if message.get("id") == before),
+                    0,
+                )
+            start = max(0, end - limit)
+            page_messages = self._messages_with_read_state_locked(room, user, messages[start:end])
+            return {
+                "items": page_messages,
+                "next_cursor": messages[start]["id"] if start > 0 and page_messages else "",
+            }
 
     def mark_room_read(self, room_id: str, username: str) -> tuple[dict | None, bool]:
         with self.lock:
@@ -1697,6 +1849,10 @@ class StateStore:
                 return False
             if filename in self._profile_images:
                 return True
+            room_image_id = self._room_images.get(filename)
+            if room_image_id:
+                room = self._rooms_by_id.get(room_image_id)
+                return room is not None and self._can_access_room_locked(room, user)
             return any(
                 (room := self._rooms_by_id.get(room_id)) is not None and self._can_access_room_locked(room, user)
                 for room_id in self._attachment_rooms.get(filename, set())
@@ -1761,6 +1917,169 @@ class StateStore:
             self.state["messages"][room["id"]] = []
             self._save_locked("rooms", f"messages:{room['id']}")
             return self._room_summary(room, user), True, None
+
+    def create_group_room(
+        self,
+        username: str,
+        name: str,
+        member_user_ids: list[str],
+    ) -> tuple[dict | None, str | None]:
+        normalized_name = name.strip()
+        if not 1 <= len(normalized_name) <= 32:
+            return None, "그룹 이름은 1~32자로 입력해 주세요."
+        if not MIN_GROUP_PARTICIPANTS - 1 <= len(member_user_ids) <= MAX_GROUP_PARTICIPANTS - 1:
+            return None, "친구를 2명 이상 49명 이하로 선택해 주세요."
+        if len(set(member_user_ids)) != len(member_user_ids):
+            return None, "같은 친구를 중복해서 선택할 수 없습니다."
+
+        with self.lock:
+            creator = self._users_by_username.get(username)
+            if creator is None:
+                return None, "사용자를 찾을 수 없습니다."
+            if creator["id"] in member_user_ids:
+                return None, "자기 자신은 그룹 멤버로 선택할 수 없습니다."
+            friend_ids = self._friend_ids_locked(creator["id"])
+            if any(member_id not in friend_ids for member_id in member_user_ids):
+                return None, "친구로 추가된 사용자만 그룹에 초대할 수 있습니다."
+            if any(member_id not in self._users_by_id for member_id in member_user_ids):
+                return None, "초대할 사용자를 찾을 수 없습니다."
+
+            room = self._new_room(new_id("room"), normalized_name, "", username)
+            room["kind"] = "group"
+            room["participant_ids"] = [creator["id"], *member_user_ids]
+            self.state["rooms"].append(room)
+            self._register_room_locked(room)
+            self.state["messages"][room["id"]] = []
+            self._save_locked("rooms", f"messages:{room['id']}")
+            return self._room_summary(room, creator), None
+
+    def group_room_access(self, username: str, room_id: str) -> str:
+        with self.lock:
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
+            if (
+                user is None
+                or room is None
+                or room.get("kind") != "group"
+                or not self._can_access_room_locked(room, user)
+            ):
+                return "not_found"
+            return "owner" if room.get("created_by") == username else "member"
+
+    def update_group_room_name(
+        self,
+        username: str,
+        room_id: str,
+        name: str,
+    ) -> tuple[dict | None, str | None]:
+        normalized_name = name.strip()
+        if not 1 <= len(normalized_name) <= 32:
+            return None, "invalid_name"
+        with self.lock:
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
+            if (
+                user is None
+                or room is None
+                or room.get("kind") != "group"
+                or not self._can_access_room_locked(room, user)
+            ):
+                return None, "not_found"
+            if room.get("created_by") != username:
+                return None, "forbidden"
+            room["name"] = normalized_name
+            room["updated_at"] = utc_now_iso()
+            self._save_locked("rooms")
+            return self._room_summary(room, user), None
+
+    def update_group_room_image(
+        self,
+        username: str,
+        room_id: str,
+        image_url: str,
+        thumbnail_url: str = "",
+    ) -> tuple[dict | None, str | None]:
+        normalized_url = normalize_room_image_url(image_url)
+        normalized_thumbnail_url = normalize_room_image_url(thumbnail_url)
+        if image_url and not normalized_url:
+            return None, "invalid_image"
+        if thumbnail_url and not normalized_thumbnail_url:
+            return None, "invalid_image"
+        with self.lock:
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
+            if (
+                user is None
+                or room is None
+                or room.get("kind") != "group"
+                or not self._can_access_room_locked(room, user)
+            ):
+                return None, "not_found"
+            if room.get("created_by") != username:
+                return None, "forbidden"
+
+            previous_filenames = {
+                Path(url).name
+                for url in (
+                    normalize_room_image_url(room.get("image_url")),
+                    normalize_room_image_url(room.get("image_thumbnail_url")),
+                )
+                if url
+            }
+            for filename in previous_filenames:
+                self._room_images.pop(filename, None)
+            room["image_url"] = normalized_url
+            room["image_thumbnail_url"] = normalized_thumbnail_url
+            room["image_version"] = time.time_ns() if normalized_url else 0
+            room["updated_at"] = utc_now_iso()
+            for url in (normalized_url, normalized_thumbnail_url):
+                if url:
+                    self._room_images[Path(url).name] = room_id
+            self._save_locked("rooms")
+            return self._room_summary(room, user), None
+
+    def leave_group_room(
+        self,
+        username: str,
+        room_id: str,
+    ) -> tuple[dict | None, set[str], str | None]:
+        with self.lock:
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
+            if (
+                user is None
+                or room is None
+                or room.get("kind") != "group"
+                or user["id"] not in room.get("participant_ids", [])
+            ):
+                return None, set(), "not_found"
+
+            recipients = {
+                participant["username"]
+                for user_id in room.get("participant_ids", [])
+                if (participant := self._users_by_id.get(user_id)) is not None
+            }
+            remaining_ids = [
+                user_id for user_id in room.get("participant_ids", [])
+                if user_id != user["id"]
+            ]
+            room["participant_ids"] = remaining_ids
+            room.setdefault("last_read_by", {}).pop(user["id"], None)
+            self._room_ids_by_user.get(user["id"], set()).discard(room_id)
+            if room.get("created_by") == username:
+                next_creator = self._users_by_id.get(remaining_ids[0]) if remaining_ids else None
+                room["created_by"] = next_creator["username"] if next_creator else ""
+            room["updated_at"] = utc_now_iso()
+
+            if not remaining_ids:
+                room["archived_at"] = room["updated_at"]
+                summary = None
+            else:
+                room.pop("archived_at", None)
+                viewer = self._users_by_id.get(remaining_ids[0])
+                summary = self._room_summary(room, viewer)
+            self._save_locked("rooms")
+            return summary, recipients, None
 
     def create_local_user(
         self,
@@ -1956,23 +2275,29 @@ class StateStore:
                     *(f"messages:{room_id}" for room_id in created_room_ids),
                 )
 
-    def create_room(self, name: str, description: str, created_by: str) -> dict:
-        with self.lock:
-            room = self._new_room(new_id("room"), name[:32], description[:100], created_by[:24])
-            creator = self._users_by_username.get(created_by)
-            room["participant_ids"] = [creator["id"]] if creator else []
-            self.state["rooms"].append(room)
-            self._register_room_locked(room)
-            self.state["messages"][room["id"]] = []
-            self._save_locked("rooms", f"messages:{room['id']}")
-            return self._room_summary(room)
-
-    def add_message(self, room_id: str, username: str, text: str, attachment: dict | None = None) -> tuple[dict, dict] | None:
+    def add_message(
+        self,
+        room_id: str,
+        username: str,
+        text: str,
+        attachment: dict | None = None,
+        client_message_id: str = "",
+    ) -> tuple[dict, dict, bool] | None:
         with self.lock:
             room = self._rooms_by_id.get(room_id)
             user = self._users_by_username.get(username)
             if room is None or user is None or not self._can_access_room_locked(room, user):
                 return None
+
+            idempotency_key = (room_id, username, client_message_id)
+            existing_message = self._messages_by_client_id.get(idempotency_key) if client_message_id else None
+            if existing_message is not None:
+                if (
+                    existing_message.get("text", "") != text[:300]
+                    or existing_message.get("attachment") != attachment
+                ):
+                    raise ValueError("client message id was reused with different content")
+                return existing_message, self._room_summary(room), False
 
             message = {
                 "id": new_id("msg"),
@@ -1981,6 +2306,8 @@ class StateStore:
                 "text": text[:300],
                 "timestamp": utc_now_iso(),
             }
+            if client_message_id:
+                message["client_message_id"] = client_message_id
             if attachment is not None:
                 message["attachment"] = attachment
                 filename = Path(str(attachment.get("url", ""))).name
@@ -1988,9 +2315,18 @@ class StateStore:
                     self._attachment_rooms.setdefault(filename, set()).add(room_id)
             room_messages = self.state["messages"][room_id]
             room_messages.append(message)
+            if client_message_id:
+                self._messages_by_client_id[idempotency_key] = message
             if len(room_messages) > MAX_MESSAGES_PER_ROOM:
                 removed_messages = room_messages[:-MAX_MESSAGES_PER_ROOM]
                 del room_messages[:-MAX_MESSAGES_PER_ROOM]
+                for removed_message in removed_messages:
+                    removed_client_message_id = str(removed_message.get("client_message_id", ""))
+                    if removed_client_message_id:
+                        self._messages_by_client_id.pop(
+                            (room_id, str(removed_message.get("username", "")), removed_client_message_id),
+                            None,
+                        )
                 removed_filenames = {
                     Path(str(candidate.get("attachment", {}).get("url", ""))).name
                     for candidate in removed_messages
@@ -2009,7 +2345,7 @@ class StateStore:
                             self._attachment_rooms.pop(removed_filename, None)
             room["updated_at"] = message["timestamp"]
             self._save_locked("rooms", f"messages:{room_id}")
-            return message, self._room_summary(room)
+            return message, self._room_summary(room), True
 
 
 def push_event(event: dict, recipients: set[str]) -> None:
@@ -2017,15 +2353,20 @@ def push_event(event: dict, recipients: set[str]) -> None:
         return
     with SUBSCRIBERS_LOCK:
         dead_subscribers: list[queue.Queue] = []
-        for subscriber, username in SUBSCRIBERS.items():
-            if username not in recipients:
-                continue
-            try:
-                subscriber.put_nowait(event)
-            except queue.Full:
-                dead_subscribers.append(subscriber)
+        for username in recipients:
+            for subscriber in SUBSCRIBERS_BY_USERNAME.get(username, ()):
+                try:
+                    subscriber.put_nowait(event)
+                except queue.Full:
+                    dead_subscribers.append(subscriber)
         for subscriber in dead_subscribers:
-            SUBSCRIBERS.pop(subscriber, None)
+            username = SUBSCRIBERS.pop(subscriber, None)
+            if username:
+                username_subscribers = SUBSCRIBERS_BY_USERNAME.get(username)
+                if username_subscribers is not None:
+                    username_subscribers.discard(subscriber)
+                    if not username_subscribers:
+                        SUBSCRIBERS_BY_USERNAME.pop(username, None)
             try:
                 while True:
                     subscriber.get_nowait()
@@ -2271,6 +2612,30 @@ class ChatHandler(BaseHTTPRequestHandler):
                 return
             self.mark_room_read(user)
             return
+        if path == "/rooms/settings":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.update_group_room_settings(user)
+            return
+        if path == "/rooms/image":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.upload_group_room_image(user)
+            return
+        if path == "/rooms/image/remove":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.remove_group_room_image(user)
+            return
+        if path == "/rooms/leave":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.leave_group_room(user)
+            return
         if path == "/presence":
             user = self.require_auth()
             if user is None:
@@ -2281,7 +2646,7 @@ class ChatHandler(BaseHTTPRequestHandler):
             user = self.require_auth()
             if user is None:
                 return
-            self.create_room(user)
+            self.create_group_room(user)
             return
         if path == "/messages":
             user = self.require_auth()
@@ -2294,6 +2659,12 @@ class ChatHandler(BaseHTTPRequestHandler):
             if user is None:
                 return
             self.upload_attachment(user)
+            return
+        if path == "/uploads/discard":
+            user = self.require_auth()
+            if user is None:
+                return
+            self.discard_attachment_upload(user)
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
@@ -2331,16 +2702,24 @@ class ChatHandler(BaseHTTPRequestHandler):
             ".otf": "font/otf",
             ".woff2": "font/woff2",
         }.get(asset_path.suffix.lower(), mimetypes.guess_type(asset_path.name)[0] or "application/octet-stream")
-        content_length = asset_path.stat().st_size
+        accepts_gzip = "gzip" in self.headers.get("Accept-Encoding", "").lower()
+        compressed_content = ASSET_GZIP_CONTENT.get(asset_path) if accepts_gzip else None
+        content_length = len(compressed_content) if compressed_content is not None else asset_path.stat().st_size
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(content_length))
+        self.send_header("Vary", "Accept-Encoding")
+        if compressed_content is not None:
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("Cache-Control", "public, max-age=604800, stale-while-revalidate=86400")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         try:
-            with asset_path.open("rb") as asset_file:
-                shutil.copyfileobj(asset_file, self.wfile, length=64 * 1024)
+            if compressed_content is not None:
+                self.wfile.write(compressed_content)
+            else:
+                with asset_path.open("rb") as asset_file:
+                    shutil.copyfileobj(asset_file, self.wfile, length=64 * 1024)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass
 
@@ -2397,7 +2776,25 @@ class ChatHandler(BaseHTTPRequestHandler):
     def serve_messages(self, query: dict[str, list[str]]) -> None:
         room_id = query.get("room_id", [""])[0]
         user = self.current_user()
-        messages = STORE.get_messages(room_id, user["username"]) if user else None
+        limit_value = query.get("limit", [""])[0].strip()
+        before = query.get("before", [""])[0].strip()
+        if limit_value or before:
+            try:
+                limit = int(limit_value or DEFAULT_MESSAGES_PAGE_SIZE)
+            except ValueError:
+                self.send_json({"error": "올바른 메시지 개수를 입력해 주세요."}, HTTPStatus.BAD_REQUEST)
+                return
+            if not 1 <= limit <= MAX_MESSAGES_PAGE_SIZE or (before and not MESSAGE_ID_PATTERN.fullmatch(before)):
+                self.send_json({"error": "올바른 메시지 커서를 입력해 주세요."}, HTTPStatus.BAD_REQUEST)
+                return
+            messages = STORE.get_messages_page(
+                room_id,
+                user["username"],
+                limit=limit,
+                before=before,
+            ) if user else None
+        else:
+            messages = STORE.get_messages(room_id, user["username"]) if user else None
         if messages is None:
             self.send_json({"error": "채팅방을 찾을 수 없습니다."}, HTTPStatus.NOT_FOUND)
             return
@@ -2421,6 +2818,7 @@ class ChatHandler(BaseHTTPRequestHandler):
         token = self.read_session_token()
         with SUBSCRIBERS_LOCK:
             SUBSCRIBERS[subscriber] = user["username"]
+            SUBSCRIBERS_BY_USERNAME.setdefault(user["username"], set()).add(subscriber)
 
         if PRESENCE.connect(token, user["username"]):
             push_event(
@@ -2456,6 +2854,11 @@ class ChatHandler(BaseHTTPRequestHandler):
         finally:
             with SUBSCRIBERS_LOCK:
                 SUBSCRIBERS.pop(subscriber, None)
+                username_subscribers = SUBSCRIBERS_BY_USERNAME.get(user["username"])
+                if username_subscribers is not None:
+                    username_subscribers.discard(subscriber)
+                    if not username_subscribers:
+                        SUBSCRIBERS_BY_USERNAME.pop(user["username"], None)
             username, went_offline = PRESENCE.disconnect(token)
             if went_offline:
                 push_event(
@@ -3214,23 +3617,223 @@ class ChatHandler(BaseHTTPRequestHandler):
             return
         self.send_json({"user": profile}, HTTPStatus.OK)
 
-    def create_room(self, user: dict) -> None:
+    def create_group_room(self, user: dict) -> None:
         payload = self.read_json_body()
         if payload is None:
             return
 
         name = str(payload.get("name", "")).strip()
-        description = str(payload.get("description", "")).strip()
-        if not name:
-            self.send_json({"error": "채팅방 이름을 입력해 주세요."}, HTTPStatus.BAD_REQUEST)
+        raw_member_user_ids = payload.get("memberUserIds")
+        if not isinstance(raw_member_user_ids, list) or len(raw_member_user_ids) > MAX_GROUP_PARTICIPANTS - 1:
+            self.send_json({"error": "올바른 그룹 멤버를 선택해 주세요."}, HTTPStatus.BAD_REQUEST)
+            return
+        member_user_ids: list[str] = []
+        for member_user_id in raw_member_user_ids:
+            if not isinstance(member_user_id, str) or not USER_ID_PATTERN.fullmatch(member_user_id):
+                self.send_json({"error": "올바른 그룹 멤버를 선택해 주세요."}, HTTPStatus.BAD_REQUEST)
+                return
+            member_user_ids.append(member_user_id)
+
+        if not self.allow_request(f"group-room:{user['username']}", 20, 60 * 60):
+            return
+        room, error = STORE.create_group_room(user["username"], name, member_user_ids)
+        if error or room is None:
+            self.send_json({"error": error or "그룹 채팅방을 만들지 못했습니다."}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            self.send_json({"room": room}, HTTPStatus.CREATED)
+        finally:
+            push_event(
+                {"type": "room_created", "room": room},
+                STORE.room_event_recipients(room["id"]),
+            )
+
+    def update_group_room_settings(self, user: dict) -> None:
+        payload = self.read_json_body()
+        if payload is None:
+            return
+        room_id = str(payload.get("roomId", "")).strip()
+        name = str(payload.get("name", "")).strip()
+        if not ROOM_ID_PATTERN.fullmatch(room_id) or not 1 <= len(name) <= 32:
+            self.send_json({"error": "채팅방 이름은 1~32자로 입력해 주세요."}, HTTPStatus.BAD_REQUEST)
+            return
+        if not self.allow_request(f"room-settings:{user['username']}", 60, 60 * 60):
+            return
+        room, error = STORE.update_group_room_name(user["username"], room_id, name)
+        if error == "not_found":
+            self.send_json({"error": "채팅방을 찾을 수 없습니다."}, HTTPStatus.NOT_FOUND)
+            return
+        if error == "forbidden":
+            self.send_json({"error": "방장만 채팅방 정보를 변경할 수 있습니다."}, HTTPStatus.FORBIDDEN)
+            return
+        if error or room is None:
+            self.send_json({"error": "채팅방 이름을 변경하지 못했습니다."}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            self.send_json({"room": room}, HTTPStatus.OK)
+        finally:
+            push_event(
+                {"type": "room_updated", "roomId": room_id, "room": room},
+                STORE.room_event_recipients(room_id),
+            )
+
+    def upload_group_room_image(self, user: dict) -> None:
+        room_id = self.headers.get("X-Room-Id", "").strip()
+        if not ROOM_ID_PATTERN.fullmatch(room_id):
+            self.send_json({"error": "올바른 채팅방을 선택해 주세요."}, HTTPStatus.BAD_REQUEST)
+            return
+        access = STORE.group_room_access(user["username"], room_id)
+        if access == "not_found":
+            self.send_json({"error": "채팅방을 찾을 수 없습니다."}, HTTPStatus.NOT_FOUND)
+            return
+        if access != "owner":
+            self.send_json({"error": "방장만 채팅방 사진을 변경할 수 있습니다."}, HTTPStatus.FORBIDDEN)
+            return
+        if not self.allow_request(f"room-image:{user['username']}", 20, 60 * 60):
             return
 
-        room = STORE.create_room(name, description, user["username"])
-        push_event(
-            {"type": "room_created", "room": room},
-            STORE.room_event_recipients(room["id"]),
+        content = self.read_request_body(MAX_PROFILE_IMAGE_BYTES + MAX_PROFILE_THUMBNAIL_BYTES + 4)
+        if content is None:
+            return
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        image_content = b""
+        thumbnail_content = b""
+        if content_type == "application/x-colorless-room-bundle" and len(content) >= 4:
+            image_size = int.from_bytes(content[:4], "big")
+            image_content = content[4:4 + image_size]
+            thumbnail_content = content[4 + image_size:]
+        if (
+            not 0 < len(image_content) <= MAX_PROFILE_IMAGE_BYTES
+            or webp_dimensions(image_content) != (PROFILE_IMAGE_SIDE, PROFILE_IMAGE_SIDE)
+            or not 0 < len(thumbnail_content) <= MAX_PROFILE_THUMBNAIL_BYTES
+            or webp_dimensions(thumbnail_content) != (PROFILE_THUMBNAIL_SIDE, PROFILE_THUMBNAIL_SIDE)
+        ):
+            self.send_json({"error": "채팅방 사진은 1024×1024 WebP 형식이어야 합니다."}, HTTPStatus.BAD_REQUEST)
+            return
+
+        filename = room_image_filename(room_id)
+        thumbnail_filename = room_image_filename(room_id, thumbnail=True)
+        try:
+            if SUPABASE_ENABLED:
+                headers = supabase_headers("image/webp")
+                headers["x-upsert"] = "true"
+                for stored_filename, stored_content in (
+                    (filename, image_content),
+                    (thumbnail_filename, thumbnail_content),
+                ):
+                    fetch_json(
+                        supabase_object_url(stored_filename),
+                        method="POST",
+                        headers=headers,
+                        data=stored_content,
+                    )
+            else:
+                UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+                for stored_filename, stored_content in (
+                    (filename, image_content),
+                    (thumbnail_filename, thumbnail_content),
+                ):
+                    upload_path = (UPLOADS_DIR / stored_filename).resolve()
+                    upload_path.relative_to(UPLOADS_DIR.resolve())
+                    temp_path = (UPLOADS_DIR / f".{stored_filename}.{uuid.uuid4().hex}.tmp").resolve()
+                    temp_path.relative_to(UPLOADS_DIR.resolve())
+                    try:
+                        temp_path.write_bytes(stored_content)
+                        temp_path.replace(upload_path)
+                    finally:
+                        temp_path.unlink(missing_ok=True)
+        except (ConnectionError, OSError, ValueError):
+            self.send_json({"error": "채팅방 사진을 저장하지 못했습니다."}, HTTPStatus.BAD_GATEWAY)
+            return
+
+        room, error = STORE.update_group_room_image(
+            user["username"],
+            room_id,
+            f"/uploads/{filename}",
+            f"/uploads/{thumbnail_filename}",
         )
-        self.send_json(room, HTTPStatus.CREATED)
+        if error or room is None:
+            status = HTTPStatus.FORBIDDEN if error == "forbidden" else HTTPStatus.NOT_FOUND
+            self.send_json({"error": "채팅방 사진을 변경할 수 없습니다."}, status)
+            return
+        try:
+            self.send_json({"room": room}, HTTPStatus.OK)
+        finally:
+            push_event(
+                {"type": "room_updated", "roomId": room_id, "room": room},
+                STORE.room_event_recipients(room_id),
+            )
+
+    def remove_group_room_image(self, user: dict) -> None:
+        payload = self.read_json_body()
+        if payload is None:
+            return
+        room_id = str(payload.get("roomId", "")).strip()
+        if not ROOM_ID_PATTERN.fullmatch(room_id):
+            self.send_json({"error": "올바른 채팅방을 선택해 주세요."}, HTTPStatus.BAD_REQUEST)
+            return
+        if not self.allow_request(f"room-image:{user['username']}", 20, 60 * 60):
+            return
+        room, error = STORE.update_group_room_image(user["username"], room_id, "")
+        if error == "not_found":
+            self.send_json({"error": "채팅방을 찾을 수 없습니다."}, HTTPStatus.NOT_FOUND)
+            return
+        if error == "forbidden":
+            self.send_json({"error": "방장만 채팅방 사진을 변경할 수 있습니다."}, HTTPStatus.FORBIDDEN)
+            return
+        if error or room is None:
+            self.send_json({"error": "채팅방 사진을 삭제하지 못했습니다."}, HTTPStatus.BAD_REQUEST)
+            return
+
+        try:
+            if SUPABASE_ENABLED:
+                for stored_filename in (room_image_filename(room_id), room_image_filename(room_id, True)):
+                    fetch_bytes(
+                        supabase_object_url(stored_filename),
+                        method="DELETE",
+                        headers=supabase_headers(),
+                    )
+            else:
+                for stored_filename in (room_image_filename(room_id), room_image_filename(room_id, True)):
+                    upload_path = (UPLOADS_DIR / stored_filename).resolve()
+                    upload_path.relative_to(UPLOADS_DIR.resolve())
+                    upload_path.unlink(missing_ok=True)
+        except (ConnectionError, OSError, ValueError):
+            pass
+        try:
+            self.send_json({"room": room}, HTTPStatus.OK)
+        finally:
+            push_event(
+                {"type": "room_updated", "roomId": room_id, "room": room},
+                STORE.room_event_recipients(room_id),
+            )
+
+    def leave_group_room(self, user: dict) -> None:
+        payload = self.read_json_body()
+        if payload is None:
+            return
+        room_id = str(payload.get("roomId", "")).strip()
+        if not ROOM_ID_PATTERN.fullmatch(room_id):
+            self.send_json({"error": "올바른 채팅방을 선택해 주세요."}, HTTPStatus.BAD_REQUEST)
+            return
+        if not self.allow_request(f"leave-room:{user['username']}", 60, 60 * 60):
+            return
+        room, recipients, error = STORE.leave_group_room(user["username"], room_id)
+        if error:
+            self.send_json({"error": "채팅방을 찾을 수 없습니다."}, HTTPStatus.NOT_FOUND)
+            return
+        try:
+            self.send_json({"left": True, "roomId": room_id}, HTTPStatus.OK)
+        finally:
+            push_event(
+                {
+                    "type": "room_left",
+                    "roomId": room_id,
+                    "username": user["username"],
+                    "room": room,
+                },
+                recipients,
+            )
 
     def add_friend(self, user: dict) -> None:
         payload = self.read_json_body()
@@ -3263,24 +3866,43 @@ class ChatHandler(BaseHTTPRequestHandler):
 
         room_id = str(payload.get("roomId", "")).strip()
         text = str(payload.get("text", "")).strip()
+        client_message_id = str(payload.get("clientMessageId", "")).strip()
+        if client_message_id and not CLIENT_MESSAGE_ID_PATTERN.fullmatch(client_message_id):
+            self.send_json({"error": "올바른 메시지 식별자가 아닙니다."}, HTTPStatus.BAD_REQUEST)
+            return
         attachment = self.message_attachment(payload.get("attachment"), user["username"])
         if not room_id or (not text and attachment is None):
             self.send_json({"error": "roomId와 text는 필수입니다."}, HTTPStatus.BAD_REQUEST)
             return
 
-        result = STORE.add_message(room_id, user["username"], text, attachment)
+        try:
+            result = STORE.add_message(
+                room_id,
+                user["username"],
+                text,
+                attachment,
+                client_message_id,
+            )
+        except ValueError:
+            self.send_json({"error": "같은 메시지 식별자를 다른 내용에 다시 사용할 수 없습니다."}, HTTPStatus.CONFLICT)
+            return
         if result is None:
             self.send_json({"error": "채팅방을 찾을 수 없습니다."}, HTTPStatus.NOT_FOUND)
             return
 
-        message, room = result
-        if attachment is not None:
+        message, room, created = result
+        if attachment is not None and created:
             UPLOAD_GRANTS.consume(Path(attachment["url"]).name, user["username"])
-        push_event(
-            {"type": "message_created", "roomId": room_id, "room": room, "message": message},
-            STORE.room_event_recipients(room_id),
-        )
-        self.send_json(message, HTTPStatus.CREATED)
+        if not created:
+            self.send_json(message, HTTPStatus.OK)
+            return
+        try:
+            self.send_json(message, HTTPStatus.CREATED)
+        finally:
+            push_event(
+                {"type": "message_created", "roomId": room_id, "room": room, "message": message},
+                STORE.room_event_recipients(room_id),
+            )
 
     def upload_attachment(self, user: dict) -> None:
         if not self.allow_request(f"upload:{user['username']}", 30, 60 * 60):
@@ -3325,6 +3947,38 @@ class ChatHandler(BaseHTTPRequestHandler):
             "size": len(content),
         }
         self.send_json({"attachment": attachment}, HTTPStatus.CREATED)
+
+    def discard_attachment_upload(self, user: dict) -> None:
+        payload = self.read_json_body()
+        if payload is None:
+            return
+        upload_url = unquote(str(payload.get("url", "")))
+        filename = upload_url.removeprefix("/uploads/")
+        if (
+            not upload_url.startswith("/uploads/")
+            or "/" in filename
+            or "\\" in filename
+            or not UPLOAD_NAME_PATTERN.fullmatch(filename)
+            or not UPLOAD_GRANTS.consume(filename, user["username"])
+        ):
+            self.send_json({"discarded": False}, HTTPStatus.OK)
+            return
+        try:
+            if SUPABASE_ENABLED:
+                fetch_bytes(
+                    supabase_object_url(filename),
+                    method="DELETE",
+                    headers=supabase_headers(),
+                )
+            else:
+                upload_path = (UPLOADS_DIR / filename).resolve()
+                upload_path.relative_to(UPLOADS_DIR.resolve())
+                upload_path.unlink(missing_ok=True)
+        except (ConnectionError, OSError, ValueError):
+            UPLOAD_GRANTS.create(filename, user["username"])
+            self.send_json({"error": "임시 첨부 파일을 정리하지 못했습니다."}, HTTPStatus.BAD_GATEWAY)
+            return
+        self.send_json({"discarded": True}, HTTPStatus.OK)
 
     def valid_attachment_content(self, content_type: str, content: bytes) -> bool:
         signatures = {
@@ -3380,7 +4034,12 @@ class ChatHandler(BaseHTTPRequestHandler):
             return
         if changed:
             push_event(
-                {"type": "room_read", "roomId": room_id, "username": user["username"]},
+                {
+                    "type": "room_read",
+                    "roomId": room_id,
+                    "username": user["username"],
+                    "roomKind": room.get("kind", "direct"),
+                },
                 STORE.room_event_recipients(room_id),
             )
         self.send_json({"room": room}, HTTPStatus.OK)
