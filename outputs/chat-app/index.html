@@ -533,6 +533,8 @@
       .message-row { display: flex; flex-direction: column; gap: 3px; max-width: 82%; }
       .message-row.mine { align-self: flex-end; align-items: flex-end; }
       .message-row.theirs { align-self: flex-start; }
+      .message-row.pending .message-bubble { opacity: 0.72; }
+      .message-row.failed .message-bubble { border-style: dashed; }
       .message-bubble { background: #f1f1f1; border: 1px solid var(--black); line-height: 1.45; padding: 10px 12px; white-space: pre-wrap; word-break: break-word; }
       .message-row.mine .message-bubble { background: var(--black); color: var(--white); }
       .message-attachment { display: grid; gap: 8px; }
@@ -1674,7 +1676,7 @@ function selectCenteredStatusEmoji() {
         state.messages.forEach((message) => {
           const mine = message.username === username;
           const row = document.createElement("article");
-          row.className = `message-row ${mine ? "mine" : "theirs"}`;
+          row.className = `message-row ${mine ? "mine" : "theirs"}${message.pending ? " pending" : ""}${message.failed ? " failed" : ""}`;
           const bubble = document.createElement("div");
           bubble.className = "message-bubble";
           if (message.attachment?.url) {
@@ -1706,9 +1708,8 @@ function selectCenteredStatusEmoji() {
           meta.className = "message-meta";
           if (mine) {
             const read = document.createElement("span");
-            read.className = message.read ? "message-read" : "message-unread";
-            read.textContent = "읽음";
-            read.textContent = message.read ? "\uc77d\uc74c" : "\uc548 \uc77d\uc74c";
+            read.className = message.failed ? "message-unread" : (message.read ? "message-read" : "message-unread");
+            read.textContent = message.pending ? "보내는 중" : (message.failed ? "전송 실패" : (message.read ? "읽음" : "안 읽음"));
             meta.appendChild(read);
           }
           const time = document.createElement("time");
@@ -1764,44 +1765,67 @@ function selectCenteredStatusEmoji() {
         if (wasReplyingToShortNotice) resumeShortMessageNotice();
       }
 
-      async function sendChatMessage(event) {
+      function sendChatMessage(event) {
         event.preventDefault();
         const roomId = state.selectedRoomId;
         const text = (chatMessageInput.value || state.chatDrafts[roomId] || "").trim();
         const attachmentFile = state.chatAttachment;
         if (!roomId || (!text && !attachmentFile)) return;
-        chatMessageInput.disabled = true;
-        chatAttachmentButton.disabled = true;
-        try {
-          const attachment = attachmentFile ? await uploadChatAttachment(attachmentFile) : null;
-          await api("/messages", { method: "POST", body: JSON.stringify({ roomId, text, attachment }) });
+
+        const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const previewUrl = attachmentFile && attachmentFile.type.startsWith("image/") ? URL.createObjectURL(attachmentFile) : "";
+        const pendingMessage = {
+          id: pendingId,
+          username: state.messenger.user?.username,
+          text,
+          attachment: attachmentFile ? {
+            name: attachmentFile.name,
+            type: attachmentFile.type,
+            url: previewUrl,
+          } : null,
+          timestamp: new Date().toISOString(),
+          read: false,
+          pending: true,
+        };
+
+        state.chatDrafts[roomId] = "";
+        chatMessageInput.value = "";
+        clearChatAttachment();
+        if (state.selectedRoomId === roomId) {
+          state.messages.push(pendingMessage);
+          renderChatRoom();
+        }
+        chatMessageInput.focus({ preventScroll: true });
+
+        void (async () => {
+          try {
+            const attachment = attachmentFile ? await uploadChatAttachment(attachmentFile) : null;
+            const savedMessage = await api("/messages", { method: "POST", body: JSON.stringify({ roomId, text, attachment }) });
+            const message = { ...savedMessage, read: false };
+            if (state.selectedRoomId === roomId) {
+              state.messages = state.messages.map((candidate) => candidate.id === pendingId ? message : candidate);
+              renderChatRoom();
+            }
+            if (previewUrl) URL.revokeObjectURL(previewUrl);
           if (state.shortMessageNotice?.roomId === roomId) {
             clearShortMessageNotice();
             if (state.activeList === "shorts") renderShortShareBar();
           }
-          delete state.chatDrafts[roomId];
-          chatMessageInput.value = "";
-          clearChatAttachment();
-          await loadChatMessages();
           if (state.activeList === "shorts") {
-            const data = await api("/messenger");
-            state.messenger = {
-              user: data.user,
-              friends: data.friends || [],
-              discoverableUsers: data.discoverable_users || [],
-              rooms: data.rooms || [],
-            };
+            loadMessenger(false).then(() => renderShortShareBar()).catch(() => {});
           } else {
-            await loadMessenger();
+            loadMessenger(false).catch(() => {});
           }
         } catch (error) {
-          state.chatDrafts[roomId] = chatMessageInput.value;
+            if (state.selectedRoomId === roomId) {
+              state.messages = state.messages.map((candidate) => candidate.id === pendingId
+                ? { ...candidate, pending: false, failed: true }
+                : candidate);
+              renderChatRoom();
+            }
           setAppStatus(error.message, "error");
-        } finally {
-          chatMessageInput.disabled = false;
-          chatAttachmentButton.disabled = false;
-          chatMessageInput.focus();
-        }
+          }
+        })();
       }
 
       function connectEvents() {
