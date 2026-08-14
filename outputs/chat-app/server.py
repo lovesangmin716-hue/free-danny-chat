@@ -56,6 +56,9 @@ ATTACHMENT_TYPES = {
     "image/png": ".png",
     "image/gif": ".gif",
     "image/webp": ".webp",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
+    "image/avif": ".avif",
     "application/pdf": ".pdf",
 }
 PROFILE_PIXEL_SIDE = 32
@@ -1594,7 +1597,10 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
             return
 
-        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        content_type = mimetypes.guess_type(filename)[0] or next(
+            (mime_type for mime_type, extension in ATTACHMENT_TYPES.items() if extension == Path(filename).suffix.lower()),
+            "application/octet-stream",
+        )
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(content)))
@@ -2403,6 +2409,9 @@ class ChatHandler(BaseHTTPRequestHandler):
             "image/png": content.startswith(b"\x89PNG\r\n\x1a\n"),
             "image/gif": content.startswith((b"GIF87a", b"GIF89a")),
             "image/webp": content.startswith(b"RIFF") and content[8:12] == b"WEBP",
+            "image/heic": content[4:8] == b"ftyp" and content[8:12] in {b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"},
+            "image/heif": content[4:8] == b"ftyp" and content[8:12] in {b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"},
+            "image/avif": content[4:8] == b"ftyp" and content[8:12] in {b"avif", b"avis"},
             "application/pdf": content.startswith(b"%PDF-"),
         }
         return signatures.get(content_type, False)

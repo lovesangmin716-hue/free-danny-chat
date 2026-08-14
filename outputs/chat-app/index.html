@@ -556,6 +556,7 @@
       .attachment-guide-label[data-kind="file"] { left: 145px; top: 134px; }
       .attachment-guide-label[data-kind="camera"] { left: 183px; top: 190px; }
       .chat-attachment-button { background: var(--white); color: var(--black); min-width: 44px; padding: 0; touch-action: none; user-select: none; }
+      .chat-attachment-input { height: 1px; opacity: 0; pointer-events: none; position: absolute; width: 1px; }
       .chat-attachment-button.swiping { background: var(--black); color: var(--white); }
       .message-meta { color: var(--gray); display: flex; font-size: 11px; gap: 6px; }
       .message-read { color: var(--black); font-weight: 700; }
@@ -751,7 +752,7 @@
           <span class="attachment-guide-label" data-kind="camera">카메라</span>
         </div>
         <form class="chat-message-form" id="chat-message-form">
-          <input id="chat-attachment-input" type="file" accept="image/jpeg,image/png,image/gif,image/webp,application/pdf" hidden />
+          <input class="chat-attachment-input" id="chat-attachment-input" type="file" accept="image/*,application/pdf" />
           <button class="chat-attachment-button" id="chat-attachment-button" type="button" aria-label="Open attachment options" aria-expanded="false">+</button>
           <input id="chat-message-input" maxlength="300" autocomplete="off" placeholder="메시지 입력" />
           <button type="submit">Send</button>
@@ -853,6 +854,7 @@
         messages: [],
         chatDrafts: {},
         chatAttachment: null,
+        chatAttachmentType: "",
         chatAttachmentTrayOpen: false,
         chatAttachmentDrag: { active: false, kind: "" },
         chatAttachmentGuideTimer: null,
@@ -1607,7 +1609,7 @@ function selectCenteredStatusEmoji() {
         }
         chatAttachmentInput.accept = kind === "pdf"
           ? "application/pdf"
-          : "image/jpeg,image/png,image/gif,image/webp";
+          : "image/*";
         chatAttachmentInput.value = "";
         chatAttachmentInput.click();
       }
@@ -1619,11 +1621,12 @@ function selectCenteredStatusEmoji() {
       function renderChatAttachmentPreview() {
         const file = state.chatAttachment;
         chatAttachmentPreview.classList.toggle("hidden", !file);
-        chatAttachmentName.textContent = file ? `${file.type === "application/pdf" ? "PDF" : "Photo"}: ${file.name}` : "";
+        chatAttachmentName.textContent = file ? `${state.chatAttachmentType === "application/pdf" ? "PDF" : "Photo"}: ${file.name}` : "";
       }
 
       function clearChatAttachment() {
         state.chatAttachment = null;
+        state.chatAttachmentType = "";
         chatAttachmentInput.value = "";
         renderChatAttachmentPreview();
       }
@@ -1637,11 +1640,29 @@ function selectCenteredStatusEmoji() {
         });
       }
 
-      async function uploadChatAttachment(file) {
+      function attachmentContentType(file) {
+        const declaredType = (file.type || "").toLowerCase();
+        const supportedTypes = ["image/jpeg", "image/png", "image/gif", "image/webp", "image/heic", "image/heif", "image/avif", "application/pdf"];
+        if (supportedTypes.includes(declaredType)) return declaredType;
+        const extension = (file.name || "").split(".").pop()?.toLowerCase();
+        return {
+          jpg: "image/jpeg",
+          jpeg: "image/jpeg",
+          png: "image/png",
+          gif: "image/gif",
+          webp: "image/webp",
+          heic: "image/heic",
+          heif: "image/heif",
+          avif: "image/avif",
+          pdf: "application/pdf",
+        }[extension] || "";
+      }
+
+      async function uploadChatAttachment(file, contentType) {
         const data = await fileToBase64(file);
         const result = await api("/uploads", {
           method: "POST",
-          body: JSON.stringify({ name: file.name, type: file.type, data }),
+          body: JSON.stringify({ name: file.name, type: contentType, data }),
         });
         return result.attachment;
       }
@@ -1770,17 +1791,18 @@ function selectCenteredStatusEmoji() {
         const roomId = state.selectedRoomId;
         const text = (chatMessageInput.value || state.chatDrafts[roomId] || "").trim();
         const attachmentFile = state.chatAttachment;
+        const attachmentType = state.chatAttachmentType;
         if (!roomId || (!text && !attachmentFile)) return;
 
         const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        const previewUrl = attachmentFile && attachmentFile.type.startsWith("image/") ? URL.createObjectURL(attachmentFile) : "";
+        const previewUrl = attachmentFile && attachmentType.startsWith("image/") ? URL.createObjectURL(attachmentFile) : "";
         const pendingMessage = {
           id: pendingId,
           username: state.messenger.user?.username,
           text,
           attachment: attachmentFile ? {
             name: attachmentFile.name,
-            type: attachmentFile.type,
+            type: attachmentType,
             url: previewUrl,
           } : null,
           timestamp: new Date().toISOString(),
@@ -1799,7 +1821,7 @@ function selectCenteredStatusEmoji() {
 
         void (async () => {
           try {
-            const attachment = attachmentFile ? await uploadChatAttachment(attachmentFile) : null;
+            const attachment = attachmentFile ? await uploadChatAttachment(attachmentFile, attachmentType) : null;
             const savedMessage = await api("/messages", { method: "POST", body: JSON.stringify({ roomId, text, attachment }) });
             const message = { ...savedMessage, read: false };
             if (state.selectedRoomId === roomId) {
@@ -3006,8 +3028,8 @@ function selectCenteredStatusEmoji() {
       chatAttachmentInput.addEventListener("change", () => {
         const file = chatAttachmentInput.files?.[0];
         if (!file) return;
-        const supportedTypes = ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"];
-        if (!supportedTypes.includes(file.type)) {
+        const contentType = attachmentContentType(file);
+        if (!contentType) {
           clearChatAttachment();
           setAppStatus("사진 또는 PDF 파일만 보낼 수 있어요.", "error");
           return;
@@ -3018,6 +3040,7 @@ function selectCenteredStatusEmoji() {
           return;
         }
         state.chatAttachment = file;
+        state.chatAttachmentType = contentType;
         state.chatAttachmentTrayOpen = false;
         renderChatAttachmentTray();
         renderChatAttachmentPreview();
