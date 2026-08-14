@@ -419,6 +419,7 @@
       }
 
       .avatar canvas { height: 100%; image-rendering: pixelated; width: 100%; }
+      .avatar.avatar-photo { display: block; object-fit: cover; }
       .avatar-wrap { display: inline-flex; position: relative; }
       .presence-emoji { background: transparent; border: 0; bottom: -9px; display: grid; font-size: 16px; height: 22px; line-height: 1; place-items: center; position: absolute; right: -9px; width: 22px; z-index: 1; }
 
@@ -495,6 +496,19 @@
       .profile-editor { padding: 16px; }
       .profile-editor-copy { color: var(--gray); font-size: 13px; line-height: 1.5; margin: 0 0 14px; }
       .profile-editor .field { margin-bottom: 12px; }
+      .profile-photo-editor { align-items: center; border: 1px solid var(--black); display: grid; gap: 12px; grid-template-columns: 96px minmax(0, 1fr); margin: 12px 0; padding: 12px; }
+      .profile-photo-preview .avatar { height: 96px; width: 96px; }
+      .profile-photo-copy { color: var(--gray); font-size: 12px; line-height: 1.45; margin: 0 0 9px; }
+      .profile-photo-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+      .profile-photo-actions button { min-height: 36px; padding-inline: 10px; }
+      .profile-photo-crop { border-top: 1px solid var(--black); grid-column: 1 / -1; padding-top: 12px; }
+      .profile-photo-crop canvas { background: var(--white); border: 1px solid var(--black); cursor: grab; display: block; height: auto; margin: 0 auto 12px; max-width: 100%; touch-action: none; width: 320px; }
+      .profile-photo-crop canvas.dragging { cursor: grabbing; }
+      .profile-photo-zoom { align-items: center; display: grid; gap: 8px; grid-template-columns: auto minmax(0, 1fr) 48px; margin-bottom: 8px; }
+      .profile-photo-zoom input { margin: 0; width: 100%; }
+      .profile-photo-zoom output { font-size: 12px; text-align: right; }
+      .profile-photo-crop-help { color: var(--gray); font-size: 12px; line-height: 1.45; margin: 0 0 10px; }
+      .profile-photo-crop-actions { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
       .pixel-palette { display: grid; gap: 8px; grid-template-columns: repeat(6, 1fr); margin: 12px 0; }
       .profile-palette-select { background: var(--white); border: 1px solid var(--black); color: var(--black); min-height: 44px; padding: 0 10px; width: 100%; }
       .pixel-color { min-height: 34px; padding: 0; }
@@ -847,6 +861,31 @@
               <label for="profile-friend-code">친구 ID</label>
               <input id="profile-friend-code" maxlength="20" autocomplete="off" autocapitalize="off" />
             </div>
+            <section class="profile-photo-editor" aria-labelledby="profile-photo-title">
+              <div class="profile-photo-preview" id="profile-photo-preview"></div>
+              <div>
+                <strong id="profile-photo-title">프로필 사진</strong>
+                <p class="profile-photo-copy">사진의 크기와 위치를 직접 맞춘 뒤 1024×1024 WebP로 저장합니다.</p>
+                <div class="profile-photo-actions">
+                  <button type="button" class="secondary-button" id="select-profile-photo-button">사진 선택</button>
+                  <button type="button" class="secondary-button" id="remove-profile-photo-button">사진 제거</button>
+                </div>
+                <input type="file" id="profile-photo-input" accept="image/jpeg,image/png,image/webp,image/avif,image/heic,image/heif" hidden />
+              </div>
+              <div class="profile-photo-crop hidden" id="profile-photo-crop">
+                <canvas id="profile-photo-crop-canvas" width="512" height="512" tabindex="0" aria-label="프로필 사진 위치 조정. 드래그하거나 방향키로 이동할 수 있습니다."></canvas>
+                <label class="profile-photo-zoom" for="profile-photo-zoom">
+                  <span>크기</span>
+                  <input type="range" id="profile-photo-zoom" min="50" max="300" value="100" step="1" />
+                  <output id="profile-photo-zoom-value" for="profile-photo-zoom">100%</output>
+                </label>
+                <p class="profile-photo-crop-help">사진을 드래그해 위치를 맞추세요. 방향키로도 이동할 수 있습니다.</p>
+                <div class="profile-photo-crop-actions">
+                  <button type="button" class="secondary-button" id="cancel-profile-photo-button">취소</button>
+                  <button type="button" id="save-profile-photo-button">이대로 저장</button>
+                </div>
+              </div>
+            </section>
             <section class="custom-palette" aria-label="나만의 팔레트">
               <div class="custom-palette-header">
                 <div class="custom-palette-heading">
@@ -889,7 +928,6 @@
     <script>
       const state = {
         session: null,
-        sessionToken: sessionStorage.getItem("free-danny-session-token") || "",
         providers: {},
         messenger: { friends: [], discoverableUsers: [], rooms: [] },
         activeList: "chats",
@@ -901,19 +939,39 @@
         shortsMessagesEnabled: localStorage.getItem("colorless-shorts-messages") !== "off",
         selectedRoomId: "",
         messages: [],
+        renderedChatKey: "",
         chatDrafts: {},
         chatAttachment: null,
         chatAttachmentType: "",
+        chatAttachmentPreparing: false,
+        chatAttachmentSelectionId: 0,
         chatAttachmentTrayOpen: false,
         chatAttachmentDrag: { active: false, kind: "" },
         chatAttachmentGuideTimer: null,
         eventSource: null,
+        eventConnected: false,
+        eventReconnectTimer: null,
+        sessionCheckTimer: null,
+        sessionCheckRetryCount: 0,
+        appStartRetryTimer: null,
+        appStartRetryCount: 0,
         liveSyncTimer: null,
         liveSyncBusy: false,
         liveSyncInitialized: false,
         lastSeenRoomMessageIds: {},
         phoneVerification: { phone: "", token: "", verified: false },
         profilePixels: "",
+        profileImageUrl: "",
+        profileImagePreviewUrl: "",
+        profileImagePreparing: false,
+        profileImageSelectionId: 0,
+        profileCropImage: null,
+        profileCropOpen: false,
+        profileCropZoomPercent: 100,
+        profileCropOffsetX: 0,
+        profileCropOffsetY: 0,
+        profileCropPointer: null,
+        profileCropFrame: null,
       selectedProfileColor: "#000000",
       selectedProfilePalette: "default",
   customPalette: [],
@@ -931,6 +989,8 @@
           guestLoading: false,
           guestError: "",
           feedVersion: 0,
+          renderedFeedVersion: -1,
+          renderedGuestVideoCount: 0,
           soundEnabled: false,
           tokenClient: null,
         },
@@ -939,8 +999,21 @@
       lastPixelTapIndex: -1,
         profilePainting: false,
         profileCells: [],
+        shortScrollFrame: null,
       };
+      sessionStorage.removeItem("free-danny-session-token");
 
+      const ATTACHMENT_UPLOAD_BYTES_MAX = 8 * 1024 * 1024;
+      const IMAGE_SOURCE_BYTES_MAX = 50 * 1024 * 1024;
+      const IMAGE_OPTIMIZE_BYTES_MIN = 512 * 1024;
+      const IMAGE_EDGE_PIXELS_MAX = 2560;
+      const IMAGE_TOTAL_PIXELS_MAX = 64 * 1000 * 1000;
+      const IMAGE_WEBP_QUALITY = 0.82;
+      const IMAGE_REQUIRED_SAVINGS_RATIO = 0.9;
+      const PROFILE_IMAGE_SOURCE_BYTES_MAX = 50 * 1024 * 1024;
+      const PROFILE_IMAGE_UPLOAD_BYTES_MAX = 3 * 1024 * 1024;
+      const PROFILE_IMAGE_SIDE = 1024;
+      const PROFILE_IMAGE_WEBP_QUALITIES = [0.86, 0.74, 0.62];
       const PIXEL_SIDE = 32;
       const PROFILE_PIXEL_COUNT = PIXEL_SIDE * PIXEL_SIDE;
       const DEFAULT_PROFILE_PALETTE = ["#ffffff", "#000000", "#777777", "#d9d9d9", "#e53935", "#fb8c00", "#fdd835", "#43a047", "#1e88e5", "#8e24aa", "#6d4c41", "#ec407a"];
@@ -1067,6 +1140,16 @@ const STATUS_EMOJI_OPTIONS = ["🥳", "😀", "😐", "😕", "😭"];
       const pixelEditorGrid = document.getElementById("pixel-editor-grid");
       const profileDisplayName = document.getElementById("profile-display-name");
       const profileFriendCode = document.getElementById("profile-friend-code");
+      const profilePhotoPreview = document.getElementById("profile-photo-preview");
+      const profilePhotoInput = document.getElementById("profile-photo-input");
+      const selectProfilePhotoButton = document.getElementById("select-profile-photo-button");
+      const removeProfilePhotoButton = document.getElementById("remove-profile-photo-button");
+      const profilePhotoCrop = document.getElementById("profile-photo-crop");
+      const profilePhotoCropCanvas = document.getElementById("profile-photo-crop-canvas");
+      const profilePhotoZoom = document.getElementById("profile-photo-zoom");
+      const profilePhotoZoomValue = document.getElementById("profile-photo-zoom-value");
+      const cancelProfilePhotoButton = document.getElementById("cancel-profile-photo-button");
+      const saveProfilePhotoButton = document.getElementById("save-profile-photo-button");
       const statusEmojiPicker = document.getElementById("status-emoji-picker");
       const profileStatusEmoji = document.getElementById("profile-status-emoji");
       const statusEmojiAdd = document.getElementById("status-emoji-add");
@@ -1224,21 +1307,20 @@ function selectCenteredStatusEmoji() {
       }, 180));
 
       async function api(url, options = {}) {
+        const { headers: optionHeaders = {}, ...requestOptions } = options;
+        const isJsonBody = typeof requestOptions.body === "string";
         const response = await fetch(url, {
           credentials: "same-origin",
           headers: {
-            "Content-Type": "application/json",
-            ...(state.sessionToken ? { "X-Session-Token": state.sessionToken } : {}),
-            ...(options.headers || {}),
+            ...(isJsonBody ? { "Content-Type": "application/json" } : {}),
+            ...optionHeaders,
           },
-          ...options,
+          ...requestOptions,
         });
         const contentType = response.headers.get("Content-Type") || "";
         const payload = contentType.includes("application/json") ? await response.json() : null;
 
         if (response.status === 401) {
-          state.sessionToken = "";
-          sessionStorage.removeItem("free-danny-session-token");
           showAuth();
           throw new Error(payload?.error || "로그인이 필요합니다.");
         }
@@ -1251,10 +1333,6 @@ function selectCenteredStatusEmoji() {
       function rememberSession(session) {
         state.session = session;
         state.isGuest = false;
-        state.sessionToken = session?.sessionToken || "";
-        if (state.sessionToken) {
-          sessionStorage.setItem("free-danny-session-token", state.sessionToken);
-        }
       }
 
       function showAuth(mode = "login") {
@@ -1262,6 +1340,15 @@ function selectCenteredStatusEmoji() {
           state.eventSource.close();
           state.eventSource = null;
         }
+        state.eventConnected = false;
+        window.clearTimeout(state.eventReconnectTimer);
+        state.eventReconnectTimer = null;
+        window.clearTimeout(state.sessionCheckTimer);
+        state.sessionCheckTimer = null;
+        state.sessionCheckRetryCount = 0;
+        window.clearTimeout(state.appStartRetryTimer);
+        state.appStartRetryTimer = null;
+        state.appStartRetryCount = 0;
         window.clearInterval(state.liveSyncTimer);
         state.liveSyncTimer = null;
         state.liveSyncBusy = false;
@@ -1269,6 +1356,12 @@ function selectCenteredStatusEmoji() {
         state.lastSeenRoomMessageIds = {};
         state.selectedRoomId = "";
         state.messages = [];
+        state.renderedChatKey = "";
+        state.profileImageSelectionId += 1;
+        state.profileImagePreparing = false;
+        state.profileImageUrl = "";
+        revokeProfileImagePreview();
+        resetProfileImageCrop();
         state.session = null;
         state.isGuest = false;
         authScreen.classList.remove("hidden");
@@ -1316,18 +1409,30 @@ function selectCenteredStatusEmoji() {
         }
       }
 
-      function createAvatar(value, pixels, presence = null, savedStatus = "") {
-        const wrapper = document.createElement("span");
-        wrapper.className = "avatar-wrap";
+      function createPixelAvatar(value, pixels) {
         const avatar = document.createElement("canvas");
         avatar.className = "avatar";
         avatar.width = PIXEL_SIDE;
         avatar.height = PIXEL_SIDE;
-        /*
-        avatar.setAttribute("aria-label", `${value} 프로필`);
-        */
         avatar.setAttribute("aria-label", `profile-${value}`);
         drawProfilePixels(avatar, pixels);
+        return avatar;
+      }
+
+      function createAvatar(value, pixels, presence = null, savedStatus = "", profileImageUrl = "") {
+        const wrapper = document.createElement("span");
+        wrapper.className = "avatar-wrap";
+        const avatar = profileImageUrl ? document.createElement("img") : createPixelAvatar(value, pixels);
+        if (profileImageUrl) {
+          avatar.className = "avatar avatar-photo";
+          avatar.src = profileImageUrl;
+          avatar.alt = `${value} 프로필`;
+          avatar.decoding = "async";
+          avatar.loading = "lazy";
+          avatar.addEventListener("error", () => {
+            avatar.replaceWith(createPixelAvatar(value, pixels));
+          }, { once: true });
+        }
         wrapper.appendChild(avatar);
         const activityEmoji = presence?.online
           ? (normalizeStatusEmoji(presence.emoji) || normalizeStatusEmoji(savedStatus))
@@ -1533,9 +1638,318 @@ function selectCenteredStatusEmoji() {
         }
       }
 
+      function revokeProfileImagePreview() {
+        if (!state.profileImagePreviewUrl) return;
+        URL.revokeObjectURL(state.profileImagePreviewUrl);
+        state.profileImagePreviewUrl = "";
+      }
+
+      function renderProfileImagePreview() {
+        const user = state.messenger.user || state.session?.user;
+        const imageUrl = state.profileImagePreviewUrl || state.profileImageUrl;
+        profilePhotoPreview.replaceChildren(createAvatar(
+          getDisplayName(user),
+          state.profilePixels,
+          null,
+          "",
+          imageUrl,
+        ));
+        syncProfileImageControls();
+      }
+
+      function syncProfileImageControls() {
+        const isBusy = state.profileImagePreparing;
+        selectProfilePhotoButton.disabled = isBusy;
+        profilePhotoInput.disabled = isBusy;
+        saveProfileButton.disabled = isBusy || state.profileCropOpen;
+        removeProfilePhotoButton.disabled = isBusy || state.profileCropOpen || !state.profileImageUrl;
+        profilePhotoZoom.disabled = isBusy;
+        cancelProfilePhotoButton.disabled = isBusy;
+        saveProfilePhotoButton.disabled = isBusy;
+      }
+
+      function setProfileImagePreparing(isPreparing) {
+        state.profileImagePreparing = isPreparing;
+        syncProfileImageControls();
+      }
+
+      function decodedImageSize(image) {
+        return {
+          width: image?.naturalWidth || image?.width || 0,
+          height: image?.naturalHeight || image?.height || 0,
+        };
+      }
+
+      function profileCropMinimumZoomPercent(width, height) {
+        if (!width || !height) return 50;
+        const coverScale = Math.max(PROFILE_IMAGE_SIDE / width, PROFILE_IMAGE_SIDE / height);
+        const containScale = Math.min(PROFILE_IMAGE_SIDE / width, PROFILE_IMAGE_SIDE / height);
+        return Math.max(1, Math.min(50, Math.floor((containScale / coverScale) * 100)));
+      }
+
+      function profileCropGeometry(width, height, zoomPercent) {
+        const coverScale = Math.max(PROFILE_IMAGE_SIDE / width, PROFILE_IMAGE_SIDE / height);
+        const scale = coverScale * zoomPercent / 100;
+        const drawWidth = width * scale;
+        const drawHeight = height * scale;
+        return {
+          drawWidth,
+          drawHeight,
+          maxOffsetX: Math.abs(drawWidth - PROFILE_IMAGE_SIDE) / 2,
+          maxOffsetY: Math.abs(drawHeight - PROFILE_IMAGE_SIDE) / 2,
+        };
+      }
+
+      function clampProfileCropOffsets() {
+        const { width, height } = decodedImageSize(state.profileCropImage);
+        if (!width || !height) return;
+        const geometry = profileCropGeometry(width, height, state.profileCropZoomPercent);
+        state.profileCropOffsetX = Math.max(-geometry.maxOffsetX, Math.min(geometry.maxOffsetX, state.profileCropOffsetX));
+        state.profileCropOffsetY = Math.max(-geometry.maxOffsetY, Math.min(geometry.maxOffsetY, state.profileCropOffsetY));
+      }
+
+      function drawProfileCropPreview() {
+        const image = state.profileCropImage;
+        if (!image) return;
+        const { width, height } = decodedImageSize(image);
+        const context = profilePhotoCropCanvas.getContext("2d", { alpha: false });
+        if (!context || !width || !height) return;
+        const previewScale = profilePhotoCropCanvas.width / PROFILE_IMAGE_SIDE;
+        const geometry = profileCropGeometry(width, height, state.profileCropZoomPercent);
+        const drawWidth = geometry.drawWidth * previewScale;
+        const drawHeight = geometry.drawHeight * previewScale;
+        const drawX = profilePhotoCropCanvas.width / 2 + state.profileCropOffsetX * previewScale - drawWidth / 2;
+        const drawY = profilePhotoCropCanvas.height / 2 + state.profileCropOffsetY * previewScale - drawHeight / 2;
+
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, profilePhotoCropCanvas.width, profilePhotoCropCanvas.height);
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
+        context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+        context.strokeStyle = "rgba(0, 0, 0, 0.35)";
+        context.lineWidth = 1;
+        context.setLineDash([6, 6]);
+        for (let index = 1; index < 3; index += 1) {
+          const guide = Math.round(profilePhotoCropCanvas.width * index / 3) + 0.5;
+          context.beginPath();
+          context.moveTo(guide, 0);
+          context.lineTo(guide, profilePhotoCropCanvas.height);
+          context.moveTo(0, guide);
+          context.lineTo(profilePhotoCropCanvas.width, guide);
+          context.stroke();
+        }
+        context.setLineDash([]);
+      }
+
+      function scheduleProfileCropPreview() {
+        if (state.profileCropFrame !== null) return;
+        state.profileCropFrame = requestAnimationFrame(() => {
+          state.profileCropFrame = null;
+          drawProfileCropPreview();
+        });
+      }
+
+      function resetProfileImageCrop() {
+        if (state.profileCropFrame !== null) cancelAnimationFrame(state.profileCropFrame);
+        state.profileCropFrame = null;
+        state.profileCropImage?.close?.();
+        state.profileCropImage = null;
+        state.profileCropOpen = false;
+        state.profileCropPointer = null;
+        state.profileCropZoomPercent = 100;
+        state.profileCropOffsetX = 0;
+        state.profileCropOffsetY = 0;
+        profilePhotoZoom.min = "50";
+        profilePhotoZoom.value = "100";
+        profilePhotoZoomValue.value = "100%";
+        profilePhotoCropCanvas.classList.remove("dragging");
+        profilePhotoCrop.classList.add("hidden");
+        syncProfileImageControls();
+      }
+
+      async function createProfileImageFile() {
+        const image = state.profileCropImage;
+        const { width, height } = decodedImageSize(image);
+        if (!image || !width || !height) throw new Error("image-decode-failed");
+        clampProfileCropOffsets();
+        const geometry = profileCropGeometry(width, height, state.profileCropZoomPercent);
+        const canvas = createImageCanvas(PROFILE_IMAGE_SIDE, PROFILE_IMAGE_SIDE);
+        const context = canvas.getContext("2d", { alpha: false });
+        if (!context) throw new Error("image-canvas-unavailable");
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, PROFILE_IMAGE_SIDE, PROFILE_IMAGE_SIDE);
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
+        context.drawImage(
+          image,
+          PROFILE_IMAGE_SIDE / 2 + state.profileCropOffsetX - geometry.drawWidth / 2,
+          PROFILE_IMAGE_SIDE / 2 + state.profileCropOffsetY - geometry.drawHeight / 2,
+          geometry.drawWidth,
+          geometry.drawHeight,
+        );
+
+        for (const quality of PROFILE_IMAGE_WEBP_QUALITIES) {
+          const blob = await canvasToWebpBlob(canvas, quality);
+          if (blob.type === "image/webp" && blob.size > 0 && blob.size <= PROFILE_IMAGE_UPLOAD_BYTES_MAX) {
+            return new File([blob], "profile.webp", { type: "image/webp", lastModified: Date.now() });
+          }
+        }
+        throw new Error("profile-image-too-large");
+      }
+
+      async function uploadSelectedProfileImage(file) {
+        const contentType = attachmentContentType(file);
+        if (!contentType.startsWith("image/") || contentType === "image/gif") {
+          profilePhotoInput.value = "";
+          setAppStatus("JPG, PNG, WebP, AVIF 또는 HEIC 사진을 선택해 주세요.", "error");
+          return;
+        }
+        if (file.size > PROFILE_IMAGE_SOURCE_BYTES_MAX) {
+          profilePhotoInput.value = "";
+          setAppStatus("프로필 사진 원본은 50MB 이하만 선택할 수 있어요.", "error");
+          return;
+        }
+
+        const selectionId = state.profileImageSelectionId + 1;
+        state.profileImageSelectionId = selectionId;
+        resetProfileImageCrop();
+        setProfileImagePreparing(true);
+        setAppStatus("프로필 사진을 불러오는 중이에요.");
+        let decodedImage = null;
+        try {
+          decodedImage = await decodeAttachmentImage(file);
+          const { width, height } = decodedImageSize(decodedImage);
+          if (!width || !height || width * height > IMAGE_TOTAL_PIXELS_MAX) {
+            throw new Error("image-dimensions-too-large");
+          }
+          if (state.profileImageSelectionId !== selectionId) {
+            decodedImage.close?.();
+            return;
+          }
+          state.profileCropImage = decodedImage;
+          decodedImage = null;
+          state.profileCropOpen = true;
+          state.profileCropZoomPercent = 100;
+          state.profileCropOffsetX = 0;
+          state.profileCropOffsetY = 0;
+          profilePhotoZoom.min = String(profileCropMinimumZoomPercent(width, height));
+          profilePhotoZoom.value = "100";
+          profilePhotoZoomValue.value = "100%";
+          profilePhotoCrop.classList.remove("hidden");
+          scheduleProfileCropPreview();
+          profilePhotoCropCanvas.focus({ preventScroll: true });
+          profilePhotoCrop.scrollIntoView({ block: "nearest" });
+          setAppStatus("크기와 위치를 맞춘 뒤 저장해 주세요.");
+        } catch (error) {
+          if (state.profileImageSelectionId !== selectionId) return;
+          decodedImage?.close?.();
+          resetProfileImageCrop();
+          const message = error?.message === "image-dimensions-too-large"
+            ? "이미지 해상도가 너무 커서 처리할 수 없어요."
+            : "프로필 사진을 읽지 못했어요. 다른 사진을 선택해 주세요.";
+          setAppStatus(message, "error");
+        } finally {
+          if (state.profileImageSelectionId === selectionId) setProfileImagePreparing(false);
+          profilePhotoInput.value = "";
+        }
+      }
+
+      async function saveCroppedProfileImage() {
+        if (state.profileImagePreparing || !state.profileCropImage) return;
+        const selectionId = state.profileImageSelectionId;
+        setProfileImagePreparing(true);
+        setAppStatus("프로필 사진을 1024×1024로 저장하는 중이에요.");
+        try {
+          const preparedFile = await createProfileImageFile();
+          if (state.profileImageSelectionId !== selectionId) return;
+          const data = await api("/profile/image", {
+            method: "POST",
+            headers: { "Content-Type": "image/webp" },
+            body: preparedFile,
+          });
+          if (state.profileImageSelectionId !== selectionId) return;
+          state.messenger.user = data.user;
+          if (state.session?.user) state.session.user = data.user;
+          state.profileImageUrl = data.user.profile_image_url || "";
+          resetProfileImageCrop();
+          renderProfileImagePreview();
+          renderMessenger();
+          selectProfilePhotoButton.focus({ preventScroll: true });
+          setAppStatus("프로필 사진을 1024×1024로 저장했어요.", "success");
+        } catch (error) {
+          if (state.profileImageSelectionId !== selectionId) return;
+          const message = error?.message === "profile-image-too-large"
+            ? "변환된 프로필 사진이 3MB를 넘어 저장할 수 없어요."
+            : "프로필 사진을 저장하지 못했어요. 다시 시도해 주세요.";
+          setAppStatus(message, "error");
+        } finally {
+          if (state.profileImageSelectionId === selectionId) setProfileImagePreparing(false);
+        }
+      }
+
+      function cancelProfileImageCrop() {
+        if (state.profileImagePreparing) return;
+        state.profileImageSelectionId += 1;
+        resetProfileImageCrop();
+        selectProfilePhotoButton.focus({ preventScroll: true });
+        setAppStatus("프로필 사진 변경을 취소했어요.");
+      }
+
+      function updateProfileCropZoom() {
+        const zoomPercent = Number(profilePhotoZoom.value);
+        if (!Number.isFinite(zoomPercent)) return;
+        state.profileCropZoomPercent = Math.max(
+          Number(profilePhotoZoom.min),
+          Math.min(Number(profilePhotoZoom.max), zoomPercent),
+        );
+        profilePhotoZoomValue.value = `${Math.round(state.profileCropZoomPercent)}%`;
+        clampProfileCropOffsets();
+        scheduleProfileCropPreview();
+      }
+
+      function moveProfileCrop(offsetX, offsetY) {
+        state.profileCropOffsetX = offsetX;
+        state.profileCropOffsetY = offsetY;
+        clampProfileCropOffsets();
+        scheduleProfileCropPreview();
+      }
+
+      function finishProfileCropPointer(event) {
+        const pointer = state.profileCropPointer;
+        if (!pointer || pointer.id !== event.pointerId) return;
+        if (profilePhotoCropCanvas.hasPointerCapture(event.pointerId)) {
+          profilePhotoCropCanvas.releasePointerCapture(event.pointerId);
+        }
+        state.profileCropPointer = null;
+        profilePhotoCropCanvas.classList.remove("dragging");
+      }
+
+      async function removeProfileImage() {
+        if (state.profileImagePreparing || state.profileCropOpen || !state.profileImageUrl) return;
+        state.profileImageSelectionId += 1;
+        setProfileImagePreparing(true);
+        try {
+          const data = await api("/profile/image/remove", { method: "POST" });
+          state.messenger.user = data.user;
+          if (state.session?.user) state.session.user = data.user;
+          state.profileImageUrl = "";
+          revokeProfileImagePreview();
+          renderProfileImagePreview();
+          renderMessenger();
+          setAppStatus("프로필 사진을 제거했어요.", "success");
+        } catch (error) {
+          setAppStatus(error.message, "error");
+        } finally {
+          setProfileImagePreparing(false);
+        }
+      }
+
       function openProfileEditor() {
         const user = state.messenger.user || state.session?.user;
+        resetProfileImageCrop();
         state.profilePixels = normalizeProfilePixels(user?.profile_pixels);
+        revokeProfileImagePreview();
+        state.profileImageUrl = user?.profile_image_url || "";
         state.customPalette = Array.isArray(user?.custom_palette) ? user.custom_palette : [];
         profileDisplayName.value = getDisplayName(user);
         profileFriendCode.value = user?.friend_code || "";
@@ -1549,15 +1963,26 @@ function selectCenteredStatusEmoji() {
         renderCustomPalette();
         renderPalettePicker();
         buildProfileEditor();
+        setProfileImagePreparing(state.profileImagePreparing);
+        renderProfileImagePreview();
         profileSheet.classList.remove("hidden");
       }
 
       function closeProfileEditor() {
+        if (state.profileImagePreparing) {
+          setAppStatus("프로필 사진 처리가 끝날 때까지 잠시 기다려 주세요.");
+          return;
+        }
+        resetProfileImageCrop();
         state.profilePainting = false;
         profileSheet.classList.add("hidden");
       }
 
       async function saveProfilePixels() {
+        if (state.profileImagePreparing) {
+          setAppStatus("프로필 사진 처리가 끝날 때까지 잠시 기다려 주세요.");
+          return;
+        }
         saveProfileButton.disabled = true;
         const user = state.messenger.user || state.session?.user;
         try {
@@ -1632,7 +2057,7 @@ function selectCenteredStatusEmoji() {
           const time = document.createElement("time");
           time.className = "item-time";
           time.textContent = formatTime(room.updated_at);
-          item.append(createAvatar(room.name, room.peer?.profile_pixels, room.peer?.presence, room.peer?.status_message), copy, time);
+          item.append(createAvatar(room.name, room.peer?.profile_pixels, room.peer?.presence, room.peer?.status_message, room.peer?.profile_image_url), copy, time);
           chatList.appendChild(item);
         });
       }
@@ -1705,19 +2130,12 @@ function selectCenteredStatusEmoji() {
       }
 
       function clearChatAttachment() {
+        state.chatAttachmentSelectionId += 1;
         state.chatAttachment = null;
         state.chatAttachmentType = "";
+        state.chatAttachmentPreparing = false;
         chatAttachmentInput.value = "";
         renderChatAttachmentPreview();
-      }
-
-      function fileToBase64(file) {
-        return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.addEventListener("load", () => resolve(String(reader.result || "").split(",", 2)[1] || ""));
-          reader.addEventListener("error", () => reject(new Error("Unable to read the file.")));
-          reader.readAsDataURL(file);
-        });
       }
 
       function attachmentContentType(file) {
@@ -1738,16 +2156,207 @@ function selectCenteredStatusEmoji() {
         }[extension] || "";
       }
 
+      function formatAttachmentSize(byteCount) {
+        if (byteCount < 1024 * 1024) return `${Math.max(1, Math.round(byteCount / 1024))}KB`;
+        return `${(byteCount / (1024 * 1024)).toFixed(1)}MB`;
+      }
+
+      function optimizedImageName(filename) {
+        const basename = (filename || "image").replace(/\.[^.]+$/, "").trim().slice(0, 100) || "image";
+        return `${basename}.webp`;
+      }
+
+      function decodeImageElement(file) {
+        return new Promise((resolve, reject) => {
+          const imageUrl = URL.createObjectURL(file);
+          const image = new Image();
+          image.addEventListener("load", () => {
+            URL.revokeObjectURL(imageUrl);
+            resolve(image);
+          }, { once: true });
+          image.addEventListener("error", () => {
+            URL.revokeObjectURL(imageUrl);
+            reject(new Error("image-decode-failed"));
+          }, { once: true });
+          image.src = imageUrl;
+        });
+      }
+
+      async function decodeAttachmentImage(file) {
+        if (typeof createImageBitmap === "function") {
+          try {
+            return await createImageBitmap(file, { imageOrientation: "from-image" });
+          } catch {
+            try {
+              return await createImageBitmap(file);
+            } catch {}
+          }
+        }
+        return decodeImageElement(file);
+      }
+
+      function createImageCanvas(width, height) {
+        const canUseOffscreenCanvas = typeof OffscreenCanvas === "function"
+          && typeof OffscreenCanvas.prototype.convertToBlob === "function";
+        return canUseOffscreenCanvas
+          ? new OffscreenCanvas(width, height)
+          : Object.assign(document.createElement("canvas"), { width, height });
+      }
+
+      function canvasToWebpBlob(canvas, quality = IMAGE_WEBP_QUALITY) {
+        if (typeof canvas.convertToBlob === "function") {
+          return canvas.convertToBlob({ type: "image/webp", quality });
+        }
+        return new Promise((resolve, reject) => {
+          canvas.toBlob(
+            (blob) => blob ? resolve(blob) : reject(new Error("image-encode-failed")),
+            "image/webp",
+            quality,
+          );
+        });
+      }
+
+      async function optimizeAttachmentImage(file) {
+        const bitmap = await decodeAttachmentImage(file);
+        try {
+          const width = bitmap.width;
+          const height = bitmap.height;
+          if (!width || !height || width * height > IMAGE_TOTAL_PIXELS_MAX) {
+            throw new Error("image-dimensions-too-large");
+          }
+
+          const scale = Math.min(1, IMAGE_EDGE_PIXELS_MAX / Math.max(width, height));
+          const targetWidth = Math.max(1, Math.round(width * scale));
+          const targetHeight = Math.max(1, Math.round(height * scale));
+          const canvas = createImageCanvas(targetWidth, targetHeight);
+          const context = canvas.getContext("2d", { alpha: true });
+          if (!context) throw new Error("image-canvas-unavailable");
+          context.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+
+          const blob = await canvasToWebpBlob(canvas);
+          if (blob.type !== "image/webp" || !blob.size || blob.size > file.size * IMAGE_REQUIRED_SAVINGS_RATIO) {
+            return file;
+          }
+          return new File([blob], optimizedImageName(file.name), {
+            type: "image/webp",
+            lastModified: file.lastModified,
+          });
+        } finally {
+          bitmap.close?.();
+        }
+      }
+
+      async function prepareChatAttachment(file, contentType) {
+        const canOptimize = contentType.startsWith("image/")
+          && contentType !== "image/gif"
+          && file.size >= IMAGE_OPTIMIZE_BYTES_MIN;
+        if (!canOptimize) return file;
+        return optimizeAttachmentImage(file);
+      }
+
+      async function selectChatAttachment(file) {
+        const selectionId = state.chatAttachmentSelectionId + 1;
+        state.chatAttachmentSelectionId = selectionId;
+        state.chatAttachment = null;
+        state.chatAttachmentType = "";
+        state.chatAttachmentPreparing = false;
+        chatAttachmentInput.value = "";
+        renderChatAttachmentPreview();
+
+        const contentType = attachmentContentType(file);
+        if (!contentType) {
+          clearChatAttachment();
+          setAppStatus("사진 또는 PDF 파일만 보낼 수 있어요.", "error");
+          return false;
+        }
+        const sourceLimit = contentType.startsWith("image/") && contentType !== "image/gif"
+          ? IMAGE_SOURCE_BYTES_MAX
+          : ATTACHMENT_UPLOAD_BYTES_MAX;
+        if (file.size > sourceLimit) {
+          clearChatAttachment();
+          setAppStatus(
+            sourceLimit === IMAGE_SOURCE_BYTES_MAX
+              ? "원본 이미지는 50MB 이하만 선택할 수 있어요."
+              : "PDF와 GIF는 8MB 이하만 보낼 수 있어요.",
+            "error",
+          );
+          return false;
+        }
+
+        const shouldShowProgress = contentType.startsWith("image/")
+          && contentType !== "image/gif"
+          && file.size >= IMAGE_OPTIMIZE_BYTES_MIN;
+        if (shouldShowProgress) {
+          state.chatAttachmentPreparing = true;
+          setAppStatus("이미지 크기를 줄이는 중이에요.");
+        }
+
+        let preparedFile = file;
+        try {
+          preparedFile = await prepareChatAttachment(file, contentType);
+        } catch (error) {
+          if (state.chatAttachmentSelectionId !== selectionId) return false;
+          if (error?.message === "image-dimensions-too-large") {
+            clearChatAttachment();
+            setAppStatus("이미지 해상도가 너무 커서 처리할 수 없어요.", "error");
+            return false;
+          }
+          if (file.size > ATTACHMENT_UPLOAD_BYTES_MAX) {
+            clearChatAttachment();
+            setAppStatus("이 브라우저에서 이미지를 8MB 이하로 줄이지 못했어요.", "error");
+            return false;
+          }
+          setAppStatus("이미지 최적화를 건너뛰고 원본을 첨부했어요.");
+        }
+
+        if (state.chatAttachmentSelectionId !== selectionId) return false;
+        if (preparedFile.size > ATTACHMENT_UPLOAD_BYTES_MAX) {
+          clearChatAttachment();
+          setAppStatus("압축 후에도 이미지가 8MB를 넘어 전송할 수 없어요.", "error");
+          return false;
+        }
+
+        state.chatAttachment = preparedFile;
+        state.chatAttachmentType = attachmentContentType(preparedFile);
+        state.chatAttachmentPreparing = false;
+        state.chatAttachmentTrayOpen = false;
+        resetAttachmentSwipe();
+        renderChatAttachmentTray();
+        renderChatAttachmentPreview();
+        if (preparedFile !== file) {
+          setAppStatus(
+            `이미지를 ${formatAttachmentSize(file.size)}에서 ${formatAttachmentSize(preparedFile.size)}로 줄였어요.`,
+            "success",
+          );
+        }
+        return true;
+      }
+
+      function pastedChatFile(clipboardData) {
+        if (!clipboardData) return null;
+        const directFile = Array.from(clipboardData.files || [])[0];
+        if (directFile) return directFile;
+        for (const item of Array.from(clipboardData.items || [])) {
+          if (item.kind !== "file") continue;
+          const file = item.getAsFile();
+          if (file) return file;
+        }
+        return null;
+      }
+
       async function uploadChatAttachment(file, contentType) {
-        const data = await fileToBase64(file);
         const result = await api("/uploads", {
           method: "POST",
-          body: JSON.stringify({ name: file.name, type: contentType, data }),
+          headers: {
+            "Content-Type": contentType,
+            "X-File-Name": encodeURIComponent(file.name),
+          },
+          body: file,
         });
         return result.attachment;
       }
 
-      function renderChatRoom() {
+      function renderChatRoom({ scrollToBottom = false } = {}) {
         const room = currentRoom();
         if (!room) {
           chatRoom.classList.add("hidden");
@@ -1760,11 +2369,21 @@ function selectCenteredStatusEmoji() {
         renderChatAttachmentPreview();
         const draft = state.chatDrafts[room.id] || "";
         if (chatMessageInput.value !== draft) chatMessageInput.value = draft;
-        chatRoomAvatar.replaceChildren(createAvatar(room.name, room.peer?.profile_pixels, presence, room.peer?.status_message));
+        chatRoomAvatar.replaceChildren(createAvatar(room.name, room.peer?.profile_pixels, presence, room.peer?.status_message, room.peer?.profile_image_url));
         chatRoomName.textContent = room.name; /*
         chatRoomPresence.textContent = isInThisRoom ? "대화방에 접속 중" : (presence?.online ? "활동 중" : "");
 
         */ chatRoomPresence.textContent = isInThisRoom ? "in chat" : (presence?.online ? "online" : "");
+        const previousScrollTop = chatMessageList.scrollTop;
+        const wasNearBottom = chatMessageList.scrollHeight - chatMessageList.clientHeight - previousScrollTop < 80;
+        const renderKey = `${room.id}|${state.messages.map((message) => (
+          `${message.id}:${message.read ? 1 : 0}:${message.pending ? 1 : 0}:${message.failed ? 1 : 0}`
+        )).join("|")}`;
+        if (state.renderedChatKey === renderKey) {
+          if (scrollToBottom) chatMessageList.scrollTop = chatMessageList.scrollHeight;
+          return;
+        }
+        state.renderedChatKey = renderKey;
         chatMessageList.replaceChildren();
         if (!state.messages.length) {
           const empty = document.createElement("p");
@@ -1819,7 +2438,11 @@ function selectCenteredStatusEmoji() {
           row.append(bubble, meta);
           chatMessageList.appendChild(row);
         });
-        requestAnimationFrame(() => { chatMessageList.scrollTop = chatMessageList.scrollHeight; });
+        requestAnimationFrame(() => {
+          chatMessageList.scrollTop = scrollToBottom || wasNearBottom
+            ? chatMessageList.scrollHeight
+            : previousScrollTop;
+        });
       }
 
       async function updatePresence() {
@@ -1834,14 +2457,17 @@ function selectCenteredStatusEmoji() {
         }
       }
 
-      async function loadChatMessages() {
+      async function loadChatMessages({ markRead = true, scrollToBottom = false } = {}) {
         if (!state.selectedRoomId) return;
         const roomId = state.selectedRoomId;
         try {
-          state.messages = await api(`/messages?room_id=${encodeURIComponent(roomId)}`);
+          const messages = await api(`/messages?room_id=${encodeURIComponent(roomId)}`);
           if (state.selectedRoomId !== roomId) return;
-          renderChatRoom();
-          await api("/rooms/read", { method: "POST", body: JSON.stringify({ roomId }) });
+          state.messages = messages;
+          renderChatRoom({ scrollToBottom });
+          if (markRead && state.selectedRoomId === roomId) {
+            await api("/rooms/read", { method: "POST", body: JSON.stringify({ roomId }) });
+          }
         } catch (error) {
           setAppStatus(error.message, "error");
         }
@@ -1853,7 +2479,7 @@ function selectCenteredStatusEmoji() {
         chatMessageInput.value = state.chatDrafts[roomId] || "";
         renderChatRoom();
         await updatePresence();
-        await loadChatMessages();
+        await loadChatMessages({ scrollToBottom: true });
         chatMessageInput.focus({ preventScroll: true });
       }
 
@@ -1868,6 +2494,10 @@ function selectCenteredStatusEmoji() {
 
       function sendChatMessage(event) {
         event.preventDefault();
+        if (state.chatAttachmentPreparing) {
+          setAppStatus("이미지 크기를 줄이는 중이에요. 잠시만 기다려 주세요.");
+          return;
+        }
         const roomId = state.selectedRoomId;
         const text = (chatMessageInput.value || state.chatDrafts[roomId] || "").trim();
         const attachmentFile = state.chatAttachment;
@@ -1895,7 +2525,7 @@ function selectCenteredStatusEmoji() {
         clearChatAttachment();
         if (state.selectedRoomId === roomId) {
           state.messages.push(pendingMessage);
-          renderChatRoom();
+          renderChatRoom({ scrollToBottom: true });
         }
         chatMessageInput.focus({ preventScroll: true });
 
@@ -1908,7 +2538,6 @@ function selectCenteredStatusEmoji() {
               state.messages = state.messages.map((candidate) => candidate.id === pendingId ? message : candidate);
               renderChatRoom();
             }
-            if (previewUrl) URL.revokeObjectURL(previewUrl);
           if (state.shortMessageNotice?.roomId === roomId) {
             clearShortMessageNotice();
             if (state.activeList === "shorts") renderShortShareBar();
@@ -1926,6 +2555,8 @@ function selectCenteredStatusEmoji() {
               renderChatRoom();
             }
           setAppStatus(error.message, "error");
+          } finally {
+            if (previewUrl) URL.revokeObjectURL(previewUrl);
           }
         })();
       }
@@ -1934,6 +2565,11 @@ function selectCenteredStatusEmoji() {
         if (state.eventSource || !state.session?.user) return;
         const source = new EventSource("/events");
         state.eventSource = source;
+        source.onopen = () => {
+          if (state.eventSource !== source) return;
+          state.eventConnected = true;
+          stopLiveSync();
+        };
         source.onmessage = async (event) => {
           let payload;
           try {
@@ -1948,19 +2584,19 @@ function selectCenteredStatusEmoji() {
           const isShortsView = state.activeList === "shorts";
           if (payload.type === "message_created") {
             const isIncoming = payload.message?.username !== state.messenger.user?.username;
+            if (!isIncoming) return;
             await loadMessenger(!isShortsView);
-            if (payload.roomId === state.selectedRoomId) await loadChatMessages();
+            if (payload.roomId === state.selectedRoomId) await loadChatMessages({ markRead: true });
             if (isShortsView) {
               const room = state.messenger.rooms.find((candidate) => candidate.id === payload.roomId);
               if (!state.shortInlineReply && isIncoming && room) showShortMessageNotice(room, payload.message);
               else if (!state.shortInlineReply) renderShortShareBar();
-            } else {
-              renderChatRoom();
             }
             return;
           }
           if (payload.type === "room_read" && payload.username !== state.messenger.user?.username && payload.roomId === state.selectedRoomId) {
-            await loadChatMessages();
+            await loadChatMessages({ markRead: false });
+            return;
           }
           await loadMessenger(!isShortsView);
           if (isShortsView) {
@@ -1973,7 +2609,10 @@ function selectCenteredStatusEmoji() {
           source.close();
           if (state.eventSource === source) {
             state.eventSource = null;
-            window.setTimeout(connectEvents, 1200);
+            state.eventConnected = false;
+            startLiveSync();
+            window.clearTimeout(state.eventReconnectTimer);
+            state.eventReconnectTimer = window.setTimeout(connectEvents, 1200);
           }
         };
       }
@@ -2020,7 +2659,7 @@ function selectCenteredStatusEmoji() {
           startButton.textContent = "대화 시작";
           startButton.addEventListener("click", () => createDirectRoom(friend.id));
           item.append(createAvatar(getDisplayName(friend), friend.profile_pixels, friend.presence), copy, startButton); */
-          item.append(createAvatar(getDisplayName(friend), friend.profile_pixels, friend.presence, friend.status_message), copy);
+          item.append(createAvatar(getDisplayName(friend), friend.profile_pixels, friend.presence, friend.status_message, friend.profile_image_url), copy);
           friendList.appendChild(item);
         });
       }
@@ -2052,8 +2691,8 @@ function selectCenteredStatusEmoji() {
           addButton.type = "button";
           addButton.className = "friend-action";
           addButton.textContent = "친구 추가";
-          addButton.addEventListener("click", () => addFriend(user.id));
-          item.append(createAvatar(getDisplayName(user), user.profile_pixels), copy, addButton);
+          addButton.addEventListener("click", () => addFriend(user.friend_code || user.friendCode || ""));
+          item.append(createAvatar(getDisplayName(user), user.profile_pixels, null, "", user.profile_image_url), copy, addButton);
           userDirectory.appendChild(item);
         });
       }
@@ -2075,7 +2714,8 @@ function selectCenteredStatusEmoji() {
         frame.loading = "lazy";
         frame.referrerPolicy = "strict-origin-when-cross-origin";
         frame.dataset.videoId = video.id;
-        setShortFrameSound(frame, false);
+        frame.dataset.src = shortEmbedSource(video.id, false);
+        frame.dataset.soundEnabled = "false";
         frame.title = video.title || "YouTube 쇼츠";
 
         const metadata = document.createElement("div");
@@ -2226,6 +2866,7 @@ function selectCenteredStatusEmoji() {
             room?.peer?.profile_pixels,
             room?.peer?.presence,
             room?.peer?.status_message,
+            room?.peer?.profile_image_url,
           ));
           const copy = document.createElement("span");
           copy.className = "short-message-copy";
@@ -2260,7 +2901,7 @@ function selectCenteredStatusEmoji() {
           person.className = "short-share-person"; /*
           person.title = `${room.name}에게 현재 쇼츠 보내기`;
           */ person.title = `Share to ${room.name}`;
-          person.appendChild(createAvatar(room.name, room.peer?.profile_pixels, room.peer?.presence, room.peer?.status_message));
+          person.appendChild(createAvatar(room.name, room.peer?.profile_pixels, room.peer?.presence, room.peer?.status_message, room.peer?.profile_image_url));
           const name = document.createElement("span");
           name.textContent = room.name;
           person.appendChild(name);
@@ -2430,34 +3071,45 @@ function selectCenteredStatusEmoji() {
       }
 
       function renderShorts() {
-        const scrollPosition = shortsView.scrollTop;
-        shortsFeed.replaceChildren();
+        if (state.youtube.renderedFeedVersion !== state.youtube.feedVersion) {
+          shortFrameObserver?.disconnect();
+          shortsFeed.replaceChildren();
+          state.youtube.renderedFeedVersion = state.youtube.feedVersion;
+          state.youtube.renderedGuestVideoCount = 0;
+        }
 
         if (!state.youtube.guestVideos.length) {
-          shortsFeed.appendChild(createShortEmptyCard(
+          shortsFeed.replaceChildren(createShortEmptyCard(
             state.youtube.guestError ? "쇼츠를 불러오지 못했어요" : "YouTube Shorts",
             state.youtube.guestError || "한국 쇼츠를 불러오는 중이에요.",
             state.youtube.guestLoading
               ? null
               : { label: "다시 불러오기", onClick: loadGuestShorts },
           ));
+          state.youtube.renderedGuestVideoCount = 0;
           return;
         }
 
-        state.youtube.guestVideos.forEach((video) => {
+        if (state.youtube.renderedGuestVideoCount === 0) {
+          shortsFeed.replaceChildren();
+        }
+        shortsFeed.querySelector(".short-load-error")?.remove();
+        state.youtube.guestVideos.slice(state.youtube.renderedGuestVideoCount).forEach((video) => {
           shortsFeed.appendChild(createShortCard(
             video,
             video.channel_title || "YouTube",
           ));
         });
+        state.youtube.renderedGuestVideoCount = state.youtube.guestVideos.length;
         if (state.youtube.guestError) {
-          shortsFeed.appendChild(createShortEmptyCard(
+          const errorCard = createShortEmptyCard(
             "다음 쇼츠를 불러오지 못했어요",
             state.youtube.guestError,
             { label: "다시 불러오기", onClick: loadGuestShorts },
-          ));
+          );
+          errorCard.classList.add("short-load-error");
+          shortsFeed.appendChild(errorCard);
         }
-        shortsView.scrollTop = scrollPosition;
         renderShortShareBar();
         loadVisibleShortFrames();
         syncActiveShortAudio();
@@ -2623,11 +3275,13 @@ function selectCenteredStatusEmoji() {
         chatList.classList.toggle("hidden", state.activeList !== "chats");
         friendList.classList.toggle("hidden", state.activeList !== "friends");
         shortsView.classList.toggle("hidden", state.activeList !== "shorts");
-        renderChats();
-        renderFriends();
-        renderDirectory();
-        renderShorts();
-        renderShortShareBar();
+        if (state.activeList === "chats") renderChats();
+        if (state.activeList === "friends") renderFriends();
+        if (state.activeList === "shorts") {
+          renderShorts();
+          renderShortShareBar();
+        }
+        if (!directorySheet.classList.contains("hidden")) renderDirectory();
       }
 
       function applyMessengerData(data) {
@@ -2681,8 +3335,13 @@ function selectCenteredStatusEmoji() {
       }
 
       function startLiveSync() {
+        if (state.eventConnected || state.liveSyncTimer) return;
+        state.liveSyncTimer = window.setInterval(syncLiveState, 15000);
+      }
+
+      function stopLiveSync() {
         window.clearInterval(state.liveSyncTimer);
-        state.liveSyncTimer = window.setInterval(syncLiveState, 1500);
+        state.liveSyncTimer = null;
       }
 
       async function startApp() {
@@ -2692,21 +3351,32 @@ function selectCenteredStatusEmoji() {
           await loadMessenger();
           connectEvents();
           startLiveSync();
+          window.clearTimeout(state.appStartRetryTimer);
+          state.appStartRetryTimer = null;
+          state.appStartRetryCount = 0;
           openStatusEmojiPicker();
           setAppStatus("친구를 추가하거나 새 대화를 시작해 보세요.");
         } catch (error) {
-          showAuth();
-          setAuthStatus(error.message, "error");
+          setAppStatus(`${error.message} 연결되면 자동으로 다시 시도합니다.`, "error");
+          const retryDelay = Math.min(30000, 1000 * (2 ** Math.min(state.appStartRetryCount, 5)));
+          state.appStartRetryCount += 1;
+          window.clearTimeout(state.appStartRetryTimer);
+          state.appStartRetryTimer = window.setTimeout(() => {
+            if (state.session?.user) startApp();
+          }, retryDelay);
         }
       }
 
       function setActiveList(listName) {
+        if (state.activeList === listName) return;
         if (listName === "shorts") {
           state.youtube.feedVersion += 1;
           state.youtube.guestVideos = [];
           state.youtube.guestCursor = "";
           state.youtube.guestError = "";
           state.youtube.guestLoading = false;
+          state.youtube.renderedFeedVersion = -1;
+          state.youtube.renderedGuestVideoCount = 0;
           shortsView.scrollTop = 0;
         }
         state.activeList = listName;
@@ -2842,8 +3512,6 @@ function selectCenteredStatusEmoji() {
       async function logout() {
         try {
           await api("/logout", { method: "POST", body: JSON.stringify({}) });
-          state.sessionToken = "";
-          sessionStorage.removeItem("free-danny-session-token");
           showAuth();
           setAuthStatus("로그아웃했어요. 쇼츠를 보려면 로그인해 주세요.");
         } catch (error) {
@@ -3040,6 +3708,9 @@ function selectCenteredStatusEmoji() {
       async function checkSession() {
         try {
           const session = await api("/session", { headers: {} });
+          window.clearTimeout(state.sessionCheckTimer);
+          state.sessionCheckTimer = null;
+          state.sessionCheckRetryCount = 0;
           if (session.authenticated) {
             rememberSession(session);
             await startApp();
@@ -3047,8 +3718,11 @@ function selectCenteredStatusEmoji() {
             showAuth();
           }
         } catch (error) {
-          showAuth();
-          setAuthStatus("로그인 상태를 확인할 수 없어요. 다시 로그인해 주세요.", "error");
+          setAuthStatus("로그인 상태를 확인하지 못했어요. 연결되면 자동으로 다시 확인합니다.", "error");
+          const retryDelay = Math.min(30000, 1000 * (2 ** Math.min(state.sessionCheckRetryCount, 5)));
+          state.sessionCheckRetryCount += 1;
+          window.clearTimeout(state.sessionCheckTimer);
+          state.sessionCheckTimer = window.setTimeout(checkSession, retryDelay);
         }
       }
 
@@ -3119,23 +3793,13 @@ function selectCenteredStatusEmoji() {
       chatAttachmentInput.addEventListener("change", () => {
         const file = chatAttachmentInput.files?.[0];
         if (!file) return;
-        const contentType = attachmentContentType(file);
-        if (!contentType) {
-          clearChatAttachment();
-          setAppStatus("사진 또는 PDF 파일만 보낼 수 있어요.", "error");
-          return;
-        }
-        if (file.size > 8 * 1024 * 1024) {
-          clearChatAttachment();
-          setAppStatus("파일은 8MB 이하만 보낼 수 있어요.", "error");
-          return;
-        }
-        state.chatAttachment = file;
-        state.chatAttachmentType = contentType;
-        state.chatAttachmentTrayOpen = false;
-        resetAttachmentSwipe();
-        renderChatAttachmentTray();
-        renderChatAttachmentPreview();
+        void selectChatAttachment(file);
+      });
+      chatMessageInput.addEventListener("paste", (event) => {
+        const file = pastedChatFile(event.clipboardData);
+        if (!file) return;
+        event.preventDefault();
+        void selectChatAttachment(file);
       });
       chatMessageInput.addEventListener("input", () => {
         if (state.selectedRoomId) state.chatDrafts[state.selectedRoomId] = chatMessageInput.value;
@@ -3173,8 +3837,12 @@ function selectCenteredStatusEmoji() {
         syncActiveShortAudio();
       });
       shortsView.addEventListener("scroll", () => {
-        maybeLoadMoreGuestShorts();
-        syncActiveShortAudio();
+        if (state.shortScrollFrame !== null) return;
+        state.shortScrollFrame = requestAnimationFrame(() => {
+          state.shortScrollFrame = null;
+          maybeLoadMoreGuestShorts();
+          syncActiveShortAudio();
+        });
       }, { passive: true });
       openDirectoryButton.addEventListener("click", openDirectory);
       closeDirectoryButton.addEventListener("click", closeDirectory);
@@ -3187,10 +3855,64 @@ function selectCenteredStatusEmoji() {
       });
       openProfileButton.addEventListener("click", openProfileEditor);
       closeProfileButton.addEventListener("click", closeProfileEditor);
+      selectProfilePhotoButton.addEventListener("click", () => {
+        if (!state.profileImagePreparing) profilePhotoInput.click();
+      });
+      profilePhotoInput.addEventListener("change", () => {
+        const file = profilePhotoInput.files?.[0];
+        if (file) void uploadSelectedProfileImage(file);
+      });
+      profilePhotoZoom.addEventListener("input", updateProfileCropZoom);
+      profilePhotoCropCanvas.addEventListener("pointerdown", (event) => {
+        if (state.profileImagePreparing || !state.profileCropImage) return;
+        event.preventDefault();
+        profilePhotoCropCanvas.focus({ preventScroll: true });
+        profilePhotoCropCanvas.setPointerCapture(event.pointerId);
+        state.profileCropPointer = {
+          id: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          offsetX: state.profileCropOffsetX,
+          offsetY: state.profileCropOffsetY,
+        };
+        profilePhotoCropCanvas.classList.add("dragging");
+      });
+      profilePhotoCropCanvas.addEventListener("pointermove", (event) => {
+        const pointer = state.profileCropPointer;
+        if (!pointer || pointer.id !== event.pointerId) return;
+        event.preventDefault();
+        const previewWidth = Math.max(1, profilePhotoCropCanvas.getBoundingClientRect().width);
+        const outputPixelsPerClientPixel = PROFILE_IMAGE_SIDE / previewWidth;
+        moveProfileCrop(
+          pointer.offsetX + (event.clientX - pointer.startX) * outputPixelsPerClientPixel,
+          pointer.offsetY + (event.clientY - pointer.startY) * outputPixelsPerClientPixel,
+        );
+      });
+      profilePhotoCropCanvas.addEventListener("pointerup", finishProfileCropPointer);
+      profilePhotoCropCanvas.addEventListener("pointercancel", finishProfileCropPointer);
+      profilePhotoCropCanvas.addEventListener("lostpointercapture", (event) => {
+        if (state.profileCropPointer?.id !== event.pointerId) return;
+        state.profileCropPointer = null;
+        profilePhotoCropCanvas.classList.remove("dragging");
+      });
+      profilePhotoCropCanvas.addEventListener("keydown", (event) => {
+        if (!state.profileCropImage || !event.key.startsWith("Arrow")) return;
+        event.preventDefault();
+        const distance = event.shiftKey ? 32 : 8;
+        const offsetX = state.profileCropOffsetX
+          + (event.key === "ArrowLeft" ? -distance : event.key === "ArrowRight" ? distance : 0);
+        const offsetY = state.profileCropOffsetY
+          + (event.key === "ArrowUp" ? -distance : event.key === "ArrowDown" ? distance : 0);
+        moveProfileCrop(offsetX, offsetY);
+      });
+      cancelProfilePhotoButton.addEventListener("click", cancelProfileImageCrop);
+      saveProfilePhotoButton.addEventListener("click", () => void saveCroppedProfileImage());
+      removeProfilePhotoButton.addEventListener("click", () => void removeProfileImage());
       clearProfileButton.addEventListener("click", () => {
         state.profilePixels = blankProfilePixels();
         state.lastPixelTapIndex = -1;
         buildProfileEditor();
+        renderProfileImagePreview();
       });
       profilePaletteSelect.addEventListener("change", () => {
         state.selectedProfilePalette = profilePaletteSelect.value;

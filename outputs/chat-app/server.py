@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import base64
+import copy
 import hashlib
 import hmac
 import json
@@ -10,7 +10,9 @@ import queue
 import re
 import secrets
 import threading
+import time
 import uuid
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -50,7 +52,15 @@ STATE_FILE = Path(os.getenv("STATE_FILE", str(DATA_DIR / "chat_state.json")))
 UPLOADS_DIR = Path(os.getenv("UPLOADS_DIR", str(DATA_DIR / "uploads")))
 MAX_MESSAGES_PER_ROOM = 200
 MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
-MAX_ATTACHMENT_REQUEST_BYTES = 12 * 1024 * 1024
+MAX_PROFILE_IMAGE_BYTES = 3 * 1024 * 1024
+MAX_JSON_REQUEST_BYTES = 1024 * 1024
+MAX_FORM_REQUEST_BYTES = 64 * 1024
+MAX_SHORTS_SEEN_IDS = 500
+MAX_SSE_QUEUE_SIZE = 64
+SSE_HEARTBEAT_SECONDS = 15
+SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
+SESSION_REFRESH_THRESHOLD_SECONDS = 24 * 60 * 60
+MAX_SESSIONS = 10_000
 ATTACHMENT_TYPES = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
@@ -63,6 +73,8 @@ ATTACHMENT_TYPES = {
 }
 PROFILE_PIXEL_SIDE = 32
 PROFILE_PIXEL_COUNT = PROFILE_PIXEL_SIDE * PROFILE_PIXEL_SIDE
+PROFILE_IMAGE_SIDE = 1024
+PROFILE_IMAGE_NAME_PATTERN = re.compile(r"profile_[0-9a-f]{24}\.webp")
 PROFILE_PALETTE = ("#ffffff", "#000000", "#777777", "#d9d9d9", "#e53935", "#fb8c00", "#fdd835", "#43a047", "#1e88e5", "#8e24aa", "#6d4c41", "#ec407a")
 SESSION_COOKIE_NAME = "codex_talk_session"
 OAUTH_STATE_COOKIE_NAME = "colorless_oauth_state"
@@ -86,7 +98,7 @@ SUPABASE_STATE_TABLE = "app_state"
 SUPABASE_STATE_ID = "primary"
 SUPABASE_UPLOAD_BUCKET = "chat-uploads"
 SUPABASE_ENABLED = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
-SUBSCRIBERS: set[queue.Queue] = set()
+SUBSCRIBERS: dict[queue.Queue, str] = {}
 SUBSCRIBERS_LOCK = threading.Lock()
 SHORTS_FEED_LOCK = threading.Lock()
 APP_NAME = "Colorless"
@@ -169,6 +181,60 @@ def normalize_profile_pixels(value: object) -> list[str]:
     if isinstance(value, str) and len(value) == PROFILE_PIXEL_COUNT and all(character in "0123456789ab" for character in value):
         return [PROFILE_PALETTE[int(character, 12)] for character in value]
     return blank_profile_pixels()
+
+
+def normalize_profile_image_url(value: object) -> str:
+    url = str(value or "").strip()
+    if not url.startswith("/uploads/"):
+        return ""
+    filename = Path(unquote(url.removeprefix("/uploads/"))).name
+    if not PROFILE_IMAGE_NAME_PATTERN.fullmatch(filename):
+        return ""
+    return f"/uploads/{filename}"
+
+
+def profile_image_filename(user_id: str) -> str:
+    digest = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:24]
+    return f"profile_{digest}.webp"
+
+
+def webp_dimensions(content: bytes) -> tuple[int, int] | None:
+    if len(content) < 20 or content[:4] != b"RIFF" or content[8:12] != b"WEBP":
+        return None
+    if int.from_bytes(content[4:8], "little") + 8 != len(content):
+        return None
+
+    offset = 12
+    max_chunks = 64
+    for _ in range(max_chunks):
+        if offset + 8 > len(content):
+            return None
+        chunk_type = content[offset:offset + 4]
+        chunk_size = int.from_bytes(content[offset + 4:offset + 8], "little")
+        data_start = offset + 8
+        data_end = data_start + chunk_size
+        if data_end > len(content):
+            return None
+        chunk = content[data_start:data_end]
+
+        if chunk_type == b"VP8X" and len(chunk) >= 10:
+            width = int.from_bytes(chunk[4:7], "little") + 1
+            height = int.from_bytes(chunk[7:10], "little") + 1
+            return width, height
+        if chunk_type == b"VP8L" and len(chunk) >= 5 and chunk[0] == 0x2F:
+            packed_dimensions = int.from_bytes(chunk[1:5], "little")
+            width = (packed_dimensions & 0x3FFF) + 1
+            height = ((packed_dimensions >> 14) & 0x3FFF) + 1
+            return width, height
+        if chunk_type == b"VP8 " and len(chunk) >= 10 and chunk[3:6] == b"\x9d\x01\x2a":
+            width = int.from_bytes(chunk[6:8], "little") & 0x3FFF
+            height = int.from_bytes(chunk[8:10], "little") & 0x3FFF
+            return width, height
+
+        offset = data_end + (chunk_size & 1)
+        if offset >= len(content):
+            return None
+    return None
 
 
 def valid_hex_color(value: object) -> bool:
@@ -388,27 +454,131 @@ def supabase_object_url(filename: str) -> str:
 
 
 class SessionStore:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        ttl_seconds: int = SESSION_TTL_SECONDS,
+        max_sessions: int = MAX_SESSIONS,
+        state_store: StateStore | None = None,
+    ) -> None:
         self.lock = threading.Lock()
-        self.sessions: dict[str, str] = {}
+        self.ttl_seconds = ttl_seconds
+        self.max_sessions = max_sessions
+        self.state_store = state_store
+        self.sessions: dict[str, dict] = {}
+
+    @staticmethod
+    def _token_hash(token: str) -> str:
+        # Persist only a one-way digest so a leaked state file cannot be used as an auth cookie.
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def _cleanup_locked(self, now: float) -> None:
+        expired = [token for token, session in self.sessions.items() if session["expires_at"] <= now]
+        for token in expired:
+            self.sessions.pop(token, None)
+
+        overflow = len(self.sessions) - self.max_sessions
+        if overflow > 0:
+            oldest = sorted(self.sessions, key=lambda token: self.sessions[token]["created_at"])[:overflow]
+            for token in oldest:
+                self.sessions.pop(token, None)
 
     def create(self, username: str) -> str:
         token = secrets.token_urlsafe(32)
+        token_hash = self._token_hash(token)
+        if self.state_store is not None:
+            self.state_store.create_session(token_hash, username, self.ttl_seconds, self.max_sessions)
+            return token
+
+        now = time.time()
         with self.lock:
-            self.sessions[token] = username
+            self._cleanup_locked(now)
+            self.sessions[token_hash] = {
+                "username": username,
+                "created_at": now,
+                "expires_at": now + self.ttl_seconds,
+            }
+            self._cleanup_locked(now)
         return token
 
     def get_username(self, token: str | None) -> str | None:
         if not token:
             return None
+        token_hash = self._token_hash(token)
+        if self.state_store is not None:
+            return self.state_store.get_session_username(token_hash, self.ttl_seconds)
+
+        now = time.time()
         with self.lock:
-            return self.sessions.get(token)
+            self._cleanup_locked(now)
+            session = self.sessions.get(token_hash)
+            if session is None:
+                return None
+            session["expires_at"] = now + self.ttl_seconds
+            return str(session["username"])
 
     def destroy(self, token: str | None) -> None:
         if not token:
             return
+        token_hash = self._token_hash(token)
+        if self.state_store is not None:
+            self.state_store.destroy_session(token_hash)
+            return
         with self.lock:
-            self.sessions.pop(token, None)
+            self.sessions.pop(token_hash, None)
+
+
+class UploadGrantStore:
+    def __init__(self, ttl_seconds: int = 600) -> None:
+        self.lock = threading.Lock()
+        self.ttl_seconds = ttl_seconds
+        self.grants: dict[str, tuple[str, float]] = {}
+
+    def _cleanup_locked(self, now: float) -> None:
+        for filename, (_, expires_at) in list(self.grants.items()):
+            if expires_at <= now:
+                self.grants.pop(filename, None)
+
+    def create(self, filename: str, username: str) -> None:
+        now = time.monotonic()
+        with self.lock:
+            self._cleanup_locked(now)
+            self.grants[filename] = (username, now + self.ttl_seconds)
+
+    def owns(self, filename: str, username: str) -> bool:
+        now = time.monotonic()
+        with self.lock:
+            self._cleanup_locked(now)
+            grant = self.grants.get(filename)
+            return grant is not None and hmac.compare_digest(grant[0], username)
+
+    def consume(self, filename: str, username: str) -> bool:
+        with self.lock:
+            grant = self.grants.get(filename)
+            if grant is None or not hmac.compare_digest(grant[0], username):
+                return False
+            self.grants.pop(filename, None)
+            return True
+
+
+class SlidingWindowRateLimiter:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.attempts: dict[str, deque[float]] = {}
+
+    def allow(self, key: str, limit: int, window_seconds: int) -> tuple[bool, int]:
+        now = time.monotonic()
+        cutoff = now - window_seconds
+        with self.lock:
+            if key not in self.attempts and len(self.attempts) >= 10_000:
+                self.attempts.pop(next(iter(self.attempts)))
+            timestamps = self.attempts.setdefault(key, deque())
+            while timestamps and timestamps[0] <= cutoff:
+                timestamps.popleft()
+            if len(timestamps) >= limit:
+                retry_after = max(1, int(window_seconds - (now - timestamps[0])))
+                return False, retry_after
+            timestamps.append(now)
+            return True, 0
 
 
 class PresenceStore:
@@ -576,8 +746,21 @@ class StateStore:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
+        self._persist_condition = threading.Condition(self.lock)
+        self._persist_event = threading.Event()
+        self._persist_stop = threading.Event()
+        self._revision = 0
+        self._persisted_revision = 0
+        self._persist_error: Exception | None = None
         self.state = self._load_state()
+        self._rebuild_indexes_locked()
+        self._persist_thread = threading.Thread(
+            target=self._persist_worker,
+            name="chat-state-writer",
+            daemon=True,
+        )
+        self._persist_thread.start()
 
     def _default_rooms(self) -> list[dict]:
         created_at = utc_now_iso()
@@ -599,6 +782,7 @@ class StateStore:
             "rooms": rooms,
             "messages": {room["id"]: [] for room in rooms},
             "shorts_feeds": {},
+            "sessions": {},
         }
 
     def _new_room(
@@ -625,7 +809,11 @@ class StateStore:
 
     def _write_state(self, state: dict) -> None:
         if SUPABASE_ENABLED:
-            payload = json.dumps({"id": SUPABASE_STATE_ID, "state": state}, ensure_ascii=False).encode("utf-8")
+            payload = json.dumps(
+                {"id": SUPABASE_STATE_ID, "state": state},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
             headers = supabase_headers("application/json")
             headers["Prefer"] = "resolution=merge-duplicates,return=minimal"
             fetch_json(
@@ -636,8 +824,82 @@ class StateStore:
             )
             return
         temp_path = self.path.with_suffix(".tmp")
-        temp_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        temp_path.write_text(
+            json.dumps(state, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
         temp_path.replace(self.path)
+
+    def _rebuild_indexes_locked(self) -> None:
+        self._users_by_username = {user["username"]: user for user in self.state["users"]}
+        self._users_by_id = {user["id"]: user for user in self.state["users"]}
+        self._rooms_by_id = {room["id"]: room for room in self.state["rooms"]}
+        self._profile_images = {
+            Path(image_url).name
+            for user in self.state["users"]
+            if (image_url := normalize_profile_image_url(user.get("profile_image_url")))
+        }
+        self._attachment_rooms: dict[str, set[str]] = {}
+        for room_id, messages in self.state["messages"].items():
+            for message in messages:
+                attachment = message.get("attachment")
+                if not isinstance(attachment, dict):
+                    continue
+                filename = Path(str(attachment.get("url", ""))).name
+                if filename:
+                    self._attachment_rooms.setdefault(filename, set()).add(room_id)
+
+    def _persist_worker(self) -> None:
+        while True:
+            self._persist_event.wait()
+            if not self._persist_stop.is_set():
+                time.sleep(0.05)
+
+            with self.lock:
+                if self._persisted_revision >= self._revision:
+                    self._persist_event.clear()
+                    if self._persist_stop.is_set():
+                        return
+                    continue
+                revision = self._revision
+                snapshot = copy.deepcopy(self.state)
+
+            try:
+                self._write_state(snapshot)
+            except Exception as error:
+                with self.lock:
+                    self._persist_error = error
+                    self._persist_condition.notify_all()
+                if self._persist_stop.wait(0.5):
+                    return
+                continue
+
+            with self.lock:
+                self._persisted_revision = max(self._persisted_revision, revision)
+                self._persist_error = None
+                if self._persisted_revision >= self._revision:
+                    self._persist_event.clear()
+                self._persist_condition.notify_all()
+                if self._persist_stop.is_set() and self._persisted_revision >= self._revision:
+                    return
+
+    def flush(self, timeout: float = 5.0) -> bool:
+        deadline = time.monotonic() + timeout
+        with self.lock:
+            target_revision = self._revision
+            while self._persisted_revision < target_revision:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or self._persist_error is not None:
+                    return False
+                self._persist_condition.wait(remaining)
+            return True
+
+    def close(self, timeout: float = 5.0) -> bool:
+        flushed = self.flush(timeout)
+        self._persist_stop.set()
+        self._persist_event.set()
+        self._persist_thread.join(timeout)
+        return flushed and not self._persist_thread.is_alive()
 
     def _migrate_state(self, state: dict) -> dict:
         state.setdefault("users", [])
@@ -645,6 +907,7 @@ class StateStore:
         state.setdefault("rooms", [])
         state.setdefault("messages", {})
         state.setdefault("shorts_feeds", {})
+        state.setdefault("sessions", {})
 
         if (
             not isinstance(state["users"], list)
@@ -652,6 +915,7 @@ class StateStore:
             or not isinstance(state["rooms"], list)
             or not isinstance(state["messages"], dict)
             or not isinstance(state["shorts_feeds"], dict)
+            or not isinstance(state["sessions"], dict)
         ):
             return self._default_state()
 
@@ -666,6 +930,10 @@ class StateStore:
             user.setdefault("age_group", "")
             user.setdefault("gender", "")
             user["profile_pixels"] = normalize_profile_pixels(user.get("profile_pixels"))
+            user["profile_pixels_blank"] = all(color == "#ffffff" for color in user["profile_pixels"])
+            user["profile_image_url"] = normalize_profile_image_url(user.get("profile_image_url"))
+            profile_image_version = user.get("profile_image_version", 0)
+            user["profile_image_version"] = profile_image_version if isinstance(profile_image_version, int) and profile_image_version >= 0 else 0
             user["custom_palette"] = normalize_custom_palette(user.get("custom_palette"))
 
         used_friend_codes: set[str] = set()
@@ -720,6 +988,25 @@ class StateStore:
                 state["messages"][room_id] = []
 
         valid_usernames = {user["username"] for user in state["users"]}
+        now = time.time()
+        sessions = {
+            token_hash: {
+                "username": str(session["username"]),
+                "created_at": float(session["created_at"]),
+                "expires_at": float(session["expires_at"]),
+            }
+            for token_hash, session in state["sessions"].items()
+            if isinstance(token_hash, str)
+            and re.fullmatch(r"[0-9a-f]{64}", token_hash)
+            and isinstance(session, dict)
+            and session.get("username") in valid_usernames
+            and isinstance(session.get("created_at"), (int, float))
+            and isinstance(session.get("expires_at"), (int, float))
+            and float(session["expires_at"]) > now
+        }
+        state["sessions"] = dict(
+            sorted(sessions.items(), key=lambda item: item[1]["created_at"])[-MAX_SESSIONS:]
+        )
         state["shorts_feeds"] = {
             username: {
                 "next_cursor": str(feed.get("next_cursor", ""))[:200],
@@ -727,7 +1014,7 @@ class StateStore:
                     video_id
                     for video_id in feed.get("seen_ids", [])
                     if isinstance(video_id, str) and 1 <= len(video_id) <= 64
-                ],
+                ][-MAX_SHORTS_SEEN_IDS:],
             }
             for username, feed in state["shorts_feeds"].items()
             if username in valid_usernames and isinstance(feed, dict) and isinstance(feed.get("seen_ids", []), list)
@@ -769,7 +1056,64 @@ class StateStore:
         return state
 
     def _save_locked(self) -> None:
-        self._write_state(self.state)
+        self._revision += 1
+        self._persist_event.set()
+
+    def _cleanup_sessions_locked(self, now: float, max_sessions: int) -> bool:
+        sessions = self.state["sessions"]
+        expired = [
+            token_hash
+            for token_hash, session in sessions.items()
+            if not isinstance(session, dict) or float(session.get("expires_at", 0)) <= now
+        ]
+        for token_hash in expired:
+            sessions.pop(token_hash, None)
+
+        overflow = len(sessions) - max_sessions
+        if overflow > 0:
+            oldest = sorted(sessions, key=lambda token_hash: float(sessions[token_hash].get("created_at", 0)))[:overflow]
+            for token_hash in oldest:
+                sessions.pop(token_hash, None)
+        return bool(expired or overflow > 0)
+
+    def create_session(self, token_hash: str, username: str, ttl_seconds: int, max_sessions: int) -> None:
+        now = time.time()
+        with self.lock:
+            self._cleanup_sessions_locked(now, max_sessions)
+            self.state["sessions"][token_hash] = {
+                "username": username,
+                "created_at": now,
+                "expires_at": now + ttl_seconds,
+            }
+            self._cleanup_sessions_locked(now, max_sessions)
+            self._save_locked()
+
+    def get_session_username(self, token_hash: str, ttl_seconds: int) -> str | None:
+        now = time.time()
+        with self.lock:
+            changed = self._cleanup_sessions_locked(now, MAX_SESSIONS)
+            session = self.state["sessions"].get(token_hash)
+            if session is None:
+                if changed:
+                    self._save_locked()
+                return None
+            username = str(session.get("username", ""))
+            if username not in self._users_by_username:
+                self.state["sessions"].pop(token_hash, None)
+                self._save_locked()
+                return None
+            refresh_threshold = min(SESSION_REFRESH_THRESHOLD_SECONDS, max(1, ttl_seconds // 2))
+            if float(session["expires_at"]) - now <= refresh_threshold:
+                session["expires_at"] = now + ttl_seconds
+                changed = True
+            if changed:
+                self._save_locked()
+            return username
+
+    def destroy_session(self, token_hash: str) -> None:
+        with self.lock:
+            if self.state["sessions"].pop(token_hash, None) is not None:
+                self._save_locked()
 
     def get_shorts_feed(self, username: str) -> tuple[list[str], str]:
         with self.lock:
@@ -777,16 +1121,19 @@ class StateStore:
             return list(feed.get("seen_ids", [])), str(feed.get("next_cursor", ""))
 
     def save_shorts_feed(self, username: str, seen_ids: list[str], next_cursor: str) -> None:
+        bounded_seen_ids = list(dict.fromkeys(seen_ids))[-MAX_SHORTS_SEEN_IDS:]
         with self.lock:
             self.state["shorts_feeds"][username] = {
-                "seen_ids": seen_ids,
+                "seen_ids": bounded_seen_ids,
                 "next_cursor": next_cursor[:200],
             }
             self._save_locked()
 
     def _user_public(self, user: dict) -> dict:
         provider = user.get("auth_provider", "local")
-        profile_pixels = normalize_profile_pixels(user.get("profile_pixels"))
+        profile_pixels = user.get("profile_pixels", [])
+        profile_image_url = normalize_profile_image_url(user.get("profile_image_url"))
+        profile_image_version = user.get("profile_image_version", 0)
         return {
             "id": user["id"],
             "username": user["username"],
@@ -802,8 +1149,9 @@ class StateStore:
                 "demo": "개발용 SNS",
             }.get(provider, provider),
             "created_at": user["created_at"],
-            "profile_pixels": [] if all(color == "#ffffff" for color in profile_pixels) else profile_pixels,
-            "custom_palette": normalize_custom_palette(user.get("custom_palette")),
+            "profile_pixels": [] if user.get("profile_pixels_blank", False) else profile_pixels,
+            "profile_image_url": f"{profile_image_url}?v={profile_image_version}" if profile_image_url else "",
+            "custom_palette": user.get("custom_palette", []),
         }
 
     def _presence_for_user(self, user: dict) -> dict:
@@ -815,9 +1163,12 @@ class StateStore:
 
     def _room_summary(self, room: dict, viewer: dict | None = None) -> dict:
         messages = self.state["messages"].get(room["id"], [])
-        participants = {message["username"] for message in messages if message.get("username")}
-        if room.get("created_by") and room["created_by"] != "system":
-            participants.add(room["created_by"])
+        participant_count = len(room.get("participant_ids", []))
+        if not participant_count:
+            participants = {message["username"] for message in messages if message.get("username")}
+            if room.get("created_by") and room["created_by"] != "system":
+                participants.add(room["created_by"])
+            participant_count = len(participants)
         last_message = messages[-1] if messages else None
         summary = {
             "id": room["id"],
@@ -827,13 +1178,13 @@ class StateStore:
             "created_at": room["created_at"],
             "updated_at": room["updated_at"],
             "kind": room.get("kind", "group"),
-            "participant_count": len(room.get("participant_ids", [])) or len(participants),
+            "participant_count": participant_count,
             "message_count": len(messages),
             "last_message": last_message,
         }
         if room.get("kind") == "direct" and viewer is not None:
             peer_id = next((user_id for user_id in room.get("participant_ids", []) if user_id != viewer["id"]), "")
-            peer = next((user for user in self.state["users"] if user["id"] == peer_id), None)
+            peer = self._users_by_id.get(peer_id)
             if peer is not None:
                 summary["name"] = peer.get("display_name") or peer["username"]
                 summary["peer"] = self._user_public(peer)
@@ -842,7 +1193,7 @@ class StateStore:
 
     def get_user_record(self, username: str) -> dict | None:
         with self.lock:
-            return next((item for item in self.state["users"] if item["username"] == username), None)
+            return self._users_by_username.get(username)
 
     def get_user_public(self, username: str) -> dict | None:
         user = self.get_user_record(username)
@@ -854,10 +1205,29 @@ class StateStore:
         if not valid_profile_pixels(pixels):
             return None
         with self.lock:
-            user = next((candidate for candidate in self.state["users"] if candidate["username"] == username), None)
+            user = self._users_by_username.get(username)
             if user is None:
                 return None
             user["profile_pixels"] = normalize_profile_pixels(pixels)
+            user["profile_pixels_blank"] = all(color == "#ffffff" for color in user["profile_pixels"])
+            self._save_locked()
+            return self._user_public(user)
+
+    def update_profile_image(self, username: str, image_url: str) -> dict | None:
+        normalized_url = normalize_profile_image_url(image_url)
+        if image_url and not normalized_url:
+            return None
+        with self.lock:
+            user = self._users_by_username.get(username)
+            if user is None:
+                return None
+            previous_filename = Path(normalize_profile_image_url(user.get("profile_image_url"))).name
+            user["profile_image_url"] = normalized_url
+            user["profile_image_version"] = time.time_ns() if normalized_url else 0
+            if previous_filename:
+                self._profile_images.discard(previous_filename)
+            if normalized_url:
+                self._profile_images.add(Path(normalized_url).name)
             self._save_locked()
             return self._user_public(user)
 
@@ -873,7 +1243,7 @@ class StateStore:
             return None, "친구 ID는 영문 소문자, 숫자, 밑줄로 4~20자여야 합니다."
 
         with self.lock:
-            user = next((candidate for candidate in self.state["users"] if candidate["username"] == username), None)
+            user = self._users_by_username.get(username)
             if user is None:
                 return None, "사용자를 찾을 수 없습니다."
             if any(candidate["username"] != username and candidate.get("friend_code") == normalized_friend_code for candidate in self.state["users"]):
@@ -882,6 +1252,7 @@ class StateStore:
             user["status_message"] = normalized_status_message
             user["friend_code"] = normalized_friend_code
             user["profile_pixels"] = normalize_profile_pixels(pixels)
+            user["profile_pixels_blank"] = all(color == "#ffffff" for color in user["profile_pixels"])
             self._save_locked()
             return self._user_public(user), None
 
@@ -890,7 +1261,7 @@ class StateStore:
             return None, "나만의 팔레트는 올바른 색상 10개까지 저장할 수 있습니다."
 
         with self.lock:
-            user = next((candidate for candidate in self.state["users"] if candidate["username"] == username), None)
+            user = self._users_by_username.get(username)
             if user is None:
                 return None, "사용자를 찾을 수 없습니다."
             user["custom_palette"] = normalize_custom_palette(colors)
@@ -931,7 +1302,7 @@ class StateStore:
         return friend_code
 
     def _user_by_id_locked(self, user_id: str) -> dict | None:
-        return next((user for user in self.state["users"] if user["id"] == user_id), None)
+        return self._users_by_id.get(user_id)
 
     def _friend_ids_locked(self, user_id: str) -> set[str]:
         friend_ids: set[str] = set()
@@ -968,7 +1339,7 @@ class StateStore:
             self.seed_demo_network(user["username"])
         with self.lock:
             friend_ids = self._friend_ids_locked(user["id"])
-            raw_friends = [friend for friend in self.state["users"] if friend["id"] in friend_ids]
+            raw_friends = [friend for friend_id in friend_ids if (friend := self._users_by_id.get(friend_id)) is not None]
             friends = [self._user_public(friend) for friend in raw_friends]
             for friend, raw_friend in zip(friends, raw_friends):
                 friend["presence"] = self._presence_for_user(raw_friend)
@@ -987,8 +1358,8 @@ class StateStore:
 
     def get_messages(self, room_id: str, username: str) -> list[dict] | None:
         with self.lock:
-            user = next((candidate for candidate in self.state["users"] if candidate["username"] == username), None)
-            room = next((candidate for candidate in self.state["rooms"] if candidate["id"] == room_id), None)
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None
             messages = self.state["messages"].get(room_id, [])
@@ -1009,21 +1380,60 @@ class StateStore:
                 for message in messages
             ]
 
-    def mark_room_read(self, room_id: str, username: str) -> dict | None:
+    def mark_room_read(self, room_id: str, username: str) -> tuple[dict | None, bool]:
         with self.lock:
-            user = next((candidate for candidate in self.state["users"] if candidate["username"] == username), None)
-            room = next((candidate for candidate in self.state["rooms"] if candidate["id"] == room_id), None)
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
             if user is None or room is None or not self._can_access_room_locked(room, user):
-                return None
+                return None, False
             messages = self.state["messages"].get(room_id, [])
             if not messages:
-                return self._room_summary(room, user)
+                return self._room_summary(room, user), False
             last_read_by = room.setdefault("last_read_by", {})
             last_message_id = messages[-1]["id"]
-            if last_read_by.get(user["id"]) != last_message_id:
-                last_read_by[user["id"]] = last_message_id
-                self._save_locked()
-            return self._room_summary(room, user)
+            if last_read_by.get(user["id"]) == last_message_id:
+                return self._room_summary(room, user), False
+            last_read_by[user["id"]] = last_message_id
+            self._save_locked()
+            return self._room_summary(room, user), True
+
+    def room_event_recipients(self, room_id: str) -> set[str]:
+        with self.lock:
+            room = self._rooms_by_id.get(room_id)
+            if room is None:
+                return set()
+            if room.get("is_public"):
+                return set(self._users_by_username)
+            return {
+                user["username"]
+                for user_id in room.get("participant_ids", [])
+                if (user := self._users_by_id.get(user_id)) is not None
+            }
+
+    def presence_event_recipients(self, username: str) -> set[str]:
+        with self.lock:
+            user = self._users_by_username.get(username)
+            if user is None:
+                return set()
+            recipient_ids = self._friend_ids_locked(user["id"])
+            recipient_ids.add(user["id"])
+            return {
+                candidate["username"]
+                for user_id in recipient_ids
+                if (candidate := self._users_by_id.get(user_id)) is not None
+            }
+
+    def can_access_attachment(self, filename: str, username: str) -> bool:
+        with self.lock:
+            user = self._users_by_username.get(username)
+            if user is None:
+                return False
+            if filename in self._profile_images:
+                return True
+            return any(
+                (room := self._rooms_by_id.get(room_id)) is not None and self._can_access_room_locked(room, user)
+                for room_id in self._attachment_rooms.get(filename, set())
+            )
 
     def add_friend(self, username: str, friend_user_id: str) -> tuple[dict | None, str | None]:
         with self.lock:
@@ -1087,6 +1497,7 @@ class StateStore:
             room["kind"] = "direct"
             room["participant_ids"] = participant_ids
             self.state["rooms"].append(room)
+            self._rooms_by_id[room["id"]] = room
             self.state["messages"][room["id"]] = []
             self._save_locked()
             return self._room_summary(room, user), True, None
@@ -1119,13 +1530,17 @@ class StateStore:
             return None, "성별을 선택해 주세요."
 
         with self.lock:
-            existing = next((item for item in self.state["users"] if item["username"] == normalized_username), None)
-            if existing is not None:
+            if normalized_username in self._users_by_username:
                 return None, "이미 존재하는 사용자 이름입니다."
             if any(candidate.get("friend_code") == normalized_friend_code for candidate in self.state["users"]):
                 return None, "이미 사용 중인 친구 ID입니다."
 
-            salt_hex, digest = hash_password(password)
+        salt_hex, digest = hash_password(password)
+        with self.lock:
+            if normalized_username in self._users_by_username:
+                return None, "이미 존재하는 사용자 이름입니다."
+            if any(candidate.get("friend_code") == normalized_friend_code for candidate in self.state["users"]):
+                return None, "이미 사용 중인 친구 ID입니다."
             user = {
                 "id": new_id("user"),
                 "username": normalized_username,
@@ -1139,11 +1554,16 @@ class StateStore:
                 "password_hash": digest,
                 "created_at": utc_now_iso(),
                 "profile_pixels": blank_profile_pixels(),
+                "profile_pixels_blank": True,
+                "profile_image_url": "",
+                "profile_image_version": 0,
                 "custom_palette": [],
                 "age_group": age_group,
                 "gender": gender,
             }
             self.state["users"].append(user)
+            self._users_by_username[user["username"]] = user
+            self._users_by_id[user["id"]] = user
             self._save_locked()
             return self._user_public(user), None
 
@@ -1179,11 +1599,16 @@ class StateStore:
                 "password_hash": "",
                 "created_at": utc_now_iso(),
                 "profile_pixels": blank_profile_pixels(),
+                "profile_pixels_blank": True,
+                "profile_image_url": "",
+                "profile_image_version": 0,
                 "custom_palette": [],
                 "age_group": "",
                 "gender": "",
                 }
                 self.state["users"].append(user)
+                self._users_by_username[user["username"]] = user
+                self._users_by_id[user["id"]] = user
             else:
                 if status_message:
                     user["status_message"] = status_message[:40]
@@ -1193,20 +1618,27 @@ class StateStore:
     def authenticate_user(self, username: str, password: str) -> dict | None:
         normalized_username = username.strip()
         with self.lock:
-            user = next((item for item in self.state["users"] if item["username"] == normalized_username), None)
+            user = self._users_by_username.get(normalized_username)
             if user is None or not user.get("password_hash"):
                 return None
-            _, digest = hash_password(password, user["password_salt"])
-            if not hmac.compare_digest(digest, user["password_hash"]):
+            password_salt = str(user["password_salt"])
+            password_hash = str(user["password_hash"])
+        _, digest = hash_password(password, password_salt)
+        if not hmac.compare_digest(digest, password_hash):
+            return None
+        with self.lock:
+            user = self._users_by_username.get(normalized_username)
+            if user is None or not hmac.compare_digest(str(user.get("password_hash", "")), password_hash):
                 return None
             return self._user_public(user)
 
     def seed_demo_network(self, username: str) -> None:
         with self.lock:
-            user = next((item for item in self.state["users"] if item["username"] == username), None)
+            user = self._users_by_username.get(username)
             if user is None or user.get("auth_provider") != "demo":
                 return
 
+            changed = False
             contacts: list[dict] = []
             active_emojis = ["\U0001F600", "\U0001F60E", "\U0001F970", "\U0001F622", "\U0001F620"]
             for index in range(1, 21):
@@ -1233,13 +1665,22 @@ class StateStore:
                         "password_hash": "",
                         "created_at": utc_now_iso(),
                         "profile_pixels": blank_profile_pixels(),
+                        "profile_pixels_blank": True,
+                        "profile_image_url": "",
+                        "profile_image_version": 0,
                         "custom_palette": [],
                         "age_group": "",
                         "gender": "",
                     }
                     self.state["users"].append(contact)
+                    self._users_by_username[contact["username"]] = contact
+                    self._users_by_id[contact["id"]] = contact
+                    changed = True
                 if index <= len(active_emojis):
-                    contact["status_message"] = active_emojis[index - 1]
+                    emoji = active_emojis[index - 1]
+                    if contact.get("status_message") != emoji:
+                        contact["status_message"] = emoji
+                        changed = True
                     PRESENCE.set_demo_active(contact["username"], active_emojis[index - 1])
                 contacts.append(contact)
 
@@ -1247,6 +1688,7 @@ class StateStore:
                 user_ids = sorted([user["id"], contact["id"]])
                 if not any(sorted(item.get("user_ids", [])) == user_ids for item in self.state["friendships"]):
                     self.state["friendships"].append({"user_ids": user_ids, "created_at": utc_now_iso()})
+                    changed = True
                 room = next(
                     (
                         item
@@ -1260,23 +1702,27 @@ class StateStore:
                     room["kind"] = "direct"
                     room["participant_ids"] = user_ids
                     self.state["rooms"].append(room)
+                    self._rooms_by_id[room["id"]] = room
                     self.state["messages"][room["id"]] = []
-            self._save_locked()
+                    changed = True
+            if changed:
+                self._save_locked()
 
     def create_room(self, name: str, description: str, created_by: str) -> dict:
         with self.lock:
             room = self._new_room(new_id("room"), name[:32], description[:100], created_by[:24])
-            creator = next((user for user in self.state["users"] if user["username"] == created_by), None)
+            creator = self._users_by_username.get(created_by)
             room["participant_ids"] = [creator["id"]] if creator else []
             self.state["rooms"].append(room)
+            self._rooms_by_id[room["id"]] = room
             self.state["messages"][room["id"]] = []
             self._save_locked()
             return self._room_summary(room)
 
     def add_message(self, room_id: str, username: str, text: str, attachment: dict | None = None) -> tuple[dict, dict] | None:
         with self.lock:
-            room = next((item for item in self.state["rooms"] if item["id"] == room_id), None)
-            user = next((item for item in self.state["users"] if item["username"] == username), None)
+            room = self._rooms_by_id.get(room_id)
+            user = self._users_by_username.get(username)
             if room is None or user is None or not self._can_access_room_locked(room, user):
                 return None
 
@@ -1289,25 +1735,54 @@ class StateStore:
             }
             if attachment is not None:
                 message["attachment"] = attachment
+                filename = Path(str(attachment.get("url", ""))).name
+                if filename:
+                    self._attachment_rooms.setdefault(filename, set()).add(room_id)
             room_messages = self.state["messages"][room_id]
             room_messages.append(message)
             if len(room_messages) > MAX_MESSAGES_PER_ROOM:
+                removed_messages = room_messages[:-MAX_MESSAGES_PER_ROOM]
                 del room_messages[:-MAX_MESSAGES_PER_ROOM]
+                removed_filenames = {
+                    Path(str(candidate.get("attachment", {}).get("url", ""))).name
+                    for candidate in removed_messages
+                    if isinstance(candidate.get("attachment"), dict)
+                }
+                remaining_filenames = {
+                    Path(str(candidate.get("attachment", {}).get("url", ""))).name
+                    for candidate in room_messages
+                    if isinstance(candidate.get("attachment"), dict)
+                }
+                for removed_filename in removed_filenames - remaining_filenames:
+                    rooms = self._attachment_rooms.get(removed_filename)
+                    if rooms is not None:
+                        rooms.discard(room_id)
+                        if not rooms:
+                            self._attachment_rooms.pop(removed_filename, None)
             room["updated_at"] = message["timestamp"]
             self._save_locked()
             return message, self._room_summary(room)
 
 
-def push_event(event: dict) -> None:
+def push_event(event: dict, recipients: set[str]) -> None:
+    if not recipients:
+        return
     with SUBSCRIBERS_LOCK:
-        dead_subscribers = []
-        for subscriber in SUBSCRIBERS:
+        dead_subscribers: list[queue.Queue] = []
+        for subscriber, username in SUBSCRIBERS.items():
+            if username not in recipients:
+                continue
             try:
                 subscriber.put_nowait(event)
-            except Exception:
+            except queue.Full:
                 dead_subscribers.append(subscriber)
         for subscriber in dead_subscribers:
-            SUBSCRIBERS.discard(subscriber)
+            SUBSCRIBERS.pop(subscriber, None)
+            try:
+                while True:
+                    subscriber.get_nowait()
+            except queue.Empty:
+                subscriber.put_nowait(None)
 
 
 def social_provider_config(google_redirect_uri: str, kakao_redirect_uri: str) -> dict:
@@ -1340,10 +1815,12 @@ def social_provider_config(google_redirect_uri: str, kakao_redirect_uri: str) ->
 
 
 STORE = StateStore(STATE_FILE)
-SESSIONS = SessionStore()
+SESSIONS = SessionStore(state_store=STORE)
 PRESENCE = PresenceStore()
 PHONE_VERIFICATIONS = PhoneVerificationStore()
 OAUTH_STATES = OAuthStateStore()
+UPLOAD_GRANTS = UploadGrantStore()
+RATE_LIMITER = SlidingWindowRateLimiter()
 
 
 class ChatHandler(BaseHTTPRequestHandler):
@@ -1377,6 +1854,19 @@ class ChatHandler(BaseHTTPRequestHandler):
     def cookie_secure(self) -> bool:
         return self.request_scheme() == "https"
 
+    def allow_request(self, scope: str, limit: int, window_seconds: int) -> bool:
+        client_ip = self.client_address[0] if self.client_address else "unknown"
+        allowed, retry_after = RATE_LIMITER.allow(f"{scope}:{client_ip}", limit, window_seconds)
+        if allowed:
+            return True
+        self.close_connection = True
+        self.send_json(
+            {"error": "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요."},
+            HTTPStatus.TOO_MANY_REQUESTS,
+            headers={"Retry-After": str(retry_after)},
+        )
+        return False
+
     def do_GET(self) -> None:
         parsed_url = urlparse(self.path)
         path = parsed_url.path
@@ -1389,7 +1879,10 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.serve_asset(path)
             return
         if path.startswith("/uploads/"):
-            self.serve_upload(path)
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.serve_upload(path, user)
             return
         if path == "/health":
             self.send_json({"ok": True, "app_name": APP_NAME}, HTTPStatus.OK)
@@ -1488,6 +1981,18 @@ class ChatHandler(BaseHTTPRequestHandler):
                 return
             self.update_profile(user)
             return
+        if path == "/profile/image":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.upload_profile_image(user)
+            return
+        if path == "/profile/image/remove":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.remove_profile_image(user)
+            return
         if path == "/profile/custom-palette":
             user = self.require_auth()
             if user is None:
@@ -1580,9 +2085,12 @@ class ChatHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content)
 
-    def serve_upload(self, request_path: str) -> None:
+    def serve_upload(self, request_path: str, user: dict) -> None:
         filename = Path(unquote(request_path.removeprefix("/uploads/"))).name
         if not filename or Path(filename).suffix.lower() not in ATTACHMENT_TYPES.values():
+            self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+            return
+        if not STORE.can_access_attachment(filename, user["username"]):
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
             return
 
@@ -1608,6 +2116,7 @@ class ChatHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "private, max-age=86400")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "sandbox")
         self.end_headers()
         self.wfile.write(content)
 
@@ -1634,13 +2143,16 @@ class ChatHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.end_headers()
 
-        subscriber: queue.Queue = queue.Queue()
+        subscriber: queue.Queue = queue.Queue(maxsize=MAX_SSE_QUEUE_SIZE)
         token = self.read_session_token()
         with SUBSCRIBERS_LOCK:
-            SUBSCRIBERS.add(subscriber)
+            SUBSCRIBERS[subscriber] = user["username"]
 
         if PRESENCE.connect(token, user["username"]):
-            push_event({"type": "presence_updated", "username": user["username"]})
+            push_event(
+                {"type": "presence_updated", "username": user["username"]},
+                STORE.presence_event_recipients(user["username"]),
+            )
 
         try:
             hello = {"type": "hello", "timestamp": utc_now_iso(), "username": user["username"]}
@@ -1648,7 +2160,16 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
             while True:
-                event = subscriber.get()
+                if SESSIONS.get_username(token) != user["username"]:
+                    break
+                try:
+                    event = subscriber.get(timeout=SSE_HEARTBEAT_SECONDS)
+                except queue.Empty:
+                    self.wfile.write(b": heartbeat\n\n")
+                    self.wfile.flush()
+                    continue
+                if event is None:
+                    break
                 payload = f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode("utf-8")
                 self.wfile.write(payload)
                 self.wfile.flush()
@@ -1656,10 +2177,13 @@ class ChatHandler(BaseHTTPRequestHandler):
             pass
         finally:
             with SUBSCRIBERS_LOCK:
-                SUBSCRIBERS.discard(subscriber)
+                SUBSCRIBERS.pop(subscriber, None)
             username, went_offline = PRESENCE.disconnect(token)
             if went_offline:
-                push_event({"type": "presence_updated", "username": username})
+                push_event(
+                    {"type": "presence_updated", "username": username},
+                    STORE.presence_event_recipients(username),
+                )
 
     def start_google_login(self) -> None:
         if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
@@ -1718,20 +2242,14 @@ class ChatHandler(BaseHTTPRequestHandler):
             return
 
         token = SESSIONS.create(user["username"])
-        content = (
-            "<!doctype html><script>"
-            f"sessionStorage.setItem('free-danny-session-token',{json.dumps(token)});"
-            "location.replace('/');"
-            "</script>"
-        ).encode("utf-8")
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(content)))
+        self.send_response(HTTPStatus.FOUND)
+        self.send_header("Location", "/")
         self.send_header("Set-Cookie", make_cookie_header(token, max_age=60 * 60 * 24 * 7, secure=self.cookie_secure()))
         self.end_headers()
-        self.wfile.write(content)
 
     def google_id_token_login(self) -> None:
+        if not self.allow_request("google-login", 10, 15 * 60):
+            return
         is_redirect_login = "application/x-www-form-urlencoded" in self.headers.get("Content-Type", "")
         payload = self.read_form_body() if is_redirect_login else self.read_json_body()
         if payload is None:
@@ -1782,7 +2300,7 @@ class ChatHandler(BaseHTTPRequestHandler):
             return
 
         self.send_json(
-            {"authenticated": True, "user": user, "sessionToken": token},
+            {"authenticated": True, "user": user},
             HTTPStatus.OK,
             headers={"Set-Cookie": make_cookie_header(token, max_age=60 * 60 * 24 * 7, secure=self.cookie_secure())},
         )
@@ -1899,6 +2417,8 @@ class ChatHandler(BaseHTTPRequestHandler):
         )
 
     def demo_social_login(self) -> None:
+        if not self.allow_request("demo-login", 10, 15 * 60):
+            return
         payload = self.read_json_body()
         if payload is None:
             return
@@ -1921,12 +2441,14 @@ class ChatHandler(BaseHTTPRequestHandler):
         STORE.seed_demo_network(user["username"])
         token = SESSIONS.create(user["username"])
         self.send_json(
-            {"authenticated": True, "user": user, "sessionToken": token},
+            {"authenticated": True, "user": user},
             HTTPStatus.OK,
             headers={"Set-Cookie": make_cookie_header(token, max_age=60 * 60 * 24 * 7, secure=self.cookie_secure())},
         )
 
     def serve_public_shorts(self, query: dict[str, list[str]], user: dict) -> None:
+        if not self.allow_request(f"shorts:{user['username']}", 60, 60):
+            return
         if not YOUTUBE_API_KEY:
             self.send_json({"error": "YOUTUBE_API_KEY 설정이 필요해요."}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
@@ -2160,6 +2682,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "YouTube 쇼츠를 불러오지 못했어요. API 키와 할당량을 확인해 주세요."}, HTTPStatus.BAD_GATEWAY)
 
     def signup(self) -> None:
+        if not self.allow_request("signup", 10, 15 * 60):
+            return
         payload = self.read_json_body()
         if payload is None:
             return
@@ -2184,7 +2708,7 @@ class ChatHandler(BaseHTTPRequestHandler):
 
         token = SESSIONS.create(user["username"])
         self.send_json(
-            {"authenticated": True, "user": user, "sessionToken": token},
+            {"authenticated": True, "user": user},
             HTTPStatus.CREATED,
             headers={"Set-Cookie": make_cookie_header(token, max_age=60 * 60 * 24 * 7, secure=self.cookie_secure())},
         )
@@ -2196,6 +2720,8 @@ class ChatHandler(BaseHTTPRequestHandler):
 
         username = str(payload.get("username", "")).strip()
         password = str(payload.get("password", "")).strip()
+        if not self.allow_request(f"login:{username.lower()[:24]}", 10, 15 * 60):
+            return
         user = STORE.authenticate_user(username, password)
         if user is None:
             self.send_json({"error": "사용자 이름 또는 비밀번호가 올바르지 않습니다."}, HTTPStatus.UNAUTHORIZED)
@@ -2203,13 +2729,12 @@ class ChatHandler(BaseHTTPRequestHandler):
 
         token = SESSIONS.create(user["username"])
         self.send_json(
-            {"authenticated": True, "user": user, "sessionToken": token},
+            {"authenticated": True, "user": user},
             HTTPStatus.OK,
             headers={"Set-Cookie": make_cookie_header(token, max_age=60 * 60 * 24 * 7, secure=self.cookie_secure())},
         )
 
     def logout(self) -> None:
-        self.discard_request_body()
         token = self.read_session_token()
         SESSIONS.destroy(token)
         self.send_json(
@@ -2219,6 +2744,8 @@ class ChatHandler(BaseHTTPRequestHandler):
         )
 
     def request_phone_code(self) -> None:
+        if not self.allow_request("phone-code", 5, 10 * 60):
+            return
         payload = self.read_json_body()
         if payload is None:
             return
@@ -2241,6 +2768,8 @@ class ChatHandler(BaseHTTPRequestHandler):
         self.send_json(response, HTTPStatus.OK)
 
     def verify_phone_code(self) -> None:
+        if not self.allow_request("phone-verify", 10, 10 * 60):
+            return
         payload = self.read_json_body()
         if payload is None:
             return
@@ -2280,6 +2809,76 @@ class ChatHandler(BaseHTTPRequestHandler):
             return
         self.send_json({"user": profile}, HTTPStatus.OK)
 
+    def upload_profile_image(self, user: dict) -> None:
+        if not self.allow_request(f"profile-image:{user['username']}", 12, 60 * 60):
+            return
+        content = self.read_request_body(MAX_PROFILE_IMAGE_BYTES)
+        if content is None:
+            return
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type != "image/webp" or webp_dimensions(content) != (PROFILE_IMAGE_SIDE, PROFILE_IMAGE_SIDE):
+            self.send_json(
+                {"error": "프로필 사진은 1024×1024 WebP 형식이어야 합니다."},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        filename = profile_image_filename(user["id"])
+        try:
+            if SUPABASE_ENABLED:
+                headers = supabase_headers("image/webp")
+                headers["x-upsert"] = "true"
+                fetch_json(
+                    supabase_object_url(filename),
+                    method="POST",
+                    headers=headers,
+                    data=content,
+                )
+            else:
+                UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+                upload_path = (UPLOADS_DIR / filename).resolve()
+                upload_path.relative_to(UPLOADS_DIR.resolve())
+                temp_path = (UPLOADS_DIR / f".{filename}.{uuid.uuid4().hex}.tmp").resolve()
+                temp_path.relative_to(UPLOADS_DIR.resolve())
+                try:
+                    temp_path.write_bytes(content)
+                    temp_path.replace(upload_path)
+                finally:
+                    temp_path.unlink(missing_ok=True)
+        except (ConnectionError, OSError, ValueError):
+            self.send_json({"error": "프로필 사진을 저장하지 못했어요."}, HTTPStatus.BAD_GATEWAY)
+            return
+
+        profile = STORE.update_profile_image(user["username"], f"/uploads/{filename}")
+        if profile is None:
+            self.send_json({"error": "사용자를 찾을 수 없습니다."}, HTTPStatus.NOT_FOUND)
+            return
+        self.send_json({"user": profile}, HTTPStatus.OK)
+
+    def remove_profile_image(self, user: dict) -> None:
+        if not self.allow_request(f"profile-image:{user['username']}", 12, 60 * 60):
+            return
+        profile = STORE.update_profile_image(user["username"], "")
+        if profile is None:
+            self.send_json({"error": "사용자를 찾을 수 없습니다."}, HTTPStatus.NOT_FOUND)
+            return
+
+        filename = profile_image_filename(user["id"])
+        try:
+            if SUPABASE_ENABLED:
+                fetch_bytes(
+                    supabase_object_url(filename),
+                    method="DELETE",
+                    headers=supabase_headers(),
+                )
+            else:
+                upload_path = (UPLOADS_DIR / filename).resolve()
+                upload_path.relative_to(UPLOADS_DIR.resolve())
+                upload_path.unlink(missing_ok=True)
+        except (ConnectionError, OSError, ValueError):
+            pass
+        self.send_json({"user": profile}, HTTPStatus.OK)
+
     def update_custom_palette(self, user: dict) -> None:
         payload = self.read_json_body()
         if payload is None:
@@ -2303,7 +2902,10 @@ class ChatHandler(BaseHTTPRequestHandler):
             return
 
         room = STORE.create_room(name, description, user["username"])
-        push_event({"type": "room_created", "room": room})
+        push_event(
+            {"type": "room_created", "room": room},
+            STORE.room_event_recipients(room["id"]),
+        )
         self.send_json(room, HTTPStatus.CREATED)
 
     def add_friend(self, user: dict) -> None:
@@ -2337,7 +2939,7 @@ class ChatHandler(BaseHTTPRequestHandler):
 
         room_id = str(payload.get("roomId", "")).strip()
         text = str(payload.get("text", "")).strip()
-        attachment = self.message_attachment(payload.get("attachment"))
+        attachment = self.message_attachment(payload.get("attachment"), user["username"])
         if not room_id or (not text and attachment is None):
             self.send_json({"error": "roomId와 text는 필수입니다."}, HTTPStatus.BAD_REQUEST)
             return
@@ -2348,38 +2950,32 @@ class ChatHandler(BaseHTTPRequestHandler):
             return
 
         message, room = result
-        push_event({"type": "message_created", "roomId": room_id, "room": room, "message": message})
+        if attachment is not None:
+            UPLOAD_GRANTS.consume(Path(attachment["url"]).name, user["username"])
+        push_event(
+            {"type": "message_created", "roomId": room_id, "room": room, "message": message},
+            STORE.room_event_recipients(room_id),
+        )
         self.send_json(message, HTTPStatus.CREATED)
 
     def upload_attachment(self, user: dict) -> None:
-        content_length = int(self.headers.get("Content-Length", "0"))
-        if content_length > MAX_ATTACHMENT_REQUEST_BYTES:
-            self.discard_request_body()
-            self.send_json({"error": "File size must be 8MB or less."}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+        if not self.allow_request(f"upload:{user['username']}", 30, 60 * 60):
+            return
+        content = self.read_request_body(MAX_ATTACHMENT_BYTES)
+        if content is None:
             return
 
-        payload = self.read_json_body()
-        if payload is None:
-            return
-
-        content_type = str(payload.get("type", "")).strip().lower()
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
         extension = ATTACHMENT_TYPES.get(content_type)
-        encoded_data = str(payload.get("data", "")).strip()
-        if extension is None or not encoded_data:
+        if extension is None:
             self.send_json({"error": "Only image and PDF files are supported."}, HTTPStatus.BAD_REQUEST)
             return
 
-        try:
-            content = base64.b64decode(encoded_data, validate=True)
-        except (ValueError, TypeError):
-            self.send_json({"error": "Unable to read the file."}, HTTPStatus.BAD_REQUEST)
-            return
-
-        if not content or len(content) > MAX_ATTACHMENT_BYTES or not self.valid_attachment_content(content_type, content):
+        if not content or not self.valid_attachment_content(content_type, content):
             self.send_json({"error": "Unsupported or oversized file. Images and PDFs can be up to 8MB."}, HTTPStatus.BAD_REQUEST)
             return
 
-        filename = f"{new_id('upload')}{extension}"
+        filename = f"upload_{uuid.uuid4().hex}{extension}"
         if SUPABASE_ENABLED:
             headers = supabase_headers(content_type)
             headers["x-upsert"] = "false"
@@ -2396,7 +2992,8 @@ class ChatHandler(BaseHTTPRequestHandler):
         else:
             UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
             (UPLOADS_DIR / filename).write_bytes(content)
-        original_name = Path(str(payload.get("name", "file"))).name.strip()[:120] or f"file{extension}"
+        original_name = Path(unquote(self.headers.get("X-File-Name", "file"))).name.strip()[:120] or f"file{extension}"
+        UPLOAD_GRANTS.create(filename, user["username"])
         attachment = {
             "url": f"/uploads/{filename}",
             "name": original_name,
@@ -2418,13 +3015,15 @@ class ChatHandler(BaseHTTPRequestHandler):
         }
         return signatures.get(content_type, False)
 
-    def message_attachment(self, value: object) -> dict | None:
+    def message_attachment(self, value: object, username: str) -> dict | None:
         if not isinstance(value, dict):
             return None
         url = str(value.get("url", "")).strip()
         filename = Path(unquote(url.removeprefix("/uploads/"))).name
         content_type = str(value.get("type", "")).strip().lower()
         if not url.startswith("/uploads/") or ATTACHMENT_TYPES.get(content_type) != Path(filename).suffix.lower():
+            return None
+        if not UPLOAD_GRANTS.owns(filename, username) and not STORE.can_access_attachment(filename, username):
             return None
         if not SUPABASE_ENABLED:
             upload_path = (UPLOADS_DIR / filename).resolve()
@@ -2451,11 +3050,15 @@ class ChatHandler(BaseHTTPRequestHandler):
         if payload is None:
             return
         room_id = str(payload.get("roomId", "")).strip()
-        room = STORE.mark_room_read(room_id, user["username"])
+        room, changed = STORE.mark_room_read(room_id, user["username"])
         if room is None:
             self.send_json({"error": "채팅방을 찾을 수 없습니다."}, HTTPStatus.NOT_FOUND)
             return
-        push_event({"type": "room_read", "roomId": room_id, "username": user["username"]})
+        if changed:
+            push_event(
+                {"type": "room_read", "roomId": room_id, "username": user["username"]},
+                STORE.room_event_recipients(room_id),
+            )
         self.send_json({"room": room}, HTTPStatus.OK)
 
     def update_presence(self, user: dict) -> None:
@@ -2466,7 +3069,10 @@ class ChatHandler(BaseHTTPRequestHandler):
         emoji = str(payload.get("emoji", "")).strip()[:16]
         changed = PRESENCE.update(self.read_session_token(), user["username"], active_room_id, emoji)
         if changed:
-            push_event({"type": "presence_updated", "username": user["username"]})
+            push_event(
+                {"type": "presence_updated", "username": user["username"]},
+                STORE.presence_event_recipients(user["username"]),
+            )
         self.send_json({"presence": PRESENCE.for_user(user["username"])}, HTTPStatus.OK)
 
     def current_user(self) -> dict | None:
@@ -2505,14 +3111,36 @@ class ChatHandler(BaseHTTPRequestHandler):
         morsel = cookie.get(SESSION_COOKIE_NAME)
         if morsel:
             return morsel.value
-        return self.headers.get("X-Session-Token", "").strip() or None
+        return None
+
+    def read_request_body(self, max_bytes: int) -> bytes | None:
+        if self.headers.get("Transfer-Encoding"):
+            self.close_connection = True
+            self.send_json({"error": "Chunked request bodies are not supported."}, HTTPStatus.LENGTH_REQUIRED)
+            return None
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self.close_connection = True
+            self.send_json({"error": "Invalid Content-Length."}, HTTPStatus.BAD_REQUEST)
+            return None
+        if content_length < 0:
+            self.close_connection = True
+            self.send_json({"error": "Invalid Content-Length."}, HTTPStatus.BAD_REQUEST)
+            return None
+        if content_length > max_bytes:
+            self.close_connection = True
+            self.send_json({"error": "Request body is too large."}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+            return None
+        return self.rfile.read(content_length)
 
     def read_json_body(self) -> dict | None:
-        content_length = int(self.headers.get("Content-Length", "0"))
-        raw_body = self.rfile.read(content_length)
+        raw_body = self.read_request_body(MAX_JSON_REQUEST_BYTES)
+        if raw_body is None:
+            return None
         try:
             payload = json.loads(raw_body.decode("utf-8"))
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             self.send_json({"error": "Invalid JSON"}, HTTPStatus.BAD_REQUEST)
             return None
         if not isinstance(payload, dict):
@@ -2521,8 +3149,9 @@ class ChatHandler(BaseHTTPRequestHandler):
         return payload
 
     def read_form_body(self) -> dict | None:
-        content_length = int(self.headers.get("Content-Length", "0"))
-        raw_body = self.rfile.read(content_length)
+        raw_body = self.read_request_body(MAX_FORM_REQUEST_BYTES)
+        if raw_body is None:
+            return None
         try:
             fields = parse_qs(raw_body.decode("utf-8"), keep_blank_values=True)
         except UnicodeDecodeError:
@@ -2535,11 +3164,6 @@ class ChatHandler(BaseHTTPRequestHandler):
         cookie.load(self.headers.get("Cookie", ""))
         morsel = cookie.get(name)
         return morsel.value if morsel else ""
-
-    def discard_request_body(self) -> None:
-        content_length = int(self.headers.get("Content-Length", "0"))
-        if content_length > 0:
-            self.rfile.read(content_length)
 
     def send_json(self, data: object, status: HTTPStatus, headers: dict[str, str] | None = None) -> None:
         content = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -2555,8 +3179,13 @@ class ChatHandler(BaseHTTPRequestHandler):
         return
 
 
+class ChatServer(ThreadingHTTPServer):
+    daemon_threads = True
+    block_on_close = False
+
+
 if __name__ == "__main__":
-    server = ThreadingHTTPServer((HOST, PORT), ChatHandler)
+    server = ChatServer((HOST, PORT), ChatHandler)
     print(f"{APP_NAME} running at http://{HOST}:{PORT}")
     try:
         server.serve_forever()
@@ -2564,3 +3193,4 @@ if __name__ == "__main__":
         pass
     finally:
         server.server_close()
+        STORE.close()
