@@ -523,14 +523,14 @@
       .pixel-cell:focus-visible { outline: 1px solid var(--black); outline-offset: -1px; }
       .profile-actions { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
 
-      .chat-room { background: var(--white); display: flex; flex-direction: column; inset: 0; min-height: 0; position: absolute; z-index: 3; }
-      .chat-room-header { align-items: center; border-bottom: 1px solid var(--black); display: grid; flex: 0 0 auto; gap: 12px; grid-template-columns: auto 42px minmax(0, 1fr); min-height: 68px; padding: 10px 14px; }
+      .chat-room { --chat-header-height: 88px; background: var(--white); inset: 0; min-height: 0; overflow: hidden; position: absolute; z-index: 3; }
+      .chat-room-header { align-items: center; background: var(--white); border-bottom: 1px solid var(--black); box-sizing: border-box; display: grid; gap: 12px; grid-template-columns: auto 42px minmax(0, 1fr); height: var(--chat-header-height); left: 0; padding: 10px 14px; position: absolute; right: 0; top: 0; z-index: 20; }
       .chat-room-back { background: var(--white); color: var(--black); min-height: 38px; padding-inline: 10px; }
       .chat-room-header .avatar { height: 42px; width: 42px; }
       .chat-room-title { display: grid; gap: 3px; min-width: 0; }
       .chat-room-title strong { font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .chat-presence { color: var(--gray); font-size: 12px; }
-      .chat-message-list { display: flex; flex: 1; flex-direction: column; gap: 9px; min-height: 0; overflow-y: auto; padding: 18px 18px calc(96px + var(--keyboard-inset, 0px)); }
+      .chat-message-list { bottom: 0; display: flex; flex-direction: column; gap: 9px; left: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 18px 18px calc(96px + var(--keyboard-inset, 0px)); position: absolute; right: 0; top: var(--chat-header-height); -webkit-overflow-scrolling: touch; }
       .chat-empty { color: var(--gray); margin: auto; text-align: center; }
       .message-row { display: flex; flex-direction: column; gap: 3px; max-width: 82%; }
       .message-row.mine { align-self: flex-end; align-items: flex-end; }
@@ -542,8 +542,9 @@
       .message-attachment { display: grid; gap: 8px; }
       .message-image { display: block; height: auto; max-height: 300px; max-width: 100%; object-fit: contain; }
       .message-file { align-items: center; color: inherit; display: flex; font-weight: 700; gap: 8px; text-decoration: underline; }
-      .chat-attachment-preview { align-items: center; border-top: 1px solid var(--black); display: flex; font-size: 13px; gap: 8px; min-height: 38px; padding: 6px 14px; }
+      .chat-attachment-preview { align-items: center; background: var(--white); border-top: 1px solid var(--black); bottom: calc(74px + var(--keyboard-inset, 0px)); display: flex; font-size: 13px; gap: 8px; left: 0; min-height: 38px; padding: 6px 14px; position: absolute; right: 0; z-index: 11; }
       .chat-attachment-preview.hidden { display: none; }
+      .chat-room:has(.chat-attachment-preview:not(.hidden)) .chat-message-list { padding-bottom: calc(146px + var(--keyboard-inset, 0px)); }
       .chat-attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .chat-attachment-remove { background: var(--white); color: var(--black); margin-left: auto; min-height: 28px; padding: 2px 9px; }
       .chat-attachment-tray { display: none !important; }
