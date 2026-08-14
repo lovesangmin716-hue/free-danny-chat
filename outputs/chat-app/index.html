@@ -580,12 +580,47 @@
       }
 
       @media (max-width: 479px) {
+        html, body {
+          height: 100%;
+          overflow: hidden;
+          width: 100%;
+        }
+
+        body {
+          inset: 0;
+          position: fixed;
+        }
+
         .app {
-          left: 50%;
+          bottom: 0;
+          height: auto;
+          left: 0;
           margin: 0;
           position: fixed;
+          right: 0;
           top: 0;
-          transform: translateX(-50%);
+          width: min(100%, 430px);
+        }
+
+        .chat-room {
+          bottom: 0;
+          height: 100svh;
+          left: 0;
+          margin: 0 auto;
+          position: fixed;
+          right: 0;
+          top: 0;
+          width: min(100%, 430px);
+        }
+
+        .chat-room-header,
+        .chat-message-form,
+        .chat-attachment-preview {
+          left: 0;
+          margin: 0 auto;
+          position: fixed;
+          right: 0;
+          width: min(100%, 430px);
         }
       }
     </style>
