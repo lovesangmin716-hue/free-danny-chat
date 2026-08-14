@@ -1,6 +1,46 @@
-work/
-outputs/chat-app/__pycache__/
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Python bytecode, environments, and tool caches
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Build and packaging output
+build/
+dist/
+*.egg-info/
+
+# Colorless runtime data
 outputs/chat-app/chat_state.json
-outputs/chat-app/.env
-outputs/chat-app/server-output.log
-outputs/chat-app/server-error.log
+outputs/chat-app/chat_state.json.tmp
+outputs/chat-app/uploads/
+outputs/chat-app/*.log
+
+# Local workspaces and temporary files
+work/
+tmp/
+temp/
+*.tmp
+*.swp
+*~
+
+# Editors
+.idea/
+.vscode/
+
+# Operating systems
+.DS_Store
+Thumbs.db
+Desktop.ini
