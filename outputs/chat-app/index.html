@@ -43,14 +43,16 @@
 
       * { box-sizing: border-box; }
 
-      html, body { min-height: 100%; }
+      html, body { height: 100%; min-height: 100%; }
 
       body {
         margin: 0;
-        min-height: 100vh;
+        min-height: 100%;
         background: var(--light-gray);
         color: var(--black);
         font-family: "The Jamsil", sans-serif;
+        overflow: hidden;
+        overscroll-behavior: none;
       }
 
       button, input, select, textarea { font: inherit; }
@@ -209,8 +211,8 @@
 
       .app {
         width: min(100%, 430px);
-        height: 100dvh;
-        min-height: 100vh;
+        height: var(--app-viewport-height, 100dvh);
+        min-height: 0;
         margin: 0 auto;
         background: var(--white);
         border-inline: 1px solid var(--black);
@@ -521,8 +523,8 @@
       .pixel-cell:focus-visible { outline: 1px solid var(--black); outline-offset: -1px; }
       .profile-actions { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
 
-      .chat-room { background: var(--white); display: flex; flex-direction: column; inset: 0; position: absolute; z-index: 3; }
-      .chat-room-header { align-items: center; border-bottom: 1px solid var(--black); display: grid; gap: 12px; grid-template-columns: auto 42px minmax(0, 1fr); min-height: 68px; padding: 10px 14px; }
+      .chat-room { background: var(--white); display: flex; flex-direction: column; inset: 0; min-height: 0; position: absolute; z-index: 3; }
+      .chat-room-header { align-items: center; border-bottom: 1px solid var(--black); display: grid; flex: 0 0 auto; gap: 12px; grid-template-columns: auto 42px minmax(0, 1fr); min-height: 68px; padding: 10px 14px; }
       .chat-room-back { background: var(--white); color: var(--black); min-height: 38px; padding-inline: 10px; }
       .chat-room-header .avatar { height: 42px; width: 42px; }
       .chat-room-title { display: grid; gap: 3px; min-width: 0; }
@@ -545,7 +547,7 @@
       .chat-attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .chat-attachment-remove { background: var(--white); color: var(--black); margin-left: auto; min-height: 28px; padding: 2px 9px; }
       .chat-attachment-tray { display: none !important; }
-      .chat-attachment-guide { bottom: 0; height: 240px; left: 0; pointer-events: none; position: absolute; width: 240px; z-index: 21; }
+      .chat-attachment-guide { bottom: 0; height: 240px; left: 0; pointer-events: auto; position: absolute; width: 240px; z-index: 21; }
       .chat-attachment-guide.hidden { display: none; }
       .attachment-guide-sector { fill: #f3f3f3; stroke: var(--light-gray); stroke-width: 1; }
       .attachment-guide-sector.active { fill: var(--black); }
@@ -561,7 +563,7 @@
       .message-meta { color: var(--gray); display: flex; font-size: 11px; gap: 6px; }
       .message-read { color: var(--black); font-weight: 700; }
       .message-unread { color: var(--gray); font-weight: 700; }
-      .chat-message-form { border-top: 1px solid var(--black); display: grid; gap: 8px; grid-template-columns: auto minmax(0, 1fr) auto; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); }
+      .chat-message-form { border-top: 1px solid var(--black); display: grid; flex: 0 0 auto; gap: 8px; grid-template-columns: auto minmax(0, 1fr) auto; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); }
       .chat-message-form input { min-height: 44px; }
       .chat-message-form button { min-height: 44px; padding-inline: 15px; }
       }
@@ -1148,6 +1150,16 @@ function selectCenteredStatusEmoji() {
         appStatus.textContent = message;
         appStatus.className = `app-status${tone === "default" ? "" : ` ${tone}`}`;
       }
+
+      function syncAppViewportHeight() {
+        const height = Math.round(window.visualViewport?.height || window.innerHeight);
+        if (height > 0) document.documentElement.style.setProperty("--app-viewport-height", `${height}px`);
+      }
+
+      syncAppViewportHeight();
+      window.visualViewport?.addEventListener("resize", syncAppViewportHeight);
+      window.visualViewport?.addEventListener("scroll", syncAppViewportHeight);
+      window.addEventListener("orientationchange", () => window.setTimeout(syncAppViewportHeight, 120));
 
       async function api(url, options = {}) {
         const response = await fetch(url, {
@@ -1774,7 +1786,7 @@ function selectCenteredStatusEmoji() {
         renderChatRoom();
         await updatePresence();
         await loadChatMessages();
-        chatMessageInput.focus();
+        chatMessageInput.focus({ preventScroll: true });
       }
 
       function closeChatRoom() {
@@ -3024,6 +3036,13 @@ function selectCenteredStatusEmoji() {
       });
       chatAttachmentButton.addEventListener("pointercancel", resetAttachmentSwipe);
       chatAttachmentButton.addEventListener("click", (event) => event.preventDefault());
+      chatAttachmentGuide.addEventListener("click", (event) => {
+        const kind = event.target.closest?.("[data-kind]")?.dataset.kind;
+        if (!kind) return;
+        event.preventDefault();
+        resetAttachmentSwipe();
+        openAttachmentPicker(kind);
+      });
       chatAttachmentRemove.addEventListener("click", clearChatAttachment);
       chatAttachmentInput.addEventListener("change", () => {
         const file = chatAttachmentInput.files?.[0];
