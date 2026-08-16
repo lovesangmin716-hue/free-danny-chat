@@ -904,6 +904,7 @@ class StateStore:
         self._persist_error: Exception | None = None
         self._pending_parts: set[str] = set()
         self._session_cleanup_deadline = 0.0
+        self._supabase_legacy_mode = False
         self.state = self._load_state()
         self._rebuild_indexes_locked()
         self._persist_thread = threading.Thread(
@@ -961,8 +962,29 @@ class StateStore:
             "last_read_by": {},
         }
 
-    def _write_state(self, parts: dict[str, object]) -> None:
+    def _write_legacy_supabase_state(self, state: dict) -> None:
+        payload = json.dumps(
+            [{"id": SUPABASE_STATE_ID, "state": state}],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        headers = supabase_headers("application/json")
+        headers["Prefer"] = "resolution=merge-duplicates,return=minimal"
+        fetch_json(
+            f"{SUPABASE_URL}/rest/v1/{SUPABASE_STATE_TABLE}?on_conflict=id",
+            method="POST",
+            headers=headers,
+            data=payload,
+        )
+
+    def _write_state(self, parts: dict[str, object], full_state: dict | None = None) -> None:
         if SUPABASE_ENABLED:
+            if full_state is None:
+                with self.lock:
+                    full_state = copy.deepcopy(self.state)
+            if self._supabase_legacy_mode:
+                self._write_legacy_supabase_state(full_state)
+                return
             payload = json.dumps(
                 [{"id": part_id, "state": value} for part_id, value in parts.items()],
                 ensure_ascii=False,
@@ -970,12 +992,18 @@ class StateStore:
             ).encode("utf-8")
             headers = supabase_headers("application/json")
             headers["Prefer"] = "resolution=merge-duplicates,return=minimal"
-            fetch_json(
-                f"{SUPABASE_URL}/rest/v1/{SUPABASE_STATE_TABLE}?on_conflict=id",
-                method="POST",
-                headers=headers,
-                data=payload,
-            )
+            try:
+                fetch_json(
+                    f"{SUPABASE_URL}/rest/v1/{SUPABASE_STATE_TABLE}?on_conflict=id",
+                    method="POST",
+                    headers=headers,
+                    data=payload,
+                )
+            except ValueError as error:
+                if "app_state_id_check" not in str(error):
+                    raise
+                self._supabase_legacy_mode = True
+                self._write_legacy_supabase_state(full_state)
             return
 
         database = sqlite3.connect(self.database_path, timeout=15)
@@ -1381,7 +1409,7 @@ class StateStore:
             return state
 
         state = self._load_legacy_state(legacy_state)
-        self._write_state(self._state_to_parts(state))
+        self._write_state(self._state_to_parts(state), state)
         return state
 
     def _save_locked(self, *part_ids: str) -> None:
