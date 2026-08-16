@@ -148,7 +148,7 @@ friendsTab.addEventListener("click", () => setActiveList("friends"));
 shortsTab.addEventListener("click", () => setActiveList("shorts"));
 shortsSoundToggle.addEventListener("click", () => {
   state.youtube.soundEnabled = !state.youtube.soundEnabled;
-  syncActiveShortAudio({ restartActiveWithSound: state.youtube.soundEnabled });
+  syncActiveShortAudio();
 });
 shortsView.addEventListener("scroll", () => {
   if (state.shortScrollFrame !== null) return;

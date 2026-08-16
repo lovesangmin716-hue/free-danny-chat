@@ -293,39 +293,37 @@ function shortEmbedSource(videoId, soundEnabled) {
   return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?autoplay=1&mute=${soundEnabled ? "0" : "1"}&playsinline=1&rel=0&enablejsapi=1&origin=${origin}`;
 }
 
-function sendShortPlayerCommand(frame, command) {
+function sendShortPlayerCommand(frame, command, args = []) {
   frame.contentWindow?.postMessage(JSON.stringify({
     event: "command",
     func: command,
-    args: [],
-  }), "https://www.youtube-nocookie.com");
+    args,
+  }), "*");
 }
 
-function setShortFrameSound(frame, soundEnabled, restartWithSound = false) {
+function setShortFrameSound(frame, soundEnabled) {
   if (!frame.src && frame.dataset.src) {
-    frame.src = shortEmbedSource(frame.dataset.videoId, soundEnabled);
+    frame.src = frame.dataset.src;
     delete frame.dataset.src;
-    restartWithSound = soundEnabled;
   }
   if (!frame.src) return;
 
   const applySound = () => {
-    sendShortPlayerCommand(frame, soundEnabled ? "unMute" : "mute");
-    if (soundEnabled) sendShortPlayerCommand(frame, "playVideo");
+    if (soundEnabled) {
+      sendShortPlayerCommand(frame, "unMute");
+      sendShortPlayerCommand(frame, "setVolume", [100]);
+      sendShortPlayerCommand(frame, "playVideo");
+      return;
+    }
+    sendShortPlayerCommand(frame, "mute");
+    sendShortPlayerCommand(frame, "playVideo");
   };
   frame.dataset.soundEnabled = String(soundEnabled);
-
-  if (soundEnabled && restartWithSound) {
-    frame.src = shortEmbedSource(frame.dataset.videoId, true);
-    frame.addEventListener("load", applySound, { once: true });
-    return;
-  }
-
   applySound();
   frame.addEventListener("load", applySound, { once: true });
 }
 
-function syncActiveShortAudio({ restartActiveWithSound = false } = {}) {
+function syncActiveShortAudio() {
   const cards = Array.from(shortsFeed.querySelectorAll(".short-card:not(.short-empty-card)"));
   if (!cards.length) return;
   const activeIndex = Math.max(0, Math.min(cards.length - 1, Math.round(
@@ -347,7 +345,7 @@ function syncActiveShortAudio({ restartActiveWithSound = false } = {}) {
     if (shouldLoad) {
       const enableSound = state.youtube.soundEnabled && index === activeIndex;
       if (frame.dataset.soundEnabled !== String(enableSound)) {
-        setShortFrameSound(frame, enableSound, enableSound && restartActiveWithSound);
+        setShortFrameSound(frame, enableSound);
       }
     }
   });
