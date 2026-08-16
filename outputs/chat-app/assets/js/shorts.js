@@ -293,24 +293,39 @@ function shortEmbedSource(videoId, soundEnabled) {
   return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?autoplay=1&mute=${soundEnabled ? "0" : "1"}&playsinline=1&rel=0&enablejsapi=1&origin=${origin}`;
 }
 
-function setShortFrameSound(frame, soundEnabled, forceLoad = false) {
-  if (forceLoad && frame.dataset.src) {
-    frame.src = frame.dataset.src;
-    delete frame.dataset.src;
-  }
-  if (!frame.src) return;
-  const command = soundEnabled ? "unMute" : "mute";
-  const sendCommand = () => frame.contentWindow?.postMessage(JSON.stringify({
+function sendShortPlayerCommand(frame, command) {
+  frame.contentWindow?.postMessage(JSON.stringify({
     event: "command",
     func: command,
     args: [],
   }), "https://www.youtube-nocookie.com");
-  frame.dataset.soundEnabled = String(soundEnabled);
-  sendCommand();
-  frame.addEventListener("load", sendCommand, { once: true });
 }
 
-function syncActiveShortAudio() {
+function setShortFrameSound(frame, soundEnabled, restartWithSound = false) {
+  if (!frame.src && frame.dataset.src) {
+    frame.src = shortEmbedSource(frame.dataset.videoId, soundEnabled);
+    delete frame.dataset.src;
+    restartWithSound = soundEnabled;
+  }
+  if (!frame.src) return;
+
+  const applySound = () => {
+    sendShortPlayerCommand(frame, soundEnabled ? "unMute" : "mute");
+    if (soundEnabled) sendShortPlayerCommand(frame, "playVideo");
+  };
+  frame.dataset.soundEnabled = String(soundEnabled);
+
+  if (soundEnabled && restartWithSound) {
+    frame.src = shortEmbedSource(frame.dataset.videoId, true);
+    frame.addEventListener("load", applySound, { once: true });
+    return;
+  }
+
+  applySound();
+  frame.addEventListener("load", applySound, { once: true });
+}
+
+function syncActiveShortAudio({ restartActiveWithSound = false } = {}) {
   const cards = Array.from(shortsFeed.querySelectorAll(".short-card:not(.short-empty-card)"));
   if (!cards.length) return;
   const activeIndex = Math.max(0, Math.min(cards.length - 1, Math.round(
@@ -331,7 +346,9 @@ function syncActiveShortAudio() {
     }
     if (shouldLoad) {
       const enableSound = state.youtube.soundEnabled && index === activeIndex;
-      if (frame.dataset.soundEnabled !== String(enableSound)) setShortFrameSound(frame, enableSound);
+      if (frame.dataset.soundEnabled !== String(enableSound)) {
+        setShortFrameSound(frame, enableSound, enableSound && restartActiveWithSound);
+      }
     }
   });
   shortsSoundToggle.textContent = state.youtube.soundEnabled ? "🔊" : "🔇";
