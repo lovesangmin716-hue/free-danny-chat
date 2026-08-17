@@ -301,7 +301,7 @@ async function shareShortToRoom(room) {
 
 function shortEmbedSource(videoId, soundEnabled) {
   const origin = encodeURIComponent(window.location.origin);
-  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?autoplay=1&mute=${soundEnabled ? "0" : "1"}&playsinline=1&rel=0&enablejsapi=1&origin=${origin}`;
+  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?autoplay=0&mute=${soundEnabled ? "0" : "1"}&playsinline=1&rel=0&enablejsapi=1&origin=${origin}`;
 }
 
 function sendShortPlayerCommand(frame, command, args = []) {
@@ -312,26 +312,38 @@ function sendShortPlayerCommand(frame, command, args = []) {
   }), "*");
 }
 
-function setShortFrameSound(frame, soundEnabled) {
-  if (!frame.src && frame.dataset.src) {
+function loadShortFrame(frame) {
+  if (!frame.hasAttribute("src") && frame.dataset.src) {
     frame.src = frame.dataset.src;
     delete frame.dataset.src;
   }
-  if (!frame.src) return;
+}
 
-  const applySound = () => {
+function playShortFrame(frame, soundEnabled) {
+  loadShortFrame(frame);
+  if (!frame.hasAttribute("src")) return;
+
+  const startPlayback = () => {
     if (soundEnabled) {
       sendShortPlayerCommand(frame, "unMute");
       sendShortPlayerCommand(frame, "setVolume", [100]);
-      sendShortPlayerCommand(frame, "playVideo");
-      return;
+    } else {
+      sendShortPlayerCommand(frame, "mute");
     }
-    sendShortPlayerCommand(frame, "mute");
     sendShortPlayerCommand(frame, "playVideo");
   };
   frame.dataset.soundEnabled = String(soundEnabled);
-  applySound();
-  frame.addEventListener("load", applySound, { once: true });
+  frame.dataset.playbackState = "playing";
+  startPlayback();
+  frame.addEventListener("load", startPlayback, { once: true });
+}
+
+function pauseShortFrame(frame) {
+  if (!frame.hasAttribute("src") || frame.dataset.playbackState === "paused") return;
+  frame.dataset.playbackState = "paused";
+  frame.dataset.soundEnabled = "false";
+  sendShortPlayerCommand(frame, "mute");
+  sendShortPlayerCommand(frame, "pauseVideo");
 }
 
 function syncActiveShortAudio() {
@@ -344,18 +356,20 @@ function syncActiveShortAudio() {
     if (!frame) return;
     const shouldLoad = Math.abs(index - activeIndex) <= 2;
     if (shouldLoad && frame.dataset.src) {
-      frame.src = frame.dataset.src;
-      delete frame.dataset.src;
-    } else if (!shouldLoad && frame.src) {
+      loadShortFrame(frame);
+    } else if (!shouldLoad && frame.hasAttribute("src")) {
       frame.dataset.src = shortEmbedSource(frame.dataset.videoId, false);
       frame.removeAttribute("src");
       frame.dataset.soundEnabled = "false";
+      frame.dataset.playbackState = "paused";
     }
-    if (shouldLoad) {
-      const enableSound = state.youtube.soundEnabled && index === activeIndex;
-      if (frame.dataset.soundEnabled !== String(enableSound)) {
-        setShortFrameSound(frame, enableSound);
+    if (index === activeIndex) {
+      const enableSound = state.youtube.soundEnabled;
+      if (frame.dataset.playbackState !== "playing" || frame.dataset.soundEnabled !== String(enableSound)) {
+        playShortFrame(frame, enableSound);
       }
+    } else if (shouldLoad) {
+      pauseShortFrame(frame);
     }
   });
   shortsSoundToggle.textContent = state.youtube.soundEnabled ? "🔊" : "🔇";
