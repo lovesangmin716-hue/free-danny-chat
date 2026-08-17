@@ -15,7 +15,7 @@ function createShortCard(video, copy, action) {
   const frame = document.createElement("iframe");
   frame.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
   frame.allowFullscreen = true;
-  frame.loading = "lazy";
+  frame.loading = "eager";
   frame.referrerPolicy = "strict-origin-when-cross-origin";
   frame.dataset.videoId = video.id;
   frame.dataset.src = shortEmbedSource(video.id, false);
@@ -42,14 +42,25 @@ function createShortCard(video, copy, action) {
   return card;
 }
 
+function activeShortCardIndex(cards) {
+  const viewTop = shortsView.getBoundingClientRect().top;
+  let activeIndex = 0;
+  let closestDistance = Number.POSITIVE_INFINITY;
+
+  cards.forEach((card, index) => {
+    const distance = Math.abs(card.getBoundingClientRect().top - viewTop);
+    if (distance < closestDistance) {
+      activeIndex = index;
+      closestDistance = distance;
+    }
+  });
+  return activeIndex;
+}
+
 function activeShortVideo() {
-  if (!state.youtube.guestVideos.length) return null;
-  const cardHeight = Math.max(shortsView.clientHeight, 1);
-  const index = Math.max(0, Math.min(
-    state.youtube.guestVideos.length - 1,
-    Math.round(shortsView.scrollTop / cardHeight),
-  ));
-  return state.youtube.guestVideos[index] || null;
+  const cards = Array.from(shortsFeed.querySelectorAll(".short-card:not(.short-empty-card)"));
+  if (!cards.length) return null;
+  return state.youtube.guestVideos[activeShortCardIndex(cards)] || null;
 }
 
 function clearShortMessageNotice() {
@@ -326,9 +337,7 @@ function setShortFrameSound(frame, soundEnabled) {
 function syncActiveShortAudio() {
   const cards = Array.from(shortsFeed.querySelectorAll(".short-card:not(.short-empty-card)"));
   if (!cards.length) return;
-  const activeIndex = Math.max(0, Math.min(cards.length - 1, Math.round(
-    shortsView.scrollTop / Math.max(shortsView.clientHeight, 1),
-  )));
+  const activeIndex = activeShortCardIndex(cards);
 
   cards.forEach((card, index) => {
     const frame = card.querySelector("iframe");
