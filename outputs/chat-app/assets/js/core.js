@@ -43,7 +43,6 @@ const state = {
   liveSyncBusy: false,
   liveSyncInitialized: false,
   lastSeenRoomMessageIds: {},
-  phoneVerification: { phone: "", token: "", verified: false },
   profilePixels: "",
   profileImageUrl: "",
   profileImagePreviewUrl: "",
@@ -167,10 +166,6 @@ const emojiSegmenter = typeof Intl.Segmenter === "function"
 
 const authScreen = document.getElementById("auth-screen");
 const appScreen = document.getElementById("app-screen");
-const signupBanner = document.getElementById("signup-banner");
-const signupToggle = document.getElementById("signup-toggle");
-const signupCard = document.getElementById("signup-card");
-const signupClose = document.getElementById("signup-close");
 const authStatus = document.getElementById("auth-status");
 const providerStatus = document.getElementById("provider-status");
 const logoutButton = document.getElementById("logout-button");
@@ -265,29 +260,12 @@ const clearProfileButton = document.getElementById("clear-profile-button");
 const saveProfileButton = document.getElementById("save-profile-button");
 const loginForm = document.getElementById("login-form");
 const loginSubmitButton = document.getElementById("login-submit-button");
-const signupForm = document.getElementById("signup-form");
 const googleLoginButton = document.getElementById("google-login-button");
 const googleButtonContainer = document.getElementById("google-button-container");
 const kakaoLoginButton = document.getElementById("kakao-login-button");
 const demoLoginButton = document.getElementById("demo-login-button");
 const loginUsername = document.getElementById("login-username");
 const loginPassword = document.getElementById("login-password");
-const signupUsername = document.getElementById("signup-username");
-const signupFriendCode = document.getElementById("signup-friend-code");
-const signupPassword = document.getElementById("signup-password");
-const signupPasswordConfirm = document.getElementById("signup-password-confirm");
-const signupAgeGroup = document.getElementById("signup-age-group");
-const signupGender = document.getElementById("signup-gender");
-const signupPhone = document.getElementById("signup-phone");
-const signupCode = document.getElementById("signup-code");
-const phoneRequestButton = document.getElementById("phone-request-button");
-const phoneVerifyButton = document.getElementById("phone-verify-button");
-const phoneHelp = document.getElementById("phone-help");
-const phoneVerifiedBadge = document.getElementById("phone-verified-badge");
-
-function normalizePhone(value) {
-  return (value || "").replace(/\D/g, "").slice(0, 11);
-}
 
 function normalizeStatusEmoji(value) {
   const trimmed = (value || "").trim();
@@ -367,11 +345,6 @@ async function chooseStatusEmoji(emoji) {
   } catch (error) {
     setAppStatus(error.message, "error");
   }
-}
-
-function resetPhoneVerification() {
-  state.phoneVerification = { phone: "", token: "", verified: false };
-  phoneVerifiedBadge.classList.add("hidden");
 }
 
 function setAuthStatus(message, tone = "default") {

@@ -68,6 +68,20 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertNotIn('id="group-room-name"', index_html)
         self.assertNotIn('id="group-member-list"', index_html)
 
+    def test_signup_is_a_separate_responsive_document(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        signup_html = server.SIGNUP_FILE.read_text(encoding="utf-8")
+        signup_css = (server.ASSETS_DIR / "css" / "signup.css").read_text(encoding="utf-8")
+
+        self.assertIn('href="/signup"', index_html)
+        self.assertNotIn('id="signup-form"', index_html)
+        self.assertIn('id="signup-form"', signup_html)
+        self.assertIn('src="/assets/js/signup.js"', signup_html)
+        self.assertIn('@media (min-width: 768px)', signup_css)
+        self.assertIn('@media (max-width: 767px)', signup_css)
+        self.assertIn('@media (min-width: 768px)', index_html)
+        self.assertIn('@media (max-width: 767px)', index_html)
+
     def test_render_requires_supabase_persistence(self) -> None:
         render_config = (SERVER_PATH.parents[2] / "render.yaml").read_text(encoding="utf-8")
 
@@ -85,6 +99,24 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
 
 class AuthenticationHttpIntegrationTestCase(unittest.TestCase):
+    def test_signup_page_is_served_separately_from_signup_api(self) -> None:
+        http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
+        server_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+        server_thread.start()
+        connection = http.client.HTTPConnection("127.0.0.1", http_server.server_address[1], timeout=5)
+        try:
+            connection.request("GET", "/signup")
+            response = connection.getresponse()
+            content = response.read().decode("utf-8")
+            self.assertEqual(response.status, 200)
+            self.assertIn('id="signup-form"', content)
+            self.assertNotIn('id="login-form"', content)
+        finally:
+            connection.close()
+            http_server.shutdown()
+            http_server.server_close()
+            server_thread.join(timeout=5)
+
     def test_logout_body_does_not_corrupt_next_login_on_keep_alive_connection(self) -> None:
         unique_suffix = str(time.time_ns())[-10:]
         username = f"http{unique_suffix}"

@@ -49,9 +49,12 @@ HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8765"))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 INDEX_FILE = BASE_DIR / "index.html"
+SIGNUP_FILE = BASE_DIR / "signup.html"
 ASSETS_DIR = BASE_DIR / "assets"
 INDEX_CONTENT = INDEX_FILE.read_bytes()
 INDEX_GZIP_CONTENT = gzip.compress(INDEX_CONTENT, compresslevel=6)
+SIGNUP_CONTENT = SIGNUP_FILE.read_bytes()
+SIGNUP_GZIP_CONTENT = gzip.compress(SIGNUP_CONTENT, compresslevel=6)
 COMPRESSIBLE_ASSET_SUFFIXES = {".css", ".js", ".json", ".svg"}
 ASSET_GZIP_CONTENT = {
     asset_path.resolve(): gzip.compress(asset_path.read_bytes(), compresslevel=6)
@@ -2509,6 +2512,9 @@ class ChatHandler(BaseHTTPRequestHandler):
         if path == "/":
             self.serve_index()
             return
+        if path == "/signup":
+            self.serve_signup_page()
+            return
         if path.startswith("/assets/"):
             self.serve_asset(path)
             return
@@ -2722,8 +2728,14 @@ class ChatHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def serve_index(self) -> None:
+        self.serve_html(INDEX_CONTENT, INDEX_GZIP_CONTENT)
+
+    def serve_signup_page(self) -> None:
+        self.serve_html(SIGNUP_CONTENT, SIGNUP_GZIP_CONTENT)
+
+    def serve_html(self, content: bytes, gzip_content: bytes) -> None:
         accepts_gzip = "gzip" in self.headers.get("Accept-Encoding", "").lower()
-        response_content = INDEX_GZIP_CONTENT if accepts_gzip else INDEX_CONTENT
+        response_content = gzip_content if accepts_gzip else content
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(response_content)))

@@ -22,26 +22,10 @@ async function checkSession() {
   }
 }
 
-signupPhone.addEventListener("input", () => {
-  const previousPhone = state.phoneVerification.phone;
-  signupPhone.value = normalizePhone(signupPhone.value);
-  if (signupPhone.value !== previousPhone) {
-    resetPhoneVerification();
-    phoneHelp.textContent = "개발 환경에서는 인증번호가 화면에 표시됩니다.";
-  }
-});
-signupCode.addEventListener("input", () => {
-  signupCode.value = signupCode.value.replace(/\D/g, "").slice(0, 6);
-});
-signupToggle.addEventListener("click", () => setAuthMode("signup"));
-signupClose.addEventListener("click", () => setAuthMode("login"));
 googleLoginButton.addEventListener("click", startGoogleLogin);
 kakaoLoginButton.addEventListener("click", startKakaoLogin);
 demoLoginButton.addEventListener("click", startDemoLogin);
-phoneRequestButton.addEventListener("click", requestPhoneCode);
-phoneVerifyButton.addEventListener("click", verifyPhoneCode);
 loginForm.addEventListener("submit", submitLogin);
-signupForm.addEventListener("submit", submitSignup);
 logoutButton.addEventListener("click", logout);
 openLoginButton.addEventListener("click", () => showAuth());
 closeChatRoomButton.addEventListener("click", closeChatRoom);

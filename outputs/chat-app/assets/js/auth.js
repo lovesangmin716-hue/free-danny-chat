@@ -2,12 +2,7 @@
 
 // Authentication providers, signup, login, logout, and phone verification.
 function setAuthMode(mode) {
-  const showSignup = mode === "signup";
-  signupBanner.classList.toggle("hidden", showSignup);
-  signupCard.classList.toggle("hidden", !showSignup);
-  setAuthStatus(showSignup
-    ? "휴대폰 인증을 완료한 뒤 비밀번호 계정을 만들 수 있어요."
-    : "SNS 로그인 또는 기존 계정 로그인을 선택해 주세요.");
+  setAuthStatus("SNS 로그인 또는 기존 계정 로그인을 선택해 주세요.");
 }
 
 async function loadProviders() {
@@ -175,99 +170,5 @@ async function startDemoLogin() {
     setAuthStatus(error.message, "error");
   } finally {
     setAuthRequestBusy(false);
-  }
-}
-
-async function requestPhoneCode() {
-  const phone = normalizePhone(signupPhone.value);
-  signupPhone.value = phone;
-  if (phone.length < 10) {
-    setAuthStatus("휴대폰 번호를 정확히 입력해 주세요.", "error");
-    signupPhone.focus();
-    return;
-  }
-
-  phoneRequestButton.disabled = true;
-  try {
-    const response = await api("/phone/request-code", {
-      method: "POST",
-      body: JSON.stringify({ phone }),
-    });
-    resetPhoneVerification();
-    state.phoneVerification.phone = phone;
-    const devCodeText = response.devCode ? ` 개발용 인증번호: ${response.devCode}` : "";
-    phoneHelp.textContent = `${response.phoneMasked} 번호로 인증번호를 준비했어요.${devCodeText}`;
-    setAuthStatus("인증번호를 확인하고 아래에서 인증해 주세요.", "success");
-    signupCode.focus();
-  } catch (error) {
-    setAuthStatus(error.message, "error");
-  } finally {
-    phoneRequestButton.disabled = false;
-  }
-}
-
-async function verifyPhoneCode() {
-  const phone = normalizePhone(signupPhone.value);
-  const code = signupCode.value.replace(/\D/g, "").slice(0, 6);
-  signupPhone.value = phone;
-  signupCode.value = code;
-  if (phone.length < 10 || code.length !== 6) {
-    setAuthStatus("휴대폰 번호와 인증번호 6자리를 입력해 주세요.", "error");
-    return;
-  }
-
-  phoneVerifyButton.disabled = true;
-  try {
-    const response = await api("/phone/verify-code", {
-      method: "POST",
-      body: JSON.stringify({ phone, code }),
-    });
-    state.phoneVerification = { phone, token: response.verificationToken, verified: true };
-    phoneVerifiedBadge.classList.remove("hidden");
-    phoneHelp.textContent = `${response.phoneMasked} 번호 인증이 완료됐어요.`;
-    setAuthStatus("휴대폰 인증이 완료됐어요. 이제 비밀번호 계정을 만들 수 있어요.", "success");
-  } catch (error) {
-    resetPhoneVerification();
-    setAuthStatus(error.message, "error");
-  } finally {
-    phoneVerifyButton.disabled = false;
-  }
-}
-
-async function submitSignup(event) {
-  event.preventDefault();
-  const phone = normalizePhone(signupPhone.value);
-  signupPhone.value = phone;
-  if (signupPassword.value !== signupPasswordConfirm.value) {
-    setAuthStatus("비밀번호 확인이 일치하지 않습니다.", "error");
-    signupPasswordConfirm.focus();
-    return;
-  }
-  if (!state.phoneVerification.verified || state.phoneVerification.phone !== phone || !state.phoneVerification.token) {
-    setAuthStatus("휴대폰 인증을 먼저 완료해 주세요.", "error");
-    signupPhone.focus();
-    return;
-  }
-
-  try {
-    rememberSession(await api("/signup", {
-      method: "POST",
-      body: JSON.stringify({
-        username: signupUsername.value.trim(),
-        friendCode: signupFriendCode.value.trim(),
-        password: signupPassword.value,
-        statusMessage: "",
-        phone,
-        verificationToken: state.phoneVerification.token,
-        ageGroup: signupAgeGroup.value,
-        gender: signupGender.value,
-      }),
-    }));
-    signupForm.reset();
-    resetPhoneVerification();
-    phoneHelp.textContent = "개발 환경에서는 인증번호가 화면에 표시됩니다.";
-    await startApp();
-  } catch (error) {
-    setAuthStatus(error.message, "error");
   }
 }
