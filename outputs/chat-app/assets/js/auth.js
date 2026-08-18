@@ -55,6 +55,7 @@ function consumeAuthQuery() {
 
 async function submitLogin(event) {
   event.preventDefault();
+  if (!beginAuthRequest("로그인 정보를 확인하고 있어요.")) return;
   try {
     rememberSession(await api("/login", {
       method: "POST",
@@ -64,12 +65,14 @@ async function submitLogin(event) {
     await startApp();
   } catch (error) {
     setAuthStatus(error.message, "error");
+  } finally {
+    setAuthRequestBusy(false);
   }
 }
 
 async function logout() {
   try {
-    await api("/logout", { method: "POST", body: JSON.stringify({}) });
+    await api("/logout", { method: "POST" });
     showAuth();
     setAuthStatus("로그아웃했어요. 쇼츠를 보려면 로그인해 주세요.");
   } catch (error) {
@@ -102,6 +105,7 @@ async function handleGoogleCredential(response) {
     setAuthStatus("구글 인증 정보를 받지 못했어요.", "error");
     return;
   }
+  if (!beginAuthRequest("구글 계정으로 로그인하고 있어요.")) return;
   try {
     rememberSession(await api("/auth/google/credential", {
       method: "POST",
@@ -110,6 +114,8 @@ async function handleGoogleCredential(response) {
     await startApp();
   } catch (error) {
     setAuthStatus(error.message, "error");
+  } finally {
+    setAuthRequestBusy(false);
   }
 }
 
@@ -158,6 +164,7 @@ function startKakaoLogin() {
 async function startDemoLogin() {
   const adminPassword = window.prompt("관리자 비밀번호를 입력하세요.");
   if (adminPassword === null) return;
+  if (!beginAuthRequest("체험 계정으로 로그인하고 있어요.")) return;
   try {
     rememberSession(await api("/auth/demo-login", {
       method: "POST",
@@ -166,6 +173,8 @@ async function startDemoLogin() {
     await startApp();
   } catch (error) {
     setAuthStatus(error.message, "error");
+  } finally {
+    setAuthRequestBusy(false);
   }
 }
 

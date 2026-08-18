@@ -105,10 +105,14 @@
 
       .auth-shell {
         width: min(100%, 430px);
-        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        height: 100svh;
+        min-height: 0;
         margin: 0 auto;
         background: var(--white);
         border-inline: 1px solid var(--black);
+        overflow: hidden;
       }
 
       .auth-header {
@@ -135,8 +139,12 @@
 
       .auth-scroll {
         display: flex;
+        flex: 1;
         flex-direction: column;
         gap: 10px;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior-y: contain;
         padding: 14px 22px calc(16px + env(safe-area-inset-bottom));
       }
 
@@ -216,7 +224,7 @@
         line-height: 1.5;
       }
 
-      .auth-status { order: 4; }
+      .auth-status { flex: 0 0 auto; margin: 0; order: 0; }
 
       .provider-status, .auth-status, .phone-help { color: var(--gray); }
       .success { color: var(--black); }
@@ -713,7 +721,7 @@
               <label for="login-password">비밀번호</label>
               <input id="login-password" type="password" maxlength="40" autocomplete="current-password" />
             </div>
-            <button type="submit">로그인하기</button>
+            <button type="submit" id="login-submit-button">로그인하기</button>
           </form>
         </div>
 

@@ -62,6 +62,7 @@ selectedProfilePalette: "default",
   selectedStatusEmoji: "",
   statusPickerTouched: false,
   statusPickerTimer: null,
+  authRequestBusy: false,
   youtube: {
     accessToken: "",
     videos: [],
@@ -263,6 +264,7 @@ const statusEmojiSheet = document.getElementById("status-emoji-sheet");
 const clearProfileButton = document.getElementById("clear-profile-button");
 const saveProfileButton = document.getElementById("save-profile-button");
 const loginForm = document.getElementById("login-form");
+const loginSubmitButton = document.getElementById("login-submit-button");
 const signupForm = document.getElementById("signup-form");
 const googleLoginButton = document.getElementById("google-login-button");
 const googleButtonContainer = document.getElementById("google-button-container");
@@ -415,6 +417,7 @@ window.addEventListener("orientationchange", () => window.setTimeout(() => {
 async function api(url, options = {}) {
   const { headers: optionHeaders = {}, ...requestOptions } = options;
   const isJsonBody = typeof requestOptions.body === "string";
+  const method = String(requestOptions.method || "GET").toUpperCase();
   const response = await fetch(url, {
     credentials: "same-origin",
     headers: {
@@ -424,16 +427,25 @@ async function api(url, options = {}) {
     ...requestOptions,
   });
   const contentType = response.headers.get("Content-Type") || "";
-  const payload = contentType.includes("application/json") ? await response.json() : null;
+  let payload = null;
+  if (contentType.includes("application/json")) {
+    try {
+      payload = await response.json();
+    } catch (_) {
+      payload = null;
+    }
+  }
+  const statusLabel = `${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
+  const fallbackMessage = `${method} ${url} 요청 실패 (HTTP ${statusLabel})`;
 
   if (response.status === 401) {
     showAuth();
-    const error = new Error(payload?.error || "로그인이 필요합니다.");
+    const error = new Error(payload?.error || fallbackMessage);
     error.status = response.status;
     throw error;
   }
   if (!response.ok) {
-    const error = new Error(payload?.error || "요청 처리에 실패했습니다.");
+    const error = new Error(payload?.error || fallbackMessage);
     error.status = response.status;
     error.retryAfter = Number(response.headers.get("Retry-After") || 0);
     throw error;
@@ -444,6 +456,24 @@ async function api(url, options = {}) {
 function rememberSession(session) {
   state.session = session;
   state.isGuest = false;
+}
+
+function setAuthRequestBusy(isBusy, message = "") {
+  state.authRequestBusy = isBusy;
+  loginSubmitButton.disabled = isBusy;
+  loginSubmitButton.textContent = isBusy ? "로그인 중..." : "로그인하기";
+  googleLoginButton.disabled = isBusy || !state.providers.google?.enabled;
+  kakaoLoginButton.disabled = isBusy || !state.providers.kakao?.enabled;
+  demoLoginButton.disabled = isBusy || !state.providers.demo?.enabled;
+  googleButtonContainer.style.pointerEvents = isBusy ? "none" : "";
+  googleButtonContainer.setAttribute("aria-busy", String(isBusy));
+  if (message) setAuthStatus(message);
+}
+
+function beginAuthRequest(message) {
+  if (state.authRequestBusy) return false;
+  setAuthRequestBusy(true, message);
+  return true;
 }
 
 function showAuth(mode = "login") {
@@ -479,6 +509,7 @@ function showAuth(mode = "login") {
   state.profileImageSelectionId += 1;
   state.profileImagePreparing = false;
   state.profileImageUrl = "";
+  setAuthRequestBusy(false);
   revokeProfileImagePreview();
   resetProfileImageCrop();
   state.session = null;

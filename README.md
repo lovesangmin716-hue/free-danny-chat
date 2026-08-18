@@ -76,6 +76,7 @@ cp outputs/chat-app/.env.example outputs/chat-app/.env
 | `MAX_SSE_CONNECTIONS` | `256` | 프로세스당 동시 실시간 이벤트 연결 상한 |
 | `SUPABASE_URL` | 미설정 | Supabase 프로젝트 URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | 미설정 | 서버 전용 Supabase service role key |
+| `REQUIRE_SUPABASE` | `false` | `true`이면 Supabase 설정이 없을 때 서버 시작을 중단해 임시 파일 저장을 방지 |
 
 `SUPABASE_URL`과 `SUPABASE_SERVICE_ROLE_KEY`를 모두 설정하면 Supabase의 `app_state` 테이블에 사용자, 채팅방, 채팅방별 메시지를 나눠 저장하고 첨부 파일은 `chat-uploads` 버킷에 저장합니다. 기존 테이블에도 분할 상태 키를 허용해야 하므로 최신 [`outputs/chat-app/supabase-schema.sql`](outputs/chat-app/supabase-schema.sql)을 SQL Editor에서 다시 실행하세요.
 
@@ -141,12 +142,12 @@ SOCIAL_DEMO_LOGIN_ENABLED=false
 
 1. 이 저장소를 GitHub에 푸시합니다.
 2. Render에서 새 Blueprint를 만들고 저장소를 연결합니다.
-3. 필요한 OAuth, YouTube, Supabase 환경 변수를 Render에 등록합니다.
+3. Blueprint 생성 화면에서 `SUPABASE_URL`과 `SUPABASE_SERVICE_ROLE_KEY`를 반드시 등록합니다.
 4. 배포된 도메인을 Google과 Kakao의 승인된 원본 및 리디렉션 URI에 추가합니다.
 
 Render는 `python -m py_compile server.py`로 빌드를 확인한 뒤 `python server.py`로 서버를 시작합니다. 헬스 체크 경로는 `/health`입니다.
 
-Render의 임시 파일 시스템만 사용하면 재배포 때 로컬 JSON 상태와 첨부 파일이 사라질 수 있습니다. 데이터를 유지해야 하는 배포에서는 Supabase 설정을 사용하세요.
+Render Blueprint는 `REQUIRE_SUPABASE=true`로 실행됩니다. Supabase 환경 변수가 빠지면 서버가 시작되지 않으므로, 임시 파일 시스템에 계정과 첨부 파일이 저장되는 배포를 방지합니다.
 
 ## 프로젝트 구조
 

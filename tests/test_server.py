@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import http.client
 import os
 import queue
 import re
@@ -66,6 +67,119 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('id="new-chat-group-name-field"', index_html)
         self.assertNotIn('id="group-room-name"', index_html)
         self.assertNotIn('id="group-member-list"', index_html)
+
+    def test_render_requires_supabase_persistence(self) -> None:
+        render_config = (SERVER_PATH.parents[2] / "render.yaml").read_text(encoding="utf-8")
+
+        self.assertIn("key: REQUIRE_SUPABASE", render_config)
+        self.assertIn("key: SUPABASE_URL", render_config)
+        self.assertIn("key: SUPABASE_SERVICE_ROLE_KEY", render_config)
+
+    def test_auth_client_omits_logout_body_and_reports_http_status(self) -> None:
+        auth_script = (server.ASSETS_DIR / "js" / "auth.js").read_text(encoding="utf-8")
+        core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
+
+        self.assertIn('await api("/logout", { method: "POST" });', auth_script)
+        self.assertNotIn('api("/logout", { method: "POST", body:', auth_script)
+        self.assertIn('${method} ${url} 요청 실패 (HTTP ${statusLabel})', core_script)
+
+
+class AuthenticationHttpIntegrationTestCase(unittest.TestCase):
+    def test_logout_body_does_not_corrupt_next_login_on_keep_alive_connection(self) -> None:
+        unique_suffix = str(time.time_ns())[-10:]
+        username = f"http{unique_suffix}"
+        password = "test-password"
+        user, error = server.STORE.create_local_user(
+            username,
+            f"http_{unique_suffix}",
+            password,
+            "",
+            f"010{unique_suffix[:8]}",
+            "20대",
+            "남성",
+        )
+        self.assertIsNone(error)
+        self.assertIsNotNone(user)
+
+        http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
+        server_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+        server_thread.start()
+        connection = http.client.HTTPConnection("127.0.0.1", http_server.server_address[1], timeout=5)
+        try:
+            login_body = f'{{"username":"{username}","password":"{password}"}}'
+            connection.request(
+                "POST",
+                "/login",
+                body=login_body,
+                headers={"Content-Type": "application/json", "Content-Length": str(len(login_body))},
+            )
+            first_login_response = connection.getresponse()
+            self.assertEqual(first_login_response.status, 200)
+            first_cookie = first_login_response.getheader("Set-Cookie", "").split(";", 1)[0]
+            self.assertIn("codex_talk_session=", first_cookie)
+            first_login_response.read()
+
+            connection.request(
+                "POST",
+                "/logout",
+                body="{}",
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Length": "2",
+                    "Cookie": first_cookie,
+                },
+            )
+            logout_response = connection.getresponse()
+            self.assertEqual(logout_response.status, 200)
+            logout_response.read()
+
+            connection.request(
+                "POST",
+                "/login",
+                body=login_body,
+                headers={"Content-Type": "application/json", "Content-Length": str(len(login_body))},
+            )
+            login_response = connection.getresponse()
+            self.assertEqual(login_response.status, 200)
+            second_cookie = login_response.getheader("Set-Cookie", "").split(";", 1)[0]
+            self.assertIn("codex_talk_session=", second_cookie)
+            login_response.read()
+
+            connection.request("GET", "/messenger", headers={"Cookie": second_cookie})
+            messenger_response = connection.getresponse()
+            self.assertEqual(messenger_response.status, 200)
+            messenger_response.read()
+        finally:
+            connection.close()
+            http_server.shutdown()
+            http_server.server_close()
+            server_thread.join(timeout=5)
+
+    def test_unhandled_post_body_does_not_corrupt_next_request(self) -> None:
+        http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
+        server_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+        server_thread.start()
+        connection = http.client.HTTPConnection("127.0.0.1", http_server.server_address[1], timeout=5)
+        try:
+            connection.request(
+                "POST",
+                "/unknown-post",
+                body="{}",
+                headers={"Content-Type": "application/json", "Content-Length": "2"},
+            )
+            unknown_response = connection.getresponse()
+            self.assertEqual(unknown_response.status, 404)
+            unknown_response.read()
+
+            connection.request("GET", "/health")
+            health_response = connection.getresponse()
+            self.assertEqual(health_response.status, 200)
+            health_response.read()
+        finally:
+            connection.close()
+            http_server.shutdown()
+            http_server.server_close()
+            server_thread.join(timeout=5)
 
 
 class StateStoreTestCase(unittest.TestCase):

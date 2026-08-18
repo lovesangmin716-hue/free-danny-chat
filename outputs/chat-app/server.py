@@ -123,6 +123,9 @@ SUPABASE_STATE_TABLE = "app_state"
 SUPABASE_STATE_ID = "primary"
 SUPABASE_UPLOAD_BUCKET = "chat-uploads"
 SUPABASE_ENABLED = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
+REQUIRE_SUPABASE = os.getenv("REQUIRE_SUPABASE", "false").lower() == "true"
+if REQUIRE_SUPABASE and not SUPABASE_ENABLED:
+    raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for persistent storage.")
 SUBSCRIBERS: dict[queue.Queue, str] = {}
 SUBSCRIBERS_BY_USERNAME: dict[str, set[queue.Queue]] = {}
 SUBSCRIBERS_LOCK = threading.Lock()
@@ -2455,6 +2458,9 @@ class ChatHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def request_scheme(self) -> str:
+        request_hostname = (urlparse(f"//{self.request_host()}").hostname or "").lower()
+        if request_hostname in {"localhost", "127.0.0.1", "::1"}:
+            return "http"
         forwarded_proto = (self.headers.get("X-Forwarded-Proto", "") or "").split(",")[0].strip()
         if forwarded_proto in {"http", "https"}:
             return forwarded_proto
@@ -2577,6 +2583,13 @@ class ChatHandler(BaseHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def do_POST(self) -> None:
+        self._request_body_consumed = False
+        try:
+            self.dispatch_post()
+        finally:
+            self.discard_unread_request_body()
+
+    def dispatch_post(self) -> None:
         path = urlparse(self.path).path
 
         if path == "/signup":
@@ -4167,7 +4180,27 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.close_connection = True
             self.send_json({"error": "Request body is too large."}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
             return None
-        return self.rfile.read(content_length)
+        content = self.rfile.read(content_length)
+        self._request_body_consumed = True
+        return content
+
+    def discard_unread_request_body(self) -> None:
+        if getattr(self, "_request_body_consumed", False):
+            return
+        if self.headers.get("Transfer-Encoding"):
+            self.close_connection = True
+            return
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self.close_connection = True
+            return
+        if content_length < 0 or content_length > MAX_ATTACHMENT_BYTES:
+            self.close_connection = True
+            return
+        if content_length:
+            self.rfile.read(content_length)
+        self._request_body_consumed = True
 
     def read_json_body(self) -> dict | None:
         raw_body = self.read_request_body(MAX_JSON_REQUEST_BYTES)
