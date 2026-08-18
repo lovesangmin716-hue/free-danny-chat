@@ -9,6 +9,7 @@ function renderMessenger() {
   openLoginButton.classList.add("hidden");
   openProfileButton.classList.remove("hidden");
   openDirectoryButton.classList.remove("hidden");
+  openNewChatButton.classList.toggle("hidden", state.activeList !== "chats");
   logoutButton.classList.remove("hidden");
   chatsTab.classList.toggle("active", state.activeList === "chats");
   friendsTab.classList.toggle("active", state.activeList === "friends");
@@ -171,7 +172,6 @@ function setActiveList(listName) {
 
 function openDirectory() {
   renderDirectory();
-  renderGroupMemberList();
   directorySheet.classList.remove("hidden");
   friendCodeInput.focus();
 }
@@ -180,49 +180,72 @@ function closeDirectory() {
   directorySheet.classList.add("hidden");
 }
 
-function selectedGroupMemberIds() {
-  return Array.from(groupMemberList.querySelectorAll('input[type="checkbox"]:checked'))
+function openNewChat() {
+  renderNewChatMemberList();
+  newChatSheet.classList.remove("hidden");
+}
+
+function closeNewChat() {
+  newChatSheet.classList.add("hidden");
+  newChatGroupName.value = "";
+}
+
+function selectedNewChatMemberIds() {
+  return Array.from(newChatMemberList.querySelectorAll('input[type="checkbox"]:checked'))
     .map((input) => input.value);
 }
 
-function syncGroupCreateButton() {
-  const memberCount = selectedGroupMemberIds().length;
-  createGroupRoomButton.disabled = !groupRoomName.value.trim() || memberCount < 2 || memberCount > 49;
+function syncNewChatCreateButton() {
+  const memberCount = selectedNewChatMemberIds().length;
+  const isGroup = memberCount >= 2;
+  newChatGroupNameField.classList.toggle("hidden", !isGroup);
+  createNewChatButton.disabled = memberCount === 0 || (isGroup && !newChatGroupName.value.trim());
+  createNewChatButton.textContent = isGroup ? "그룹 만들기" : "채팅 시작";
 }
 
-function renderGroupMemberList() {
-  groupMemberList.replaceChildren();
+function renderNewChatMemberList() {
+  newChatMemberList.replaceChildren();
   if (!state.messenger.friends.length) {
     const empty = document.createElement("p");
-    empty.className = "group-member-empty";
-    empty.textContent = "그룹을 만들려면 먼저 친구를 추가하세요.";
-    groupMemberList.appendChild(empty);
-    syncGroupCreateButton();
+    empty.className = "new-chat-member-empty";
+    empty.textContent = "먼저 친구를 추가해 주세요.";
+    newChatMemberList.appendChild(empty);
+    syncNewChatCreateButton();
     return;
   }
   for (const friend of state.messenger.friends) {
     const option = document.createElement("label");
-    option.className = "group-member-option";
+    option.className = "new-chat-member-option";
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.value = friend.id;
     const name = document.createElement("span");
     name.textContent = getDisplayName(friend);
     option.append(checkbox, name);
-    groupMemberList.appendChild(option);
+    newChatMemberList.appendChild(option);
   }
-  syncGroupCreateButton();
+  syncNewChatCreateButton();
 }
 
-async function createGroupChat() {
-  const name = groupRoomName.value.trim();
-  const memberUserIds = selectedGroupMemberIds();
-  if (!name || memberUserIds.length < 2 || memberUserIds.length > 49) {
-    setAppStatus("그룹 이름을 입력하고 친구를 2명 이상 선택해 주세요.", "error");
-    syncGroupCreateButton();
+async function createNewChat() {
+  const memberUserIds = selectedNewChatMemberIds();
+  if (!memberUserIds.length) {
+    syncNewChatCreateButton();
     return;
   }
-  createGroupRoomButton.disabled = true;
+  if (memberUserIds.length === 1) {
+    const room = await openDirectChat(memberUserIds[0]);
+    if (room) closeNewChat();
+    return;
+  }
+
+  const name = newChatGroupName.value.trim();
+  if (!name || memberUserIds.length > 49) {
+    setAppStatus("그룹 이름을 입력하고 친구를 선택해 주세요.", "error");
+    syncNewChatCreateButton();
+    return;
+  }
+  createNewChatButton.disabled = true;
   try {
     const data = await api("/rooms", {
       method: "POST",
@@ -230,8 +253,7 @@ async function createGroupChat() {
     });
     state.activeList = "chats";
     upsertMessengerRoom(data.room);
-    groupRoomName.value = "";
-    closeDirectory();
+    closeNewChat();
     renderMessenger();
     await openChatRoom(data.room.id);
     void loadMessenger(false).then(renderChats).catch(() => {});
@@ -239,7 +261,7 @@ async function createGroupChat() {
   } catch (error) {
     setAppStatus(error.message, "error");
   } finally {
-    syncGroupCreateButton();
+    syncNewChatCreateButton();
   }
 }
 
@@ -285,7 +307,9 @@ async function openDirectChat(userId) {
       }
     }).catch(() => {});
     setAppStatus(data.created ? `${data.room.name} 님과의 채팅방을 만들었어요.` : "기존 채팅방을 열었어요.", "success");
+    return data.room;
   } catch (error) {
     setAppStatus(error.message, "error");
+    return null;
   }
 }

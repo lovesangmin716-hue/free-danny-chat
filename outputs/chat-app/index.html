@@ -297,6 +297,7 @@
       }
 
       .chat-list, .friend-list { padding: 0; }
+      .empty-list-action { display: block; margin: 12px auto 0; }
 
       .shorts-view {
         height: 100%;
@@ -494,17 +495,6 @@
       .directory-friend-field { padding: 15px; }
       .user-directory { border-top: 1px solid var(--light-gray); }
 
-      .group-create-panel { border-top: 1px solid var(--black); display: grid; gap: 12px; padding: 15px; }
-      .group-create-panel h3 { font-size: 16px; margin: 0; }
-      .group-create-help { color: var(--gray); font-size: 12px; line-height: 1.45; margin: -4px 0 0; }
-      .group-member-list { border: 1px solid var(--light-gray); max-height: 190px; overflow-y: auto; }
-      .group-member-option { align-items: center; border-bottom: 1px solid var(--light-gray); cursor: pointer; display: grid; gap: 10px; grid-template-columns: 20px minmax(0, 1fr); min-height: 44px; padding: 8px 10px; }
-      .group-member-option:last-child { border-bottom: 0; }
-      .group-member-option input { height: 18px; min-height: 18px; width: 18px; }
-      .group-member-option span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .group-member-empty { color: var(--gray); font-size: 13px; margin: 0; padding: 14px; text-align: center; }
-      .group-create-panel > button { width: 100%; }
-
       .directory-item {
         align-items: center;
         border-bottom: 1px solid var(--light-gray);
@@ -518,6 +508,15 @@
       .directory-item strong, .directory-item span { display: block; }
       .directory-item span { color: var(--gray); font-size: 13px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .directory-item button { min-height: 36px; padding-inline: 10px; }
+
+      .new-chat-sheet { max-width: 520px; }
+      .new-chat-content { display: grid; gap: 12px; padding: 15px; }
+      .new-chat-help { color: var(--gray); font-size: 13px; margin: 0; }
+      .new-chat-member-list { border: 1px solid var(--light-gray); max-height: 280px; overflow-y: auto; }
+      .new-chat-member-option { align-items: center; border-bottom: 1px solid var(--light-gray); cursor: pointer; display: grid; gap: 10px; grid-template-columns: 20px minmax(0, 1fr); min-height: 48px; padding: 8px 10px; }
+      .new-chat-member-option:last-child { border-bottom: 0; }
+      .new-chat-member-option span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .new-chat-member-empty { color: var(--gray); font-size: 13px; margin: 0; padding: 18px 14px; text-align: center; }
 
       .profile-sheet { max-height: 92vh; overflow-y: auto; }
       .profile-editor { padding: 16px; }
@@ -798,6 +797,7 @@
         <div class="app-actions">
           <button type="button" id="open-login-button">로그인</button>
           <button type="button" class="friend-add-button" id="open-profile-button">Profile</button>
+          <button type="button" class="friend-add-button" id="open-new-chat-button">New Chat</button>
           <button type="button" class="friend-add-button" id="open-directory-button">Add Friend</button>
           <button type="button" id="logout-button">Log Out</button>
         </div>
@@ -918,17 +918,25 @@
                 <button type="button" class="secondary-button" id="friend-code-add-button">추가</button>
               </div>
             </div>
-            <section class="group-create-panel" aria-labelledby="group-create-title">
-              <h3 id="group-create-title">그룹 채팅 만들기</h3>
-              <div class="field">
-                <label for="group-room-name">그룹 이름</label>
-                <input id="group-room-name" maxlength="32" autocomplete="off" placeholder="예: 프로젝트 팀" />
-              </div>
-              <p class="group-create-help">친구를 2명 이상 선택하세요. 최대 50명까지 참여할 수 있습니다.</p>
-              <div class="group-member-list" id="group-member-list"></div>
-              <button type="button" id="create-group-room-button" disabled>그룹 만들기</button>
-            </section>
             <div class="user-directory" id="user-directory"></div>
+          </div>
+        </section>
+      </div>
+
+      <div class="sheet-backdrop hidden" id="new-chat-sheet" role="dialog" aria-modal="true" aria-labelledby="new-chat-title">
+        <section class="user-sheet new-chat-sheet">
+          <header class="sheet-header">
+            <h2 id="new-chat-title">새 채팅</h2>
+            <button type="button" class="sheet-close" id="close-new-chat-button">닫기</button>
+          </header>
+          <div class="new-chat-content">
+            <p class="new-chat-help">대화할 친구를 선택하세요.</p>
+            <div class="new-chat-member-list" id="new-chat-member-list"></div>
+            <div class="field hidden" id="new-chat-group-name-field">
+              <label for="new-chat-group-name">그룹 이름</label>
+              <input id="new-chat-group-name" maxlength="32" autocomplete="off" placeholder="예: 프로젝트 팀" />
+            </div>
+            <button type="button" id="create-new-chat-button" disabled>채팅 시작</button>
           </div>
         </section>
       </div>

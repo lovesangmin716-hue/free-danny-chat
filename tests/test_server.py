@@ -57,6 +57,16 @@ class StaticAppStructureTestCase(unittest.TestCase):
             compressed_bytes += len(compressed_content)
         self.assertLess(compressed_bytes, source_bytes)
 
+    def test_new_chat_uses_one_shared_member_selector(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+
+        self.assertIn('id="open-new-chat-button"', index_html)
+        self.assertIn('id="new-chat-sheet"', index_html)
+        self.assertIn('id="new-chat-member-list"', index_html)
+        self.assertIn('id="new-chat-group-name-field"', index_html)
+        self.assertNotIn('id="group-room-name"', index_html)
+        self.assertNotIn('id="group-member-list"', index_html)
+
 
 class StateStoreTestCase(unittest.TestCase):
     def setUp(self) -> None:
@@ -97,6 +107,34 @@ class StateStoreTestCase(unittest.TestCase):
                 server.SUBSCRIBERS.clear()
                 server.SUBSCRIBERS_BY_USERNAME.clear()
 
+    def test_friend_add_does_not_create_room_and_direct_room_is_deduplicated(self) -> None:
+        mallory = self.store.create_or_update_social_user("demo", "mallory-id", nickname="mallory")
+        room_count_before = len(self.store.state["rooms"])
+
+        friend, error = self.store.add_friend_by_code("alice", mallory["friend_code"])
+        self.assertIsNone(error)
+        self.assertIsNotNone(friend)
+        self.assertEqual(len(self.store.state["rooms"]), room_count_before)
+
+        room, created, error = self.store.create_or_get_direct_room("alice", mallory["id"])
+        self.assertIsNone(error)
+        self.assertTrue(created)
+        self.assertIsNotNone(room)
+        assert room is not None
+
+        duplicate, created_again, error = self.store.create_or_get_direct_room("alice", mallory["id"])
+        self.assertIsNone(error)
+        self.assertFalse(created_again)
+        self.assertIsNotNone(duplicate)
+        assert duplicate is not None
+        self.assertEqual(duplicate["id"], room["id"])
+        self.assertEqual(len(self.store.state["rooms"]), room_count_before + 1)
+
+        summaries = self.store.room_event_summaries(room["id"])
+        self.assertEqual(set(summaries), {"alice", "mallory"})
+        self.assertEqual(summaries["alice"]["peer"]["id"], mallory["id"])
+        self.assertEqual(summaries["mallory"]["peer"]["id"], self.alice["id"])
+
     def test_mark_room_read_only_changes_once_per_last_message(self) -> None:
         result = self.store.add_message(self.room_id, "bob", "hello")
         self.assertIsNotNone(result)
@@ -130,6 +168,9 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertEqual(group["participant_count"], 3)
         self.assertEqual(len(group["participants"]), 3)
         self.assertEqual(self.store.room_event_recipients(group["id"]), {"alice", "bob", "eve"})
+        summaries = self.store.room_event_summaries(group["id"])
+        self.assertEqual(set(summaries), {"alice", "bob", "eve"})
+        self.assertTrue(all(summary["participant_count"] == 3 for summary in summaries.values()))
 
         bob_rooms = self.store.get_messenger_bootstrap(self.bob)["rooms"]
         self.assertIn(group["id"], {room["id"] for room in bob_rooms})

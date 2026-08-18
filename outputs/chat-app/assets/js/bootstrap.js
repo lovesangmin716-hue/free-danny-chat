@@ -161,9 +161,14 @@ shortsView.addEventListener("scroll", () => {
 openDirectoryButton.addEventListener("click", openDirectory);
 closeDirectoryButton.addEventListener("click", closeDirectory);
 friendCodeAddButton.addEventListener("click", () => addFriend(friendCodeInput.value));
-groupRoomName.addEventListener("input", syncGroupCreateButton);
-groupMemberList.addEventListener("change", syncGroupCreateButton);
-createGroupRoomButton.addEventListener("click", () => void createGroupChat());
+openNewChatButton.addEventListener("click", openNewChat);
+closeNewChatButton.addEventListener("click", closeNewChat);
+newChatGroupName.addEventListener("input", syncNewChatCreateButton);
+newChatMemberList.addEventListener("change", syncNewChatCreateButton);
+createNewChatButton.addEventListener("click", () => void createNewChat());
+newChatSheet.addEventListener("click", (event) => {
+  if (event.target === newChatSheet) closeNewChat();
+});
 friendCodeInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();

@@ -17,8 +17,16 @@ function renderChats() {
     empty.className = "empty-list";
     empty.textContent = state.isGuest
       ? "로그인하면 채팅을 시작할 수 있어요."
-      : "아직 채팅방이 없어요. 친구와 대화하거나 그룹을 만들어 보세요.";
+      : "아직 채팅방이 없어요.";
     chatList.appendChild(empty);
+    if (!state.isGuest) {
+      const newChatButton = document.createElement("button");
+      newChatButton.type = "button";
+      newChatButton.className = "secondary-button empty-list-action";
+      newChatButton.textContent = "새 채팅";
+      newChatButton.addEventListener("click", openNewChat);
+      chatList.appendChild(newChatButton);
+    }
     return;
   }
 
@@ -194,6 +202,19 @@ function connectEvents() {
       if (isShortsView) renderShortShareBar();
       else renderChats();
       if (!roomSettingsSheet.classList.contains("hidden")) renderRoomSettings();
+      return;
+    }
+    if (payload.type === "room_created") {
+      const room = upsertMessengerRoom(payload.room);
+      if (isShortsView) renderShortShareBar();
+      else renderChats();
+      if (room?.id === state.selectedRoomId) renderChatRoom();
+      return;
+    }
+    if (payload.type === "friends_updated") {
+      void loadMessenger(!isShortsView).then(() => {
+        if (isShortsView && !state.shortInlineReply) renderShortShareBar();
+      }).catch(() => {});
       return;
     }
     if (payload.type === "room_left") {

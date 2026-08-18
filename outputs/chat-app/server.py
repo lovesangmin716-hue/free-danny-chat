@@ -1857,6 +1857,17 @@ class StateStore:
                 if (user := self._users_by_id.get(user_id)) is not None
             }
 
+    def room_event_summaries(self, room_id: str) -> dict[str, dict]:
+        with self.lock:
+            room = self._rooms_by_id.get(room_id)
+            if room is None:
+                return {}
+            return {
+                user["username"]: self._room_summary(room, user)
+                for user_id in room.get("participant_ids", [])
+                if (user := self._users_by_id.get(user_id)) is not None
+            }
+
     def presence_event_recipients(self, username: str) -> set[str]:
         with self.lock:
             user = self._users_by_username.get(username)
@@ -3671,10 +3682,8 @@ class ChatHandler(BaseHTTPRequestHandler):
         try:
             self.send_json({"room": room}, HTTPStatus.CREATED)
         finally:
-            push_event(
-                {"type": "room_created", "room": room},
-                STORE.room_event_recipients(room["id"]),
-            )
+            for recipient, summary in STORE.room_event_summaries(room["id"]).items():
+                push_event({"type": "room_created", "room": summary}, {recipient})
 
     def update_group_room_settings(self, user: dict) -> None:
         payload = self.read_json_body()
@@ -3873,7 +3882,13 @@ class ChatHandler(BaseHTTPRequestHandler):
         if error:
             self.send_json({"error": error}, HTTPStatus.BAD_REQUEST)
             return
-        self.send_json({"friend": friend}, HTTPStatus.CREATED)
+        try:
+            self.send_json({"friend": friend}, HTTPStatus.CREATED)
+        finally:
+            push_event(
+                {"type": "friends_updated"},
+                {user["username"], friend["username"]},
+            )
 
     def create_direct_room(self, user: dict) -> None:
         payload = self.read_json_body()
@@ -3885,7 +3900,12 @@ class ChatHandler(BaseHTTPRequestHandler):
         if error:
             self.send_json({"error": error}, HTTPStatus.BAD_REQUEST)
             return
-        self.send_json({"room": room, "created": created}, HTTPStatus.CREATED if created else HTTPStatus.OK)
+        try:
+            self.send_json({"room": room, "created": created}, HTTPStatus.CREATED if created else HTTPStatus.OK)
+        finally:
+            if created:
+                for recipient, summary in STORE.room_event_summaries(room["id"]).items():
+                    push_event({"type": "room_created", "room": summary}, {recipient})
 
     def create_message(self, user: dict) -> None:
         payload = self.read_json_body()
