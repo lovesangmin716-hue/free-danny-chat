@@ -48,7 +48,8 @@ input:focus, select:focus, button:focus-visible, .back-link:focus-visible { outl
 
 @media (max-width: 767px) {
   html, body { height: 100%; overflow: hidden; }
-  .signup-shell { height: 100svh; margin: 0 auto; max-width: 430px; overflow-y: auto; }
+  .signup-shell { height: 100dvh; margin: 0; max-width: none; overflow-y: auto; width: 100%; }
+  .signup-panel { min-height: 100%; }
   .inline-field { grid-template-columns: minmax(0, 1fr) 116px; }
   .inline-field button { font-size: 13px; padding-inline: 8px; }
 }

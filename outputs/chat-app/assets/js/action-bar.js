@@ -55,13 +55,10 @@ function renderChatActionBar() {
     return;
   }
 
-  shortShareList.append(
-    createContextAction("새 채팅", "message-plus", openNewChat),
-    createContextAction("검색", "search", () => {
-      context.mode = "composing";
-      renderShortShareBar(true);
-    }),
-  );
+  shortShareList.appendChild(createContextAction("검색", "search", () => {
+    context.mode = "composing";
+    renderShortShareBar(true);
+  }));
   const unreadCount = state.messenger.rooms.filter((room) => room.unread_count > 0).length;
   shortShareList.appendChild(createContextAction(
     `안 읽음 ${unreadCount}`,
@@ -105,10 +102,6 @@ function renderFriendActionBar() {
 
   context.mode = "idle";
   context.selection = [];
-  shortShareList.append(
-    createContextAction("친구 추가", "user-plus", openDirectory),
-    createContextAction("새 채팅", "message-plus", openNewChat),
-  );
   const onlineFriends = state.messenger.friends.filter((friend) => friend.presence?.online);
   const online = document.createElement("span");
   online.className = "context-summary";

@@ -167,6 +167,25 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('@media (min-width: 768px)', index_html)
         self.assertIn('@media (max-width: 767px)', index_html)
 
+    def test_responsive_messenger_uses_desktop_split_and_mobile_single_pane(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        signup_css = (server.ASSETS_DIR / "css" / "signup.css").read_text(encoding="utf-8")
+
+        desktop = re.search(r'@media \(min-width: 768px\) \{(.*?)\n\s*\}\n\s*@media \(max-width: 767px\)', index_html, re.DOTALL)
+        self.assertIsNotNone(desktop)
+        self.assertIn('"header chat"', desktop.group(1))
+        self.assertIn('grid-template-columns: minmax(340px, 430px) minmax(0, 1fr)', desktop.group(1))
+        self.assertIn('grid-area: chat', desktop.group(1))
+        self.assertIn('position: relative', desktop.group(1))
+        self.assertIn('class="desktop-chat-empty"', index_html)
+
+        mobile = re.search(r'@media \(max-width: 767px\) \{(.*?)\n\s*\}\n\s*</style>', index_html, re.DOTALL)
+        self.assertIsNotNone(mobile)
+        self.assertIn('height: 100dvh', mobile.group(1))
+        self.assertIn('width: 100%', mobile.group(1))
+        self.assertIn('max-width: none', mobile.group(1))
+        self.assertIn('height: 100dvh', signup_css)
+
     def test_render_requires_supabase_persistence(self) -> None:
         render_config = (SERVER_PATH.parents[2] / "render.yaml").read_text(encoding="utf-8")
 
@@ -344,6 +363,17 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("selectedShareRoomIds", shorts_script)
         self.assertIn("Promise.all(rooms.map", shorts_script)
         self.assertIn('shortShareBar.setAttribute("aria-label", "새 메시지 빠른 답장")', shorts_script)
+
+    def test_desktop_sheets_stay_in_the_left_content_pane_and_actions_are_not_duplicated(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        action_bar_script = (server.ASSETS_DIR / "js" / "action-bar.js").read_text(encoding="utf-8")
+
+        self.assertIn(".app > .sheet-backdrop", index_html)
+        self.assertIn("grid-column: 1 / 2", index_html)
+        self.assertIn("grid-row: 2 / 5", index_html)
+        self.assertNotIn('createContextAction("새 채팅", "message-plus", openNewChat)', action_bar_script)
+        self.assertNotIn('createContextAction("친구 추가", "user-plus", openDirectory)', action_bar_script)
+        self.assertIn('createContextAction("검색", "search"', action_bar_script)
 
     def test_two_hundred_shorts_use_a_fixed_virtual_dom_window(self) -> None:
         core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
