@@ -36,14 +36,18 @@ function resetAttachmentSwipe() {
   highlightAttachmentGuide("");
 }
 
-function openAttachmentPicker(kind) {
-  if (kind !== "photo" && kind !== "pdf") {
+function usesDirectAttachmentPicker() {
+  return Boolean(window.matchMedia?.("(pointer: fine)").matches);
+}
+
+function openAttachmentPicker(kind = "all") {
+  if (kind !== "all" && kind !== "photo" && kind !== "pdf") {
     setAppStatus("준비 중인 기능이에요.");
     return;
   }
   chatAttachmentInput.accept = kind === "pdf"
     ? "application/pdf"
-    : "image/*";
+    : (kind === "photo" ? "image/*" : "image/*,application/pdf");
   chatAttachmentInput.value = "";
   try {
     if (typeof chatAttachmentInput.showPicker === "function") {
@@ -349,6 +353,15 @@ function pastedChatFile(clipboardData) {
     if (file) return file;
   }
   return null;
+}
+
+function handlePastedChatAttachment(event) {
+  if (!state.selectedRoomId || !roomSettingsSheet.classList.contains("hidden")) return false;
+  const file = pastedChatFile(event.clipboardData);
+  if (!file) return false;
+  event.preventDefault();
+  void selectChatAttachment(file);
+  return true;
 }
 
 async function uploadChatAttachment(file, contentType) {

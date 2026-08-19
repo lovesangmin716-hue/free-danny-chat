@@ -45,7 +45,15 @@ function createChatMessageRow(message) {
   if (mine) {
     const read = document.createElement("span");
     read.className = message.failed ? "message-unread" : (message.read ? "message-read" : "message-unread");
-    read.textContent = message.pending ? "보내는 중" : (message.failed ? "전송 실패" : (message.read ? "읽음" : "안 읽음"));
+    if (message.pending) {
+      read.textContent = "보내는 중";
+    } else if (message.failed) {
+      read.textContent = "전송 실패";
+    } else if (room?.kind === "group") {
+      read.textContent = message.read ? "모두 읽음" : "안 읽음";
+    } else {
+      read.textContent = message.read ? "읽음" : "안 읽음";
+    }
     meta.appendChild(read);
   }
   const time = document.createElement("time");
@@ -53,6 +61,35 @@ function createChatMessageRow(message) {
   meta.appendChild(time);
   row.append(bubble, meta);
   return row;
+}
+
+function closeMessageReadMenu() {
+  messageReadMenu.classList.add("hidden");
+}
+
+function openMessageReadMenu(message, clientX, clientY) {
+  const unreadNames = (message.unread_by || [])
+    .map((reader) => reader.display_name || reader.username)
+    .filter(Boolean);
+  messageReadMenuTitle.textContent = message.read ? "모두 읽음" : "아직 읽지 않음";
+  messageReadMenuCopy.textContent = unreadNames.length
+    ? unreadNames.join(", ")
+    : (message.read ? "모든 참여자가 이 메시지를 읽었어요." : "읽음 정보를 불러오는 중이에요.");
+  messageReadMenu.classList.remove("hidden");
+  const width = messageReadMenu.offsetWidth;
+  const height = messageReadMenu.offsetHeight;
+  messageReadMenu.style.left = `${Math.max(8, Math.min(clientX, window.innerWidth - width - 8))}px`;
+  messageReadMenu.style.top = `${Math.max(8, Math.min(clientY, window.innerHeight - height - 8))}px`;
+}
+
+function showMessageReadMenuFromContext(event) {
+  const row = event.target.closest?.(".message-row.mine");
+  const room = currentRoom();
+  if (!row || room?.kind !== "group") return;
+  const message = state.messages[state.messageIndexes.get(row.dataset.messageId)];
+  if (!message || message.pending || message.failed) return;
+  event.preventDefault();
+  openMessageReadMenu(message, event.clientX, event.clientY);
 }
 
 function rebuildMessageIndexes() {
@@ -276,6 +313,7 @@ function closeChatRoom() {
   state.messagesNextCursor = "";
   state.messagesLoadingOlder = false;
   state.renderedMessageRoomId = "";
+  closeMessageReadMenu();
   clearChatAttachment();
   if (state.roomImageProcessing) {
     state.roomImageSelectionId += 1;
@@ -373,12 +411,15 @@ function sendChatMessage(event) {
         attachment,
         clientMessageId,
       });
-      const message = { ...savedMessage, read: false };
+      const room = state.messenger.rooms.find((candidate) => candidate.id === roomId);
+      const message = {
+        ...savedMessage,
+        read: Boolean(savedMessage.read),
+      };
       if (state.selectedRoomId === roomId) {
         replaceChatMessageState(pendingId, message);
         replaceChatMessageNode(pendingId, message);
       }
-      const room = state.messenger.rooms.find((candidate) => candidate.id === roomId);
       if (room) {
         room.last_message = message;
         room.updated_at = message.timestamp;

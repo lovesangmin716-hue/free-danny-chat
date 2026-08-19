@@ -52,9 +52,18 @@ roomSettingsSheet.addEventListener("click", (event) => {
 });
 chatMessageForm.addEventListener("submit", sendChatMessage);
 chatMessageList.addEventListener("scroll", () => {
+  closeMessageReadMenu();
   if (chatMessageList.scrollTop < 80) void loadOlderChatMessages();
 }, { passive: true });
+chatMessageList.addEventListener("contextmenu", showMessageReadMenuFromContext);
+document.addEventListener("click", (event) => {
+  if (!messageReadMenu.contains(event.target)) closeMessageReadMenu();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeMessageReadMenu();
+});
 chatAttachmentButton.addEventListener("pointerdown", (event) => {
+  if (usesDirectAttachmentPicker()) return;
   event.preventDefault();
   if (state.chatAttachmentGuideTimer) {
     clearTimeout(state.chatAttachmentGuideTimer);
@@ -81,7 +90,12 @@ chatAttachmentButton.addEventListener("pointerup", (event) => {
   state.chatAttachmentGuideTimer = setTimeout(resetAttachmentSwipe, 1600);
 });
 chatAttachmentButton.addEventListener("pointercancel", resetAttachmentSwipe);
-chatAttachmentButton.addEventListener("click", (event) => event.preventDefault());
+chatAttachmentButton.addEventListener("click", (event) => {
+  event.preventDefault();
+  if (!usesDirectAttachmentPicker()) return;
+  resetAttachmentSwipe();
+  openAttachmentPicker();
+});
 chatAttachmentGuide.addEventListener("click", (event) => {
   const kind = event.target.closest?.("[data-kind]")?.dataset.kind;
   if (!kind) return;
@@ -99,12 +113,7 @@ chatAttachmentInput.addEventListener("change", () => {
   if (!file) return;
   void selectChatAttachment(file);
 });
-chatMessageInput.addEventListener("paste", (event) => {
-  const file = pastedChatFile(event.clipboardData);
-  if (!file) return;
-  event.preventDefault();
-  void selectChatAttachment(file);
-});
+chatRoom.addEventListener("paste", handlePastedChatAttachment);
 chatMessageInput.addEventListener("input", () => {
   if (state.selectedRoomId) state.chatDrafts[state.selectedRoomId] = chatMessageInput.value;
 });
@@ -171,7 +180,8 @@ friendCodeAddButton.addEventListener("click", () => addFriend(friendCodeInput.va
 openNewChatButton.addEventListener("click", openNewChat);
 closeNewChatButton.addEventListener("click", closeNewChat);
 newChatGroupName.addEventListener("input", syncNewChatCreateButton);
-newChatMemberList.addEventListener("change", syncNewChatCreateButton);
+newChatSearch.addEventListener("input", renderNewChatMemberList);
+newChatMemberList.addEventListener("change", updateNewChatMemberSelection);
 createNewChatButton.addEventListener("click", () => void createNewChat());
 newChatSheet.addEventListener("click", (event) => {
   if (event.target === newChatSheet) closeNewChat();

@@ -2961,34 +2961,51 @@ class StateStore:
                 if user_id != user["id"]
             ]
 
-        read_message_ids: set[str] = set()
         all_messages = self._room_messages_locked(room["id"])
+        message_positions = {
+            message["id"]: index
+            for index, message in enumerate(all_messages)
+        }
+        reader_positions: dict[str, int] = {}
+        last_read_by = room.get("last_read_by", {})
+        for reader_id in reader_ids:
+            reader_positions[reader_id] = message_positions.get(
+                str(last_read_by.get(reader_id, "")),
+                -1,
+            )
+
+        read_message_ids: set[str] = set()
         if room.get("kind") == "group" and not reader_ids:
             read_message_ids = {message["id"] for message in all_messages}
         elif reader_ids and all_messages:
-            message_positions = {
-                message["id"]: index
-                for index, message in enumerate(all_messages)
-            }
-            reader_positions: list[int] = []
-            last_read_by = room.get("last_read_by", {})
-            for reader_id in reader_ids:
-                position = message_positions.get(str(last_read_by.get(reader_id, "")))
-                if position is None:
-                    reader_positions = []
-                    break
-                reader_positions.append(position)
-            if len(reader_positions) == len(reader_ids):
-                read_through_index = min(reader_positions)
+            if all(position >= 0 for position in reader_positions.values()):
+                read_through_index = min(reader_positions.values())
                 read_message_ids = {
                     message["id"]
                     for message in all_messages[:read_through_index + 1]
                 }
 
-        return [
-            {**message, "read": message.get("username") == user["username"] and message.get("id") in read_message_ids}
-            for message in messages
-        ]
+        response_messages: list[dict] = []
+        for message in messages:
+            mine = message.get("username") == user["username"]
+            response_message = {
+                **message,
+                "read": mine and message.get("id") in read_message_ids,
+            }
+            if room.get("kind") == "group" and mine:
+                message_position = message_positions.get(str(message.get("id")), -1)
+                response_message["unread_by"] = [
+                    {
+                        "id": reader["id"],
+                        "username": reader["username"],
+                        "display_name": reader.get("display_name") or reader["username"],
+                    }
+                    for reader_id in reader_ids
+                    if reader_positions.get(reader_id, -1) < message_position
+                    if (reader := self._users_by_id.get(reader_id)) is not None
+                ]
+            response_messages.append(response_message)
+        return response_messages
 
     def get_messages(self, room_id: str, username: str) -> list[dict] | None:
         with self.lock:
@@ -3950,13 +3967,21 @@ class ApplicationServices:
         if result is None:
             raise CommandFailure("채팅방을 찾을 수 없습니다.", HTTPStatus.NOT_FOUND)
         message, room, created = result
+        visible_message = next(
+            (
+                candidate
+                for candidate in reversed(self.store.get_messages(room_id, user["username"]) or [])
+                if candidate.get("id") == message.get("id")
+            ),
+            message,
+        )
         if attachment is not None and created:
             UPLOAD_GRANTS.consume(Path(attachment["url"]).name, user["username"])
         if not created:
-            return CommandOutcome(message)
+            return CommandOutcome(visible_message)
         event = {"type": "message_created", "roomId": room_id, "room": room, "message": message}
         return CommandOutcome(
-            message,
+            visible_message,
             HTTPStatus.CREATED,
             [(event, self.store.room_event_recipients(room_id))],
         )

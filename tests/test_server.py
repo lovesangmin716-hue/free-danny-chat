@@ -145,13 +145,39 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
     def test_new_chat_uses_one_shared_member_selector(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
 
         self.assertIn('id="open-new-chat-button"', index_html)
         self.assertIn('id="new-chat-sheet"', index_html)
+        self.assertIn('id="new-chat-search"', index_html)
         self.assertIn('id="new-chat-member-list"', index_html)
         self.assertIn('id="new-chat-group-name-field"', index_html)
+        self.assertIn("friend.friend_code", app_script)
+        self.assertIn("updateNewChatMemberSelection", app_script)
+        self.assertIn("검색 결과가 없어요.", app_script)
         self.assertNotIn('id="group-room-name"', index_html)
         self.assertNotIn('id="group-member-list"', index_html)
+
+    def test_attachment_picker_and_paste_have_desktop_and_room_contracts(self) -> None:
+        attachment_script = (server.ASSETS_DIR / "js" / "attachments.js").read_text(encoding="utf-8")
+        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+
+        self.assertIn('window.matchMedia?.("(pointer: fine)").matches', attachment_script)
+        self.assertIn('openAttachmentPicker(kind = "all")', attachment_script)
+        self.assertIn('"image/*,application/pdf"', attachment_script)
+        self.assertIn('chatRoom.addEventListener("paste", handlePastedChatAttachment)', bootstrap_script)
+        self.assertNotIn('chatMessageInput.addEventListener("paste"', bootstrap_script)
+
+    def test_group_unread_names_are_only_shown_from_message_context_menu(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
+        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="message-read-menu"', index_html)
+        self.assertIn("function showMessageReadMenuFromContext(event)", chat_script)
+        self.assertIn('unreadNames.join(", ")', chat_script)
+        self.assertNotIn('`안 읽음: ${unreadNames.join', chat_script)
+        self.assertIn('chatMessageList.addEventListener("contextmenu", showMessageReadMenuFromContext)', bootstrap_script)
 
     def test_signup_is_a_separate_responsive_document(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -1798,6 +1824,20 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertEqual(group_outcome.data["room"]["kind"], "group")
         self.assertTrue(all(event["type"] == "room_created" for event, _ in group_outcome.events))
 
+        message_outcome = services.create_message(
+            self.alice,
+            {
+                "roomId": group_outcome.data["room"]["id"],
+                "text": "who has not read this",
+                "clientMessageId": "application-read-state",
+            },
+            lambda _value, _username: None,
+        )
+        self.assertEqual(
+            {reader["username"] for reader in message_outcome.data["unread_by"]},
+            {"bob", "eve"},
+        )
+
     def test_profile_art_round_trip_is_lossless_and_not_in_user_rows(self) -> None:
         pixels = [f"#{(index * 2654435761 & 0xFFFFFF):06x}" for index in range(1024)]
         updated = self.store.update_profile_pixels("alice", pixels)
@@ -2067,13 +2107,24 @@ class StateStoreTestCase(unittest.TestCase):
         assert group is not None
         self.store.add_message(group["id"], "alice", "check read state")
 
+        alice_messages = self.store.get_messages(group["id"], "alice") or []
+        self.assertEqual(
+            {reader["username"] for reader in alice_messages[-1]["unread_by"]},
+            {"bob", "eve"},
+        )
+
         self.store.mark_room_read(group["id"], "bob")
         alice_messages = self.store.get_messages(group["id"], "alice") or []
         self.assertFalse(alice_messages[-1]["read"])
+        self.assertEqual(
+            [reader["username"] for reader in alice_messages[-1]["unread_by"]],
+            ["eve"],
+        )
 
         self.store.mark_room_read(group["id"], "eve")
         alice_messages = self.store.get_messages(group["id"], "alice") or []
         self.assertTrue(alice_messages[-1]["read"])
+        self.assertEqual(alice_messages[-1]["unread_by"], [])
 
     def test_group_settings_and_leave_revoke_access_and_transfer_owner(self) -> None:
         self.store.add_friend_by_code("alice", self.eve["friend_code"])

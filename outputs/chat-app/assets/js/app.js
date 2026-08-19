@@ -280,8 +280,10 @@ function openNewChat() {
   state.newChatOriginTab = state.activeList;
   context.mode = "selecting";
   context.selection = [];
+  newChatSearch.value = "";
   renderNewChatMemberList();
   newChatSheet.classList.remove("hidden");
+  newChatSearch.focus();
   if (state.friendsNextCursor) {
     void loadAllFriends().then(() => {
       if (!newChatSheet.classList.contains("hidden")) renderNewChatMemberList();
@@ -291,6 +293,7 @@ function openNewChat() {
 
 function closeNewChat() {
   newChatSheet.classList.add("hidden");
+  newChatSearch.value = "";
   newChatGroupName.value = "";
   const origin = state.actionBarByTab[state.newChatOriginTab];
   if (origin) {
@@ -301,16 +304,19 @@ function closeNewChat() {
   renderShortShareBar(true);
 }
 
+function newChatActionBarState() {
+  return state.actionBarByTab[state.newChatOriginTab] || activeActionBarState();
+}
+
 function selectedNewChatMemberIds() {
-  return Array.from(newChatMemberList.querySelectorAll('input[type="checkbox"]:checked'))
-    .map((input) => input.value);
+  return Array.from(new Set(newChatActionBarState().selection || []));
 }
 
 function syncNewChatCreateButton() {
   const selectedIds = selectedNewChatMemberIds();
   const memberCount = selectedIds.length;
-  activeActionBarState().mode = "selecting";
-  activeActionBarState().selection = selectedIds;
+  newChatActionBarState().mode = "selecting";
+  newChatActionBarState().selection = selectedIds;
   const isGroup = memberCount >= 2;
   newChatGroupNameField.classList.toggle("hidden", !isGroup);
   createNewChatButton.disabled = memberCount === 0 || (isGroup && !newChatGroupName.value.trim());
@@ -327,17 +333,43 @@ function renderNewChatMemberList() {
     syncNewChatCreateButton();
     return;
   }
-  for (const friend of state.messenger.friends) {
+  const query = newChatSearch.value.trim().toLocaleLowerCase();
+  const matchingFriends = state.messenger.friends.filter((friend) => {
+    if (!query) return true;
+    return [getDisplayName(friend), friend.username, friend.friend_code]
+      .some((value) => String(value || "").toLocaleLowerCase().includes(query));
+  });
+  if (!matchingFriends.length) {
+    const empty = document.createElement("p");
+    empty.className = "new-chat-member-empty";
+    empty.textContent = "검색 결과가 없어요.";
+    newChatMemberList.appendChild(empty);
+    syncNewChatCreateButton();
+    return;
+  }
+  const selectedIds = new Set(selectedNewChatMemberIds());
+  for (const friend of matchingFriends) {
     const option = document.createElement("label");
     option.className = "new-chat-member-option";
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.value = friend.id;
+    checkbox.checked = selectedIds.has(friend.id);
     const name = document.createElement("span");
     name.textContent = getDisplayName(friend);
     option.append(checkbox, name);
     newChatMemberList.appendChild(option);
   }
+  syncNewChatCreateButton();
+}
+
+function updateNewChatMemberSelection(event) {
+  const checkbox = event.target.closest?.('input[type="checkbox"]');
+  if (!checkbox) return;
+  const selectedIds = new Set(selectedNewChatMemberIds());
+  if (checkbox.checked) selectedIds.add(checkbox.value);
+  else selectedIds.delete(checkbox.value);
+  newChatActionBarState().selection = Array.from(selectedIds);
   syncNewChatCreateButton();
 }
 
