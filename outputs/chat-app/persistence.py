@@ -6,9 +6,9 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
+
+import httpx
 
 from profile_art import (
     PROFILE_ART_PACKED_BYTES,
@@ -20,6 +20,12 @@ from profile_art import (
 
 
 SCHEMA_VERSION = 1
+
+SUPABASE_HTTP_CLIENT = httpx.Client(
+    timeout=httpx.Timeout(30.0, connect=10.0),
+    limits=httpx.Limits(max_connections=64, max_keepalive_connections=24, keepalive_expiry=30.0),
+    follow_redirects=True,
+)
 
 
 class SupabaseRequestError(RuntimeError):
@@ -59,23 +65,27 @@ class NormalizedSupabaseRepository:
         headers: dict[str, str] | None = None,
     ):
         data = None if payload is None else json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        request = Request(f"{self.base_url}{path}", data=data, method=method)
-        request.add_header("apikey", self.service_key)
-        request.add_header("Authorization", f"Bearer {self.service_key}")
-        request.add_header("Content-Type", "application/json")
+        request_headers = {
+            "apikey": self.service_key,
+            "Authorization": f"Bearer {self.service_key}",
+            "Content-Type": "application/json",
+        }
         if prefer:
-            request.add_header("Prefer", prefer)
+            request_headers["Prefer"] = prefer
         for name, value in (headers or {}).items():
-            request.add_header(name, value)
+            request_headers[name] = value
         try:
-            with urlopen(request, timeout=30) as response:
-                content = response.read().decode("utf-8")
-                return json.loads(content) if content else {}
-        except HTTPError as error:
-            body = error.read().decode("utf-8", errors="ignore")
-            raise SupabaseRequestError(body or f"HTTP {error.code}") from error
-        except URLError as error:
-            raise ConnectionError(str(error.reason)) from error
+            response = SUPABASE_HTTP_CLIENT.request(
+                method,
+                f"{self.base_url}{path}",
+                headers=request_headers,
+                content=data,
+            )
+            if response.is_error:
+                raise SupabaseRequestError(response.text or f"HTTP {response.status_code}")
+            return response.json() if response.content else {}
+        except httpx.RequestError as error:
+            raise ConnectionError(str(error)) from error
 
     def rows(self, table: str, query: dict[str, str] | None = None) -> list[dict]:
         suffix = f"?{urlencode(query or {}, safe=',.*()><{}')}" if query else ""

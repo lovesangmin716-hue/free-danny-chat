@@ -310,7 +310,7 @@ async function shareShortToRooms(rooms) {
 
 function shortEmbedSource(videoId) {
   const origin = encodeURIComponent(window.location.origin);
-  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?autoplay=0&mute=1&playsinline=1&rel=0&enablejsapi=1&origin=${origin}`;
+  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?autoplay=1&mute=1&playsinline=1&rel=0&enablejsapi=1&origin=${origin}`;
 }
 
 function sendShortPlayerCommand(frame, command, args = []) {

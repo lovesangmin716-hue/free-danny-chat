@@ -315,6 +315,20 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("def stream_request_body_to_file", server_script)
         self.assertIn('self.send_header("Accept-Ranges", "bytes")', server_script)
 
+    def test_shorts_embed_starts_muted_playback_without_waiting_for_player_commands(self) -> None:
+        shorts_script = (server.ASSETS_DIR / "js" / "shorts.js").read_text(encoding="utf-8")
+
+        self.assertIn("?autoplay=1&mute=1&playsinline=1", shorts_script)
+        self.assertIn('sendShortPlayerCommand(frame, "playVideo")', shorts_script)
+
+    def test_supabase_requests_use_persistent_connection_pools(self) -> None:
+        server_script = SERVER_PATH.read_text(encoding="utf-8")
+        persistence_script = (server.BASE_DIR / "persistence.py").read_text(encoding="utf-8")
+
+        self.assertIn("OUTBOUND_HTTP_CLIENT = httpx.Client", server_script)
+        self.assertIn("SUPABASE_HTTP_CLIENT = httpx.Client", persistence_script)
+        self.assertNotIn("urlopen(request", persistence_script)
+
     def test_shared_pipeline_modules_define_one_feature_contract(self) -> None:
         platform_dir = server.ASSETS_DIR / "js" / "platform"
         store_script = (platform_dir / "store.js").read_text(encoding="utf-8")
@@ -2517,6 +2531,19 @@ class StateStoreTestCase(unittest.TestCase):
         self.store = server.StateStore(state_path)
         restored_sessions = server.SessionStore(state_store=self.store)
         self.assertEqual(restored_sessions.get_username(token), "alice")
+
+    def test_session_validation_is_reused_for_bursty_authenticated_requests(self) -> None:
+        sessions = server.SessionStore(state_store=self.store)
+        token = sessions.create("alice")
+        token_hash = server.hashlib.sha256(token.encode("utf-8")).hexdigest()
+        self.store._session_validation_cache.clear()
+
+        original = self.store.repository.session_username
+        with mock.patch.object(self.store.repository, "session_username", wraps=original) as lookup:
+            self.assertEqual(self.store.get_session_username(token_hash, server.SESSION_TTL_SECONDS), "alice")
+            self.assertEqual(self.store.get_session_username(token_hash, server.SESSION_TTL_SECONDS), "alice")
+
+        self.assertEqual(lookup.call_count, 1)
 
     def test_mutation_does_not_wait_for_slow_persistence(self) -> None:
         original_write = self.store._write_state

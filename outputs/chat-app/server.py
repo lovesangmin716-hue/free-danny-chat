@@ -25,9 +25,9 @@ from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
-from urllib.request import Request, urlopen
+
+import httpx
 
 try:
     import brotli
@@ -181,6 +181,10 @@ SSE_HEARTBEAT_SECONDS = max(5, min(60, int(os.getenv("SSE_HEARTBEAT_SECONDS", "1
 SESSION_CLEANUP_INTERVAL_SECONDS = 60
 SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 SESSION_REFRESH_THRESHOLD_SECONDS = 24 * 60 * 60
+SESSION_VALIDATION_CACHE_SECONDS = max(
+    0.0,
+    min(60.0, float(os.getenv("SESSION_VALIDATION_CACHE_SECONDS", "5"))),
+)
 MAX_SESSIONS = 10_000
 STRUCTURED_LOGS_ENABLED = os.getenv("STRUCTURED_LOGS_ENABLED", "true").lower() not in {"0", "false", "off"}
 REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9._:-]{8,128}")
@@ -247,6 +251,11 @@ SUBSCRIBERS_BY_USERNAME: dict[str, set[queue.Queue]] = {}
 SUBSCRIBERS_LOCK = threading.Lock()
 SSE_CONNECTION_SLOTS = threading.BoundedSemaphore(MAX_SSE_CONNECTIONS)
 SHORTS_FEED_LOCK = threading.Lock()
+OUTBOUND_HTTP_CLIENT = httpx.Client(
+    timeout=httpx.Timeout(30.0, connect=10.0),
+    limits=httpx.Limits(max_connections=64, max_keepalive_connections=24, keepalive_expiry=30.0),
+    follow_redirects=True,
+)
 APP_NAME = "Colorless"
 AGE_GROUPS = {"10대", "20대", "30대", "40대", "50대 이상"}
 GENDERS = {"여성", "남성"}
@@ -884,19 +893,13 @@ def fetch_json(
     headers: dict[str, str] | None = None,
     data: bytes | None = None,
 ) -> object:
-    request = Request(url, data=data, method=method)
-    for key, value in (headers or {}).items():
-        request.add_header(key, value)
-
     try:
-        with urlopen(request, timeout=15) as response:
-            content = response.read().decode("utf-8")
-            return json.loads(content) if content else {}
-    except HTTPError as error:
-        body = error.read().decode("utf-8", errors="ignore")
-        raise ValueError(body or f"HTTP {error.code}") from error
-    except URLError as error:
-        raise ConnectionError(str(error.reason)) from error
+        response = OUTBOUND_HTTP_CLIENT.request(method, url, headers=headers, content=data, timeout=15.0)
+        if response.is_error:
+            raise ValueError(response.text or f"HTTP {response.status_code}")
+        return response.json() if response.content else {}
+    except httpx.RequestError as error:
+        raise ConnectionError(str(error)) from error
 
 
 def fetch_bytes(
@@ -906,18 +909,13 @@ def fetch_bytes(
     headers: dict[str, str] | None = None,
     data: bytes | None = None,
 ) -> bytes:
-    request = Request(url, data=data, method=method)
-    for key, value in (headers or {}).items():
-        request.add_header(key, value)
-
     try:
-        with urlopen(request, timeout=30) as response:
-            return response.read()
-    except HTTPError as error:
-        body = error.read().decode("utf-8", errors="ignore")
-        raise ValueError(body or f"HTTP {error.code}") from error
-    except URLError as error:
-        raise ConnectionError(str(error.reason)) from error
+        response = OUTBOUND_HTTP_CLIENT.request(method, url, headers=headers, content=data)
+        if response.is_error:
+            raise ValueError(response.text or f"HTTP {response.status_code}")
+        return response.content
+    except httpx.RequestError as error:
+        raise ConnectionError(str(error)) from error
 
 
 class BoundedTTLCache:
@@ -978,17 +976,20 @@ class YoutubeCatalogError(RuntimeError):
 
 def fetch_youtube_catalog_json(url: str, *, attempts: int = 3) -> dict:
     for attempt in range(attempts):
-        request = Request(url, method="GET")
         try:
-            with urlopen(request, timeout=15) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+            response = OUTBOUND_HTTP_CLIENT.get(url, timeout=15.0)
+            if response.is_error:
+                code = f"http-{response.status_code}"
+                if (
+                    response.status_code in {403, 429}
+                    or response.status_code < 500
+                    or attempt + 1 >= attempts
+                ):
+                    raise YoutubeCatalogError(code)
+            else:
+                payload = response.json()
                 return payload if isinstance(payload, dict) else {}
-        except HTTPError as error:
-            error.read(1024)
-            code = f"http-{error.code}"
-            if error.code == 429 or error.code == 403 or error.code < 500 or attempt + 1 >= attempts:
-                raise YoutubeCatalogError(code) from error
-        except (URLError, TimeoutError, socket.timeout) as error:
+        except httpx.RequestError as error:
             code = "network"
             if attempt + 1 >= attempts:
                 raise YoutubeCatalogError(code) from error
@@ -1258,22 +1259,31 @@ def supabase_signed_download_url(filename: str, expires_in: int = DOWNLOAD_URL_T
 
 
 def probe_supabase_upload(filename: str) -> tuple[int, str, bytes]:
-    request = Request(supabase_object_url(filename), method="GET")
-    for key, value in supabase_headers().items():
-        request.add_header(key, value)
-    request.add_header("Range", f"bytes=0-{ATTACHMENT_IMAGE_PROBE_BYTES - 1}")
+    headers = supabase_headers()
+    headers["Range"] = f"bytes=0-{ATTACHMENT_IMAGE_PROBE_BYTES - 1}"
     try:
-        with urlopen(request, timeout=15) as response:
-            prefix = response.read(ATTACHMENT_IMAGE_PROBE_BYTES)
+        with OUTBOUND_HTTP_CLIENT.stream(
+            "GET",
+            supabase_object_url(filename),
+            headers=headers,
+            timeout=15.0,
+        ) as response:
+            if response.is_error:
+                response.read()
+                raise ValueError(f"Storage verification failed with HTTP {response.status_code}")
+            prefix = b""
+            for chunk in response.iter_bytes():
+                prefix += chunk
+                if len(prefix) >= ATTACHMENT_IMAGE_PROBE_BYTES:
+                    prefix = prefix[:ATTACHMENT_IMAGE_PROBE_BYTES]
+                    break
             content_range = response.headers.get("Content-Range", "")
             match = re.fullmatch(r"bytes \d+-\d+/(\d+)", content_range)
             size = int(match.group(1)) if match else int(response.headers.get("Content-Length", "0"))
-            return size, response.headers.get_content_type().lower(), prefix
-    except HTTPError as error:
-        error.read(1024)
-        raise ValueError(f"Storage verification failed with HTTP {error.code}") from error
-    except URLError as error:
-        raise ConnectionError(str(error.reason)) from error
+            content_type = response.headers.get("Content-Type", "application/octet-stream").split(";", 1)[0].lower()
+            return size, content_type, prefix
+    except httpx.RequestError as error:
+        raise ConnectionError(str(error)) from error
 
 
 def delete_upload_object(filename: str) -> None:
@@ -1780,6 +1790,8 @@ class StateStore:
         self._persist_error: Exception | None = None
         self._pending_parts: set[str] = set()
         self._session_cleanup_deadline = 0.0
+        self._session_validation_cache: dict[str, tuple[str, float]] = {}
+        self._session_validation_versions: dict[str, int] = {}
         self._supabase_legacy_mode = False
         self.state = self._load_state()
         self._rebuild_indexes_locked()
@@ -2360,12 +2372,14 @@ class StateStore:
         ]
         for token_hash in expired:
             sessions.pop(token_hash, None)
+            self._session_validation_cache.pop(token_hash, None)
 
         overflow = len(sessions) - max_sessions
         if overflow > 0:
             oldest = sorted(sessions, key=lambda token_hash: float(sessions[token_hash].get("created_at", 0)))[:overflow]
             for token_hash in oldest:
                 sessions.pop(token_hash, None)
+                self._session_validation_cache.pop(token_hash, None)
         self._session_cleanup_deadline = now + SESSION_CLEANUP_INTERVAL_SECONDS
         return bool(expired or overflow > 0)
 
@@ -2378,6 +2392,8 @@ class StateStore:
                 "created_at": now,
                 "expires_at": now + ttl_seconds,
             }
+            self._session_validation_versions[token_hash] = self._session_validation_versions.get(token_hash, 0) + 1
+            self._session_validation_cache[token_hash] = (username, now + SESSION_VALIDATION_CACHE_SECONDS)
             if len(self.state["sessions"]) > max_sessions:
                 changed = self._cleanup_sessions_locked(now, max_sessions) or changed
             user = self._users_by_username.get(username)
@@ -2387,20 +2403,40 @@ class StateStore:
 
     def get_session_username(self, token_hash: str, ttl_seconds: int) -> str | None:
         now = time.time()
+        repository = self.repository
         with self.lock:
-            if self.repository is not None:
-                username = self.repository.session_username(token_hash, now)
+            if repository is not None:
+                cached = self._session_validation_cache.get(token_hash)
+                if cached is not None and cached[1] > now:
+                    return cached[0]
+                validation_version = self._session_validation_versions.get(token_hash, 0)
+            else:
+                validation_version = 0
+
+        if repository is not None:
+            username = repository.session_username(token_hash, now)
+            with self.lock:
+                if self._session_validation_versions.get(token_hash, 0) != validation_version:
+                    cached = self._session_validation_cache.get(token_hash)
+                    return cached[0] if cached is not None and cached[1] > now else None
                 if username is None:
                     self.state["sessions"].pop(token_hash, None)
+                    self._session_validation_cache.pop(token_hash, None)
                     return None
+                self._session_validation_cache[token_hash] = (
+                    username,
+                    now + SESSION_VALIDATION_CACHE_SECONDS,
+                )
                 session = self.state["sessions"].get(token_hash)
                 if session is None:
                     return username
                 refresh_threshold = min(SESSION_REFRESH_THRESHOLD_SECONDS, max(1, ttl_seconds // 2))
                 if float(session["expires_at"]) - now <= refresh_threshold:
                     session["expires_at"] = now + ttl_seconds
-                    self.repository.refresh_session(token_hash, session["expires_at"])
+                    repository.refresh_session(token_hash, session["expires_at"])
                 return username
+
+        with self.lock:
             changed = self._cleanup_sessions_locked(now, MAX_SESSIONS) if now >= self._session_cleanup_deadline else False
             session = self.state["sessions"].get(token_hash)
             if session is None or float(session.get("expires_at", 0)) <= now:
@@ -2425,6 +2461,8 @@ class StateStore:
 
     def destroy_session(self, token_hash: str) -> None:
         with self.lock:
+            self._session_validation_versions[token_hash] = self._session_validation_versions.get(token_hash, 0) + 1
+            self._session_validation_cache.pop(token_hash, None)
             if self.repository is not None:
                 self.repository.destroy_session(token_hash)
             if self.state["sessions"].pop(token_hash, None) is not None:
@@ -4245,6 +4283,7 @@ class ChatHandler(BaseHTTPRequestHandler):
     def complete_command(self, outcome: CommandOutcome) -> None:
         try:
             self.send_json(outcome.data, outcome.status)
+            self.wfile.flush()
         finally:
             for event, recipients in outcome.events:
                 EVENT_BROKER.publish(event, recipients)
