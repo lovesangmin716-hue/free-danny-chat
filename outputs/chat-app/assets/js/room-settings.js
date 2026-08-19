@@ -22,11 +22,11 @@ function renderRoomSettings() {
   roomSettingsPhotoPreview.replaceChildren(createRoomAvatar(room));
   if (document.activeElement !== roomSettingsName) roomSettingsName.value = room.name;
   roomSettingsName.disabled = !isOwner || state.roomSettingsBusy;
-  selectRoomPhotoButton.disabled = !isOwner || state.roomSettingsBusy;
+  selectRoomPhotoButton.disabled = !isOwner || (state.roomSettingsBusy && !state.roomImageProcessing);
   removeRoomPhotoButton.disabled = !isOwner || state.roomSettingsBusy || !room.image_url;
   saveRoomSettingsButton.disabled = !isOwner || state.roomSettingsBusy;
   leaveRoomButton.disabled = state.roomSettingsBusy;
-  closeRoomSettingsButton.disabled = state.roomSettingsBusy;
+  closeRoomSettingsButton.disabled = state.roomSettingsBusy && !state.roomImageProcessing;
   roomSettingsOwnerHelp.textContent = isOwner
     ? "방장은 채팅방 이름과 사진을 변경할 수 있습니다."
     : "이름과 사진은 방장만 변경할 수 있습니다.";
@@ -42,7 +42,14 @@ function openRoomSettings() {
 }
 
 function closeRoomSettings() {
-  if (state.roomSettingsBusy) return;
+  if (state.roomSettingsBusy && !state.roomImageProcessing) return;
+  if (state.roomImageProcessing) {
+    state.roomImageSelectionId += 1;
+    state.roomImageProcessing = false;
+    ColorlessImageProcessing.cancel("room-image");
+    setRoomSettingsBusy(false);
+    setAppStatus("채팅방 사진 처리를 취소했습니다.");
+  }
   roomSettingsSheet.classList.add("hidden");
   openRoomSettingsButton.focus({ preventScroll: true });
 }
@@ -70,7 +77,7 @@ async function saveRoomSettings() {
   }
   setRoomSettingsBusy(true);
   try {
-    const data = await api("/rooms/settings", {
+    const data = await requestAction("rooms.update-settings", "/rooms/settings", {
       method: "POST",
       body: JSON.stringify({ roomId: room.id, name }),
     });
@@ -83,7 +90,7 @@ async function saveRoomSettings() {
   }
 }
 
-async function createRoomImageBundle(file) {
+async function createRoomImageBundleOnMain(file) {
   const image = await decodeAttachmentImage(file, 4096);
   try {
     const { width, height } = decodedImageSize(image);
@@ -133,6 +140,27 @@ async function createRoomImageBundle(file) {
   }
 }
 
+async function createRoomImageBundle(file) {
+  if (!ColorlessImageProcessing.supported()) return createRoomImageBundleOnMain(file);
+  const result = await ColorlessImageProcessing.run("room-image", file, "square", {
+    maxPixels: IMAGE_TOTAL_PIXELS_MAX,
+    maxDimension: IMAGE_DIMENSION_MAX,
+    decodeEdge: 4096,
+    side: PROFILE_IMAGE_SIDE,
+    thumbSide: PROFILE_THUMBNAIL_SIDE,
+    maxBytes: PROFILE_IMAGE_UPLOAD_BYTES_MAX,
+    qualities: PROFILE_IMAGE_WEBP_QUALITIES,
+  }, {
+    timeoutMs: 15000,
+    onProgress: (stage) => setAppStatus(imageProgressMessage(stage, "채팅방 사진")),
+  });
+  const sizeHeader = new ArrayBuffer(4);
+  new DataView(sizeHeader).setUint32(0, result.imageBlob.size, false);
+  return new Blob([sizeHeader, result.imageBlob, result.thumbnailBlob], {
+    type: "application/x-colorless-room-bundle",
+  });
+}
+
 async function uploadRoomPhoto(file) {
   const room = currentRoom();
   if (!room || room.kind !== "group" || !isCurrentUserRoomOwner(room)) return;
@@ -147,11 +175,17 @@ async function uploadRoomPhoto(file) {
   }
 
   const roomId = room.id;
+  const selectionId = state.roomImageSelectionId + 1;
+  state.roomImageSelectionId = selectionId;
+  ColorlessImageProcessing.cancel("room-image");
+  state.roomImageProcessing = true;
   setRoomSettingsBusy(true);
   setAppStatus("채팅방 사진을 최적화하는 중입니다.");
   try {
     const bundle = await createRoomImageBundle(file);
-    const data = await api("/rooms/image", {
+    if (state.roomImageSelectionId !== selectionId) return;
+    state.roomImageProcessing = false;
+    const data = await requestAction("rooms.upload-image", "/rooms/image", {
       method: "POST",
       headers: { "Content-Type": bundle.type, "X-Room-Id": roomId },
       body: bundle,
@@ -159,10 +193,17 @@ async function uploadRoomPhoto(file) {
     if (state.selectedRoomId === roomId) applyRoomSettingsUpdate(data.room);
     setAppStatus("채팅방 사진을 변경했습니다.", "success");
   } catch (error) {
-    setAppStatus("채팅방 사진을 변경하지 못했습니다. 다른 사진으로 다시 시도해 주세요.", "error");
+    if (state.roomImageSelectionId !== selectionId || error?.name === "AbortError") return;
+    const message = error?.message === "image-dimensions-too-large"
+      ? "채팅방 사진 해상도가 너무 커서 안전하게 처리할 수 없습니다."
+      : "채팅방 사진을 변경하지 못했습니다. 다른 사진으로 다시 시도해 주세요.";
+    setAppStatus(message, "error");
   } finally {
     roomPhotoInput.value = "";
-    setRoomSettingsBusy(false);
+    if (state.roomImageSelectionId === selectionId) {
+      state.roomImageProcessing = false;
+      setRoomSettingsBusy(false);
+    }
   }
 }
 
@@ -171,7 +212,7 @@ async function removeRoomPhoto() {
   if (!room || !room.image_url || !isCurrentUserRoomOwner(room)) return;
   setRoomSettingsBusy(true);
   try {
-    const data = await api("/rooms/image/remove", {
+    const data = await requestAction("rooms.remove-image", "/rooms/image/remove", {
       method: "POST",
       body: JSON.stringify({ roomId: room.id }),
     });
@@ -190,7 +231,7 @@ async function leaveCurrentGroupRoom() {
   if (!window.confirm(`'${room.name}' 채팅방에서 나갈까요?`)) return;
   setRoomSettingsBusy(true);
   try {
-    await api("/rooms/leave", {
+    await requestAction("rooms.leave", "/rooms/leave", {
       method: "POST",
       body: JSON.stringify({ roomId: room.id }),
     });

@@ -7,6 +7,8 @@ function renderMessenger() {
   appScreen.classList.toggle("shorts-mode", state.activeList === "shorts");
   appTitle.textContent = state.activeList === "friends" ? "친구" : "채팅";
   openLoginButton.classList.add("hidden");
+  openStatusEmojiButton.classList.remove("hidden");
+  renderStatusEmojiControl();
   openProfileButton.classList.remove("hidden");
   openDirectoryButton.classList.remove("hidden");
   openNewChatButton.classList.toggle("hidden", state.activeList !== "chats");
@@ -22,18 +24,36 @@ function renderMessenger() {
   if (state.activeList === "friends") renderFriends();
   if (state.activeList === "shorts") {
     renderShorts();
-    renderShortShareBar();
   }
+  renderShortShareBar();
   if (!directorySheet.classList.contains("hidden")) renderDirectory();
 }
 
-function applyMessengerData(data) {
+function mergeEntitiesById(current, incoming, reset = false) {
+  const entities = new Map((reset ? [] : current).map((item) => [item.id, item]));
+  for (const item of incoming) entities.set(item.id, { ...(entities.get(item.id) || {}), ...item });
+  return [...entities.values()];
+}
+
+function recordSyncRevision(value) {
+  const revision = Number(value || 0);
+  if (!Number.isSafeInteger(revision) || revision <= state.syncRevision) return;
+  state.syncRevision = revision;
+  sessionStorage.setItem("colorless-realtime-cursor", String(revision));
+}
+
+function applyMessengerData(data, { resetFriends = true, resetRooms = true } = {}) {
   const incomingMessages = [];
-  const friends = data.friends || [];
+  const friends = mergeEntitiesById(state.messenger.friends, data.friends || [], resetFriends)
+    .sort((left, right) => String(left.username).localeCompare(String(right.username)));
   const friendsById = new Map(friends.map((friend) => [friend.id, friend]));
-  const rooms = (data.rooms || []).map((room) => {
+  const mergedRooms = mergeEntitiesById(state.messenger.rooms, data.rooms || [], resetRooms);
+  const rooms = mergedRooms.map((room) => {
     const friend = room.peer?.id ? friendsById.get(room.peer.id) : null;
     return friend ? { ...room, peer: { ...friend, ...room.peer } } : room;
+  }).sort((left, right) => {
+    const updated = String(right.updated_at).localeCompare(String(left.updated_at));
+    return updated || String(right.id).localeCompare(String(left.id));
   });
   rooms.forEach((room) => {
     const message = room.last_message;
@@ -46,19 +66,88 @@ function applyMessengerData(data) {
   });
   state.liveSyncInitialized = true;
   state.messenger = {
-    user: data.user,
+    user: data.user || state.messenger.user || state.session?.user,
     friends,
     discoverableUsers: data.discoverable_users || [],
     rooms,
   };
+  rebuildPresenceIndexes();
   return incomingMessages;
 }
 
+async function loadFriendsPage({ reset = false, render = false } = {}) {
+  if (state.friendsLoading || (!reset && !state.friendsNextCursor)) return [];
+  state.friendsLoading = true;
+  try {
+    const cursor = reset ? "" : state.friendsNextCursor;
+    const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+    const page = await requestAction("friends.page", `/friends?limit=30${suffix}`, {}, {
+      key: `friends.page:${cursor || "first"}`,
+      policy: "join",
+    });
+    state.friendsNextCursor = page.next_cursor || "";
+    applyMessengerData({ friends: page.items || [] }, { resetFriends: reset, resetRooms: false });
+    if (render) {
+      renderFriends();
+      renderFriendActionBar();
+    }
+    return page.items || [];
+  } finally {
+    state.friendsLoading = false;
+  }
+}
+
+async function loadRoomsPage({ reset = false, render = false } = {}) {
+  if (state.roomsLoading || (!reset && !state.roomsNextCursor)) return [];
+  state.roomsLoading = true;
+  try {
+    const cursor = reset ? "" : state.roomsNextCursor;
+    const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+    const page = await requestAction("rooms.page", `/rooms?limit=30${suffix}`, {}, {
+      key: `rooms.page:${cursor || "first"}`,
+      policy: "join",
+    });
+    state.roomsNextCursor = page.next_cursor || "";
+    applyMessengerData({ rooms: page.items || [] }, { resetFriends: false, resetRooms: reset });
+    if (render) {
+      renderChats();
+      renderShortShareBar();
+    }
+    return page.items || [];
+  } finally {
+    state.roomsLoading = false;
+  }
+}
+
 async function loadMessenger(render = true) {
-  const data = await api("/messenger");
-  const incomingMessages = applyMessengerData(data);
+  const me = await requestAction("messenger.me", "/me", {}, {
+    key: "messenger.load",
+    policy: "join",
+  });
+  const [friendsPage, roomsPage] = await Promise.all([
+    requestAction("friends.first-page", "/friends?limit=30"),
+    requestAction("rooms.first-page", "/rooms?limit=30"),
+  ]);
+  state.friendsNextCursor = friendsPage.next_cursor || "";
+  state.roomsNextCursor = roomsPage.next_cursor || "";
+  const user = { ...(state.session?.user || {}), ...(me.user || {}) };
+  const incomingMessages = applyMessengerData({
+    user,
+    friends: friendsPage.items || [],
+    rooms: roomsPage.items || [],
+  });
+  const baselineRevision = Number(me.revision || 0);
+  if (Number.isSafeInteger(baselineRevision) && baselineRevision >= state.syncRevision) {
+    state.syncRevision = baselineRevision;
+    sessionStorage.setItem("colorless-realtime-cursor", String(baselineRevision));
+  }
   if (render) renderMessenger();
   return incomingMessages;
+}
+
+async function loadAllFriends() {
+  while (state.friendsNextCursor) await loadFriendsPage({ render: false });
+  return state.messenger.friends;
 }
 
 async function syncLiveState() {
@@ -66,17 +155,18 @@ async function syncLiveState() {
   state.liveSyncBusy = true;
   try {
     const isShortsView = state.activeList === "shorts";
-    const [incomingMessages] = await Promise.all([
-      loadMessenger(!isShortsView),
-      state.selectedRoomId ? loadChatMessages() : Promise.resolve(),
-    ]);
-    if (isShortsView) {
-      const incoming = incomingMessages[0];
-      const room = incoming && state.messenger.rooms.find((candidate) => candidate.id === incoming.roomId);
-      if (!state.shortInlineReply && incoming && room) showShortMessageNotice(room, incoming.message);
-      else if (!state.shortInlineReply) renderShortShareBar();
-    } else {
-      renderChatRoom();
+    let hasMore = true;
+    while (hasMore) {
+      const payload = await requestAction(
+        "messenger.sync",
+        `/sync?after_revision=${encodeURIComponent(state.syncRevision)}&limit=200`,
+      );
+      for (const event of payload.events || []) {
+        await realtimeEvents.dispatch(event, { isShortsView });
+        recordSyncRevision(event.revision);
+      }
+      recordSyncRevision(payload.revision);
+      hasMore = Boolean(payload.has_more);
     }
   } catch (_) {
   } finally {
@@ -98,13 +188,14 @@ async function startApp() {
   state.isGuest = false;
   showApp();
   try {
+    registerRealtimeHandlers();
     await loadMessenger();
+    await syncLiveState();
     connectEvents();
     startLiveSync();
     window.clearTimeout(state.appStartRetryTimer);
     state.appStartRetryTimer = null;
     state.appStartRetryCount = 0;
-    openStatusEmojiPicker();
     setAppStatus("친구를 추가하거나 새 대화를 시작해 보세요.");
   } catch (error) {
     setAppStatus(`${error.message} 연결되면 자동으로 다시 시도합니다.`, "error");
@@ -124,7 +215,8 @@ async function loadOlderChatMessages() {
   const previousScrollHeight = chatMessageList.scrollHeight;
   state.messagesLoadingOlder = true;
   try {
-    const payload = await api(
+    const payload = await requestAction(
+      "messages.load-older",
       `/messages?room_id=${encodeURIComponent(roomId)}&limit=30&before=${encodeURIComponent(cursor)}`,
     );
     if (state.selectedRoomId !== roomId || state.messagesNextCursor !== cursor) return;
@@ -153,6 +245,7 @@ async function loadOlderChatMessages() {
 
 function setActiveList(listName) {
   if (state.activeList === listName) return;
+  if (state.activeList === "shorts" && listName !== "shorts") releaseAllShortFrames();
   if (listName === "shorts") {
     state.youtube.feedVersion += 1;
     state.youtube.guestVideos = [];
@@ -160,7 +253,9 @@ function setActiveList(listName) {
     state.youtube.guestError = "";
     state.youtube.guestLoading = false;
     state.youtube.renderedFeedVersion = -1;
-    state.youtube.renderedGuestVideoCount = 0;
+    state.youtube.virtualStart = -1;
+    state.youtube.virtualEnd = -1;
+    state.youtube.virtualHeight = 0;
     shortsView.scrollTop = 0;
   }
   state.activeList = listName;
@@ -181,13 +276,29 @@ function closeDirectory() {
 }
 
 function openNewChat() {
+  const context = activeActionBarState();
+  state.newChatOriginTab = state.activeList;
+  context.mode = "selecting";
+  context.selection = [];
   renderNewChatMemberList();
   newChatSheet.classList.remove("hidden");
+  if (state.friendsNextCursor) {
+    void loadAllFriends().then(() => {
+      if (!newChatSheet.classList.contains("hidden")) renderNewChatMemberList();
+    }).catch(() => {});
+  }
 }
 
 function closeNewChat() {
   newChatSheet.classList.add("hidden");
   newChatGroupName.value = "";
+  const origin = state.actionBarByTab[state.newChatOriginTab];
+  if (origin) {
+    origin.mode = "idle";
+    origin.selection = [];
+  }
+  state.newChatOriginTab = "";
+  renderShortShareBar(true);
 }
 
 function selectedNewChatMemberIds() {
@@ -196,7 +307,10 @@ function selectedNewChatMemberIds() {
 }
 
 function syncNewChatCreateButton() {
-  const memberCount = selectedNewChatMemberIds().length;
+  const selectedIds = selectedNewChatMemberIds();
+  const memberCount = selectedIds.length;
+  activeActionBarState().mode = "selecting";
+  activeActionBarState().selection = selectedIds;
   const isGroup = memberCount >= 2;
   newChatGroupNameField.classList.toggle("hidden", !isGroup);
   createNewChatButton.disabled = memberCount === 0 || (isGroup && !newChatGroupName.value.trim());
@@ -247,7 +361,7 @@ async function createNewChat() {
   }
   createNewChatButton.disabled = true;
   try {
-    const data = await api("/rooms", {
+    const data = await requestAction("rooms.create-group", "/rooms", {
       method: "POST",
       body: JSON.stringify({ name, memberUserIds }),
     });
@@ -273,7 +387,7 @@ async function addFriend(friendCode) {
     return;
   }
   try {
-    const data = await api("/friends", {
+    const data = await requestAction("friends.add", "/friends", {
       method: "POST",
       body: JSON.stringify({ friendCode: normalizedFriendCode }),
     });
@@ -288,7 +402,7 @@ async function addFriend(friendCode) {
 
 async function openDirectChat(userId) {
   try {
-    const data = await api("/direct-rooms", {
+    const data = await requestAction("rooms.open-direct", "/direct-rooms", {
       method: "POST",
       body: JSON.stringify({ userId }),
     });

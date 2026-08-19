@@ -7,20 +7,24 @@ function youtubeDurationSeconds(duration) {
   return Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0);
 }
 
-function createShortCard(video, copy, action) {
-  const card = document.createElement("article");
-  card.className = "short-card";
-  card.style.height = `${Math.max(shortsView.clientHeight, 1)}px`;
-
+function createShortFrame(video) {
   const frame = document.createElement("iframe");
   frame.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
   frame.allowFullscreen = true;
-  frame.loading = "eager";
+  frame.loading = "lazy";
   frame.referrerPolicy = "strict-origin-when-cross-origin";
+  frame.tabIndex = -1;
   frame.dataset.videoId = video.id;
   frame.dataset.src = shortEmbedSource(video.id);
   frame.dataset.soundEnabled = "false";
   frame.title = video.title || "YouTube 쇼츠";
+  return frame;
+}
+
+function createShortCard(video, copy, action, videoIndex) {
+  const card = document.createElement("article");
+  card.className = "short-card";
+  card.dataset.videoIndex = String(videoIndex);
 
   const metadata = document.createElement("div");
   metadata.className = "short-card-copy";
@@ -38,29 +42,12 @@ function createShortCard(video, copy, action) {
     metadata.appendChild(button);
   }
 
-  card.append(frame, metadata);
+  card.append(metadata);
   return card;
 }
 
-function activeShortCardIndex(cards) {
-  const viewTop = shortsView.getBoundingClientRect().top;
-  let activeIndex = 0;
-  let closestDistance = Number.POSITIVE_INFINITY;
-
-  cards.forEach((card, index) => {
-    const distance = Math.abs(card.getBoundingClientRect().top - viewTop);
-    if (distance < closestDistance) {
-      activeIndex = index;
-      closestDistance = distance;
-    }
-  });
-  return activeIndex;
-}
-
 function activeShortVideo() {
-  const cards = Array.from(shortsFeed.querySelectorAll(".short-card:not(.short-empty-card)"));
-  if (!cards.length) return null;
-  return state.youtube.guestVideos[activeShortCardIndex(cards)] || null;
+  return state.youtube.guestVideos[state.youtube.activeIndex] || null;
 }
 
 function clearShortMessageNotice() {
@@ -126,19 +113,19 @@ function renderShortShareBar(force = false) {
   shortMessageToggle.setAttribute("aria-pressed", String(state.shortsMessagesEnabled));
   shortMessageToggle.setAttribute("aria-label", state.shortsMessagesEnabled ? "쇼츠 메시지 알림 켜짐" : "쇼츠 메시지 알림 꺼짐");
   shortShareList.replaceChildren();
-  shortShareFeedback.textContent = ""; /*
-  shortShareSend.textContent = "➤";
-  shortShareSend.setAttribute("aria-label", "Send");
-  */ shortShareSend.textContent = ">";
-  shortShareSend.setAttribute("aria-label", "Send");
+  shortShareFeedback.textContent = "";
+  shortMessageToggle.classList.add("hidden");
+  shortShareSend.classList.remove("hidden");
+  ColorlessPlatform.decorateIconButton(shortShareSend, "send", { label: "쇼츠 보내기", iconOnly: true });
   if (state.shortInlineReply) {
+    shortShareBar.setAttribute("aria-label", "빠른 답장 입력");
     const input = document.createElement("input");
     input.type = "text";
     input.className = "short-inline-reply";
     input.maxLength = 300;
     input.autocomplete = "off";
-    input.placeholder = "Reply";
-    input.setAttribute("aria-label", "Reply message");
+    input.placeholder = "빠른 답장";
+    input.setAttribute("aria-label", "빠른 답장 메시지");
     input.value = state.shortInlineReply.draft || "";
     const saveDraft = () => {
       if (!state.shortInlineReply) return;
@@ -167,11 +154,12 @@ function renderShortShareBar(force = false) {
     });
     shortShareList.appendChild(input);
     shortShareSend.disabled = !input.value.trim();
-    shortShareSend.setAttribute("aria-label", "Send reply");
+    ColorlessPlatform.decorateIconButton(shortShareSend, "send", { label: "답장 보내기", iconOnly: true });
     requestAnimationFrame(() => input.focus());
     return;
   }
   if (state.shortMessageNotice) {
+    shortShareBar.setAttribute("aria-label", "새 메시지 빠른 답장");
     const room = state.messenger.rooms.find((candidate) => candidate.id === state.shortMessageNotice.roomId);
     const notice = document.createElement("button");
     notice.type = "button";
@@ -194,12 +182,22 @@ function renderShortShareBar(force = false) {
     notice.addEventListener("click", replyToShortMessageNotice);
     shortShareList.appendChild(notice);
     shortShareSend.disabled = false;
-    shortShareSend.setAttribute("aria-label", "Reply");
+    ColorlessPlatform.decorateIconButton(shortShareSend, "send", { label: "답장하기", iconOnly: true });
     return;
   }
+  if (state.activeList === "chats") {
+    renderChatActionBar();
+    return;
+  }
+  if (state.activeList === "friends") {
+    renderFriendActionBar();
+    return;
+  }
+  shortShareBar.setAttribute("aria-label", "쇼츠 공유");
+  shortMessageToggle.classList.remove("hidden");
   const rooms = recentChatRooms();
   if (!rooms.length) {
-    state.selectedShareRoomId = "";
+    state.selectedShareRoomIds = [];
     shortShareSend.disabled = true;
     /*
     const empty = document.createElement("p");
@@ -208,33 +206,43 @@ function renderShortShareBar(force = false) {
     shortShareList.appendChild(empty);
     */ return;
   }
-  if (!rooms.some((room) => room.id === state.selectedShareRoomId)) state.selectedShareRoomId = "";
+  const roomIds = new Set(rooms.map((room) => room.id));
+  state.selectedShareRoomIds = state.selectedShareRoomIds.filter((roomId) => roomIds.has(roomId));
 
   rooms.forEach((room) => {
     const person = document.createElement("button");
     person.type = "button";
-    person.className = "short-share-person"; /*
+    person.className = "short-share-person";
+    person.dataset.roomId = room.id;
+    /*
     person.title = `${room.name}에게 현재 쇼츠 보내기`;
     */ person.title = `Share to ${room.name}`;
     person.appendChild(createRoomAvatar(room));
     const name = document.createElement("span");
     name.textContent = room.name;
     person.appendChild(name);
-    person.classList.toggle("selected", state.selectedShareRoomId === room.id);
+    const isSelected = state.selectedShareRoomIds.includes(room.id);
+    person.classList.toggle("selected", isSelected);
+    person.setAttribute("aria-pressed", String(isSelected));
     person.addEventListener("click", () => selectShortShareRoom(room.id));
     shortShareList.appendChild(person);
   });
-  shortShareSend.disabled = !state.selectedShareRoomId;
+  const selectedCount = state.selectedShareRoomIds.length;
+  shortShareSend.disabled = selectedCount === 0;
+  shortShareSend.setAttribute("aria-label", selectedCount ? `선택한 ${selectedCount}개 채팅방에 쇼츠 보내기` : "쇼츠 보내기");
 }
 
 function selectShortShareRoom(roomId) {
-  state.selectedShareRoomId = roomId;
+  state.selectedShareRoomIds = state.selectedShareRoomIds.includes(roomId)
+    ? state.selectedShareRoomIds.filter((selectedId) => selectedId !== roomId)
+    : [...state.selectedShareRoomIds, roomId];
   renderShortShareBar();
 }
 
 async function sendSelectedShort() {
-  const room = state.messenger.rooms.find((candidate) => candidate.id === state.selectedShareRoomId);
-  if (room) await shareShortToRoom(room);
+  const selectedIds = new Set(state.selectedShareRoomIds);
+  const rooms = state.messenger.rooms.filter((room) => selectedIds.has(room.id));
+  if (rooms.length) await shareShortToRooms(rooms);
 }
 
 async function replyToShortMessageNotice() {
@@ -254,7 +262,7 @@ async function sendShortInlineReply() {
   input.disabled = true;
   shortShareSend.disabled = true;
   try {
-    await api("/messages", { method: "POST", body: JSON.stringify({ roomId, text }) });
+    await requestAction("shorts.reply", "/messages", { method: "POST", body: JSON.stringify({ roomId, text }) });
     clearShortMessageNotice();
     await loadMessenger(false);
     renderShortShareBar();
@@ -277,25 +285,26 @@ async function handleShortShareAction() {
   await sendSelectedShort();
 }
 
-async function shareShortToRoom(room) {
+async function shareShortToRooms(rooms) {
   const video = activeShortVideo();
   if (!video) {
     shortShareFeedback.textContent = "공유할 쇼츠를 먼저 불러와 주세요.";
     return;
   }
-  const url = `https://www.youtube.com/shorts/${video.id}`; /*
-  shortShareFeedback.textContent = `${room.name}에게 보내는 중…`;
-  */ const shareUrl = `https://www.youtube.com/shorts/${video.id}`;
-  shortShareFeedback.textContent = `Sending to ${room.name}...`;
+  const shareUrl = `https://www.youtube.com/shorts/${video.id}`;
+  shortShareFeedback.textContent = `${rooms.length}개 채팅방에 보내는 중…`;
+  shortShareSend.disabled = true;
   try {
-    await api("/messages", {
+    await Promise.all(rooms.map((room) => requestAction(`shorts.share.${room.id}`, "/messages", {
       method: "POST",
       body: JSON.stringify({ roomId: room.id, text: shareUrl }),
-    });
-    shortShareFeedback.textContent = `${room.name}에게 보냈어요.`;
-    shortShareSend.disabled = true;
+    })));
+    state.selectedShareRoomIds = [];
+    setAppStatus(`${rooms.length}개 채팅방에 쇼츠를 보냈어요.`, "success");
+    renderShortShareBar(true);
   } catch (error) {
     shortShareFeedback.textContent = error.message;
+    shortShareSend.disabled = false;
   }
 }
 
@@ -355,44 +364,80 @@ function pauseShortFrame(frame) {
   sendShortPlayerCommand(frame, "pauseVideo");
 }
 
-function syncActiveShortAudio() {
-  const cards = Array.from(shortsFeed.querySelectorAll(".short-card:not(.short-empty-card)"));
-  if (!cards.length) return;
-  const activeIndex = activeShortCardIndex(cards);
+function removeShortFrame(card) {
+  const frame = card.querySelector("iframe");
+  if (!frame) return;
+  pauseShortFrame(frame);
+  frame.removeAttribute("src");
+  frame.remove();
+}
 
-  cards.forEach((card, index) => {
-    const frame = card.querySelector("iframe");
-    if (!frame) return;
-    const shouldLoad = Math.abs(index - activeIndex) <= 2;
-    if (shouldLoad && frame.dataset.src) {
-      loadShortFrame(frame);
-    } else if (!shouldLoad && frame.hasAttribute("src")) {
-      frame.dataset.src = shortEmbedSource(frame.dataset.videoId);
-      frame.removeAttribute("src");
-      frame.dataset.soundEnabled = "false";
-      frame.dataset.playbackState = "paused";
+function ensureShortFrame(card) {
+  let frame = card.querySelector("iframe");
+  if (frame) return frame;
+  const videoIndex = Number(card.dataset.videoIndex);
+  const video = state.youtube.guestVideos[videoIndex];
+  if (!video) return null;
+  frame = createShortFrame(video);
+  card.prepend(frame);
+  return frame;
+}
+
+function releaseAllShortFrames() {
+  window.clearTimeout(state.shortSnapTimer);
+  state.shortSnapTimer = null;
+  shortsFeed.querySelectorAll(".short-card").forEach(removeShortFrame);
+}
+
+function syncActiveShortAudio() {
+  if (document.hidden || state.activeList !== "shorts") {
+    releaseAllShortFrames();
+    return;
+  }
+  const cards = Array.from(shortsFeed.querySelectorAll(".short-card:not(.short-empty-card)"));
+  cards.forEach((card) => {
+    const cardIndex = Number(card.dataset.videoIndex);
+    const shouldLoad = cardIndex === state.youtube.activeIndex;
+    if (!shouldLoad) {
+      removeShortFrame(card);
+      return;
     }
-    if (index === activeIndex) {
+    const frame = ensureShortFrame(card);
+    if (!frame) return;
+    loadShortFrame(frame);
+    if (cardIndex === state.youtube.activeIndex) {
       const enableSound = state.youtube.soundEnabled;
       if (frame.dataset.playbackState !== "playing" || frame.dataset.soundEnabled !== String(enableSound)) {
         playShortFrame(frame, enableSound);
       }
-    } else if (shouldLoad) {
+    } else {
       pauseShortFrame(frame);
     }
   });
-  shortsSoundToggle.textContent = state.youtube.soundEnabled ? "🔊" : "🔇";
-  shortsSoundToggle.setAttribute("aria-label", state.youtube.soundEnabled ? "쇼츠 소리 끄기" : "쇼츠 소리 켜기");
+  ColorlessPlatform.decorateIconButton(
+    shortsSoundToggle,
+    state.youtube.soundEnabled ? "volume-2" : "volume-x",
+    { label: state.youtube.soundEnabled ? "쇼츠 소리 끄기" : "쇼츠 소리 켜기", iconOnly: true },
+  );
 }
 
 function loadVisibleShortFrames() {
   syncActiveShortAudio();
 }
 
-function createShortEmptyCard(titleText, copyText, action) {
+function handleShortVisibilityChange() {
+  if (document.hidden || state.activeList !== "shorts") {
+    releaseAllShortFrames();
+    return;
+  }
+  renderShortWindow();
+  syncActiveShortAudio();
+}
+
+function createShortEmptyCard(titleText, copyText, action, videoIndex = 0) {
   const card = document.createElement("article");
   card.className = "short-card short-empty-card";
-  card.style.height = `${Math.max(shortsView.clientHeight, 1)}px`;
+  card.dataset.videoIndex = String(videoIndex);
   const title = document.createElement("h2");
   title.textContent = titleText;
   const copy = document.createElement("p");
@@ -408,14 +453,146 @@ function createShortEmptyCard(titleText, copyText, action) {
   return card;
 }
 
+function shortViewportHeight() {
+  return Math.max(shortsView.clientHeight, 1);
+}
+
+function shortLogicalItemCount() {
+  return state.youtube.guestVideos.length + (state.youtube.guestError ? 1 : 0);
+}
+
+function shortVirtualRange(activeIndex, itemCount) {
+  const windowSize = Math.min(SHORTS_DOM_WINDOW_SIZE, itemCount);
+  const start = Math.min(
+    Math.max(0, activeIndex - Math.floor(windowSize / 2)),
+    Math.max(0, itemCount - windowSize),
+  );
+  return { start, end: start + windowSize };
+}
+
+function positionShortCard(card, videoIndex, height) {
+  card.style.height = `${height}px`;
+  card.style.left = "0";
+  card.style.position = "absolute";
+  card.style.right = "0";
+  card.style.top = `${videoIndex * height}px`;
+}
+
+function insertShortCardInOrder(card, videoIndex) {
+  const nextCard = Array.from(shortsFeed.querySelectorAll(".short-card[data-video-index]"))
+    .find((candidate) => Number(candidate.dataset.videoIndex) > videoIndex);
+  shortsFeed.insertBefore(card, nextCard || null);
+}
+
+function renderShortWindow(force = false) {
+  const itemCount = shortLogicalItemCount();
+  if (!itemCount) return;
+  const height = shortViewportHeight();
+  const activeIndex = Math.max(0, Math.min(state.youtube.activeIndex, itemCount - 1));
+  state.youtube.activeIndex = activeIndex;
+  const range = shortVirtualRange(activeIndex, itemCount);
+  const unchanged = (
+    !force
+    && state.youtube.virtualStart === range.start
+    && state.youtube.virtualEnd === range.end
+    && state.youtube.virtualHeight === height
+  );
+  shortsFeed.style.height = `${itemCount * height}px`;
+  if (unchanged) {
+    syncActiveShortAudio();
+    return;
+  }
+
+  const preservedScrollTop = shortsView.scrollTop;
+  const existing = new Map(
+    Array.from(shortsFeed.querySelectorAll(".short-card[data-video-index]"))
+      .map((card) => [Number(card.dataset.videoIndex), card]),
+  );
+  existing.forEach((card, videoIndex) => {
+    if (videoIndex < range.start || videoIndex >= range.end) {
+      removeShortFrame(card);
+      card.remove();
+      existing.delete(videoIndex);
+    }
+  });
+  for (let videoIndex = range.start; videoIndex < range.end; videoIndex += 1) {
+    let card = existing.get(videoIndex);
+    const video = state.youtube.guestVideos[videoIndex];
+    if (card && Boolean(video) === card.classList.contains("short-empty-card")) {
+      removeShortFrame(card);
+      card.remove();
+      card = null;
+    }
+    if (!card) {
+      card = video
+        ? createShortCard(video, video.channel_title || "YouTube", null, videoIndex)
+        : createShortEmptyCard(
+          "다음 쇼츠를 불러오지 못했어요",
+          state.youtube.guestError,
+          { label: "다시 불러오기", onClick: loadGuestShorts },
+          videoIndex,
+        );
+      insertShortCardInOrder(card, videoIndex);
+    }
+    positionShortCard(card, videoIndex, height);
+  }
+  state.youtube.virtualStart = range.start;
+  state.youtube.virtualEnd = range.end;
+  state.youtube.virtualHeight = height;
+  // Loading or removing a cross-origin player must not become the browser's
+  // scroll anchor and advance the logical feed without user input.
+  if (Math.abs(shortsView.scrollTop - preservedScrollTop) > 1) {
+    shortsView.scrollTop = preservedScrollTop;
+  }
+  syncActiveShortAudio();
+}
+
+function updateShortsFromScroll() {
+  const itemCount = shortLogicalItemCount();
+  if (!itemCount) return;
+  const height = shortViewportHeight();
+  const activeIndex = Math.max(0, Math.min(itemCount - 1, Math.round(shortsView.scrollTop / height)));
+  if (activeIndex !== state.youtube.activeIndex) {
+    state.youtube.activeIndex = activeIndex;
+    renderShortWindow();
+  } else {
+    syncActiveShortAudio();
+  }
+  maybeLoadMoreGuestShorts();
+  scheduleShortScrollSnap();
+}
+
+function scheduleShortScrollSnap() {
+  window.clearTimeout(state.shortSnapTimer);
+  state.shortSnapTimer = window.setTimeout(() => {
+    state.shortSnapTimer = null;
+    if (state.activeList !== "shorts" || document.hidden) return;
+    const target = state.youtube.activeIndex * shortViewportHeight();
+    if (Math.abs(shortsView.scrollTop - target) > 1) shortsView.scrollTop = target;
+  }, 120);
+}
+
+function resizeShortWindow() {
+  if (state.activeList !== "shorts" || !shortLogicalItemCount()) return;
+  const activeIndex = state.youtube.activeIndex;
+  state.youtube.virtualHeight = 0;
+  renderShortWindow(true);
+  shortsView.scrollTop = activeIndex * shortViewportHeight();
+}
+
 function renderShorts() {
   if (state.youtube.renderedFeedVersion !== state.youtube.feedVersion) {
+    releaseAllShortFrames();
     shortsFeed.replaceChildren();
     state.youtube.renderedFeedVersion = state.youtube.feedVersion;
-    state.youtube.renderedGuestVideoCount = 0;
+    state.youtube.activeIndex = 0;
+    state.youtube.virtualStart = -1;
+    state.youtube.virtualEnd = -1;
+    state.youtube.virtualHeight = 0;
   }
 
   if (!state.youtube.guestVideos.length) {
+    shortsFeed.style.height = `${shortViewportHeight()}px`;
     shortsFeed.replaceChildren(createShortEmptyCard(
       state.youtube.guestError ? "쇼츠를 불러오지 못했어요" : "YouTube Shorts",
       state.youtube.guestError || "한국 쇼츠를 불러오는 중이에요.",
@@ -423,33 +600,12 @@ function renderShorts() {
         ? null
         : { label: "다시 불러오기", onClick: loadGuestShorts },
     ));
-    state.youtube.renderedGuestVideoCount = 0;
+    positionShortCard(shortsFeed.firstElementChild, 0, shortViewportHeight());
     return;
   }
 
-  if (state.youtube.renderedGuestVideoCount === 0) {
-    shortsFeed.replaceChildren();
-  }
-  shortsFeed.querySelector(".short-load-error")?.remove();
-  state.youtube.guestVideos.slice(state.youtube.renderedGuestVideoCount).forEach((video) => {
-    shortsFeed.appendChild(createShortCard(
-      video,
-      video.channel_title || "YouTube",
-    ));
-  });
-  state.youtube.renderedGuestVideoCount = state.youtube.guestVideos.length;
-  if (state.youtube.guestError) {
-    const errorCard = createShortEmptyCard(
-      "다음 쇼츠를 불러오지 못했어요",
-      state.youtube.guestError,
-      { label: "다시 불러오기", onClick: loadGuestShorts },
-    );
-    errorCard.classList.add("short-load-error");
-    shortsFeed.appendChild(errorCard);
-  }
+  renderShortWindow();
   renderShortShareBar();
-  loadVisibleShortFrames();
-  syncActiveShortAudio();
 }
 
 async function loadGuestShorts(refresh = false) {
@@ -465,7 +621,7 @@ async function loadGuestShorts(refresh = false) {
       : refresh
         ? "?refresh=1"
         : "";
-    const payload = await api(`/youtube/shorts${requestQuery}`);
+    const payload = await requestAction("shorts.load", `/youtube/shorts${requestQuery}`);
     if (feedVersion !== state.youtube.feedVersion) return;
     const existingIds = new Set(state.youtube.guestVideos.map((video) => video.id));
     const newVideos = (payload.items || []).filter((video) => video?.id && !existingIds.has(video.id));
@@ -504,11 +660,9 @@ async function loadYouTubeShorts() {
   renderShorts();
 
   try {
-    const likedResponse = await fetch("https://www.googleapis.com/youtube/v3/videos?part=snippet&myRating=like&maxResults=1", {
+    const likedPayload = await requestAction("shorts.load-liked", "https://www.googleapis.com/youtube/v3/videos?part=snippet&myRating=like&maxResults=1", {
       headers: { Authorization: `Bearer ${state.youtube.accessToken}` },
     });
-    const likedPayload = await likedResponse.json();
-    if (!likedResponse.ok) throw new Error(likedPayload?.error?.message || "좋아요한 영상을 불러오지 못했어요.");
 
     const seed = likedPayload.items?.[0];
     if (!seed?.id) {
@@ -527,11 +681,9 @@ async function loadYouTubeShorts() {
       relatedToVideoId: seed.id,
       maxResults: "25",
     });
-    const relatedResponse = await fetch(relatedUrl, {
+    const relatedPayload = await requestAction("shorts.load-related", relatedUrl, {
       headers: { Authorization: `Bearer ${state.youtube.accessToken}` },
     });
-    const relatedPayload = await relatedResponse.json();
-    if (!relatedResponse.ok) throw new Error(relatedPayload?.error?.message || "유사한 영상을 불러오지 못했어요.");
 
     const videoIds = (relatedPayload.items || []).map((item) => item.id?.videoId).filter(Boolean);
     if (!videoIds.length) {
@@ -547,11 +699,9 @@ async function loadYouTubeShorts() {
       part: "snippet,contentDetails",
       id: videoIds.join(","),
     });
-    const videosResponse = await fetch(videosUrl, {
+    const videosPayload = await requestAction("shorts.load-details", videosUrl, {
       headers: { Authorization: `Bearer ${state.youtube.accessToken}` },
     });
-    const videosPayload = await videosResponse.json();
-    if (!videosResponse.ok) throw new Error(videosPayload?.error?.message || "추천 영상을 불러오지 못했어요.");
 
     state.youtube.videos = (videosPayload.items || []).filter((video) => youtubeDurationSeconds(video.contentDetails?.duration) > 0 && youtubeDurationSeconds(video.contentDetails?.duration) <= 60);
     state.youtube.seedTitle = seed.snippet?.title || "";

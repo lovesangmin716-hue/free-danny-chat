@@ -184,7 +184,7 @@ async function updatePresence() {
   if (!state.session?.user) return;
   const emoji = state.selectedStatusEmoji || normalizeStatusEmoji(state.messenger.user?.status_message);
   try {
-    await api("/presence", {
+    await requestAction("presence.update", "/presence", {
       method: "POST",
       body: JSON.stringify({ activeRoomId: document.hidden ? "" : state.selectedRoomId, emoji }),
     });
@@ -196,7 +196,10 @@ async function loadChatMessages({ markRead = true, scrollToBottom = false } = {}
   if (!state.selectedRoomId) return;
   const roomId = state.selectedRoomId;
   try {
-    const payload = await api(`/messages?room_id=${encodeURIComponent(roomId)}&limit=30`);
+    const payload = await requestAction(
+      "messages.load",
+      `/messages?room_id=${encodeURIComponent(roomId)}&limit=30`,
+    );
     if (state.selectedRoomId !== roomId) return;
     const messages = Array.isArray(payload) ? payload : (payload.items || []);
     const serverClientMessageIds = new Set();
@@ -223,6 +226,33 @@ async function loadChatMessages({ markRead = true, scrollToBottom = false } = {}
   }
 }
 
+async function loadRoomMembers(roomId, { reset = true } = {}) {
+  const room = state.roomById.get(roomId);
+  if (!room || room.kind !== "group" || state.roomMembersLoading.has(roomId)) return;
+  const cursor = reset ? "" : (state.roomMemberCursors.get(roomId) || "");
+  if (!reset && !cursor) return;
+  state.roomMembersLoading.add(roomId);
+  try {
+    const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+    const page = await requestAction(
+      "rooms.members",
+      `/rooms/${encodeURIComponent(roomId)}/members?limit=50${suffix}`,
+    );
+    if (state.roomById.get(roomId) !== room) return;
+    const existing = reset ? [] : (room.participants || []);
+    room.participants = mergeEntitiesById(existing, page.items || [], false);
+    room.participant_count = Math.max(room.participant_count || 0, room.participants.length);
+    state.roomMemberCursors.set(roomId, page.next_cursor || "");
+    if (state.selectedRoomId === roomId) {
+      state.renderedMessageRevision = -1;
+      renderChatRoom();
+    }
+  } catch (_) {
+  } finally {
+    state.roomMembersLoading.delete(roomId);
+  }
+}
+
 async function openChatRoom(roomId) {
   state.selectedRoomId = roomId;
   setChatMessages([]);
@@ -233,6 +263,7 @@ async function openChatRoom(roomId) {
   renderChatRoom();
   await Promise.all([
     updatePresence(),
+    loadRoomMembers(roomId),
     loadChatMessages({ scrollToBottom: true }),
   ]);
   chatMessageInput.focus({ preventScroll: true });
@@ -245,6 +276,12 @@ function closeChatRoom() {
   state.messagesNextCursor = "";
   state.messagesLoadingOlder = false;
   state.renderedMessageRoomId = "";
+  clearChatAttachment();
+  if (state.roomImageProcessing) {
+    state.roomImageSelectionId += 1;
+    state.roomImageProcessing = false;
+    ColorlessImageProcessing.cancel("room-image");
+  }
   chatRoom.classList.add("hidden");
   roomSettingsSheet.classList.add("hidden");
   updatePresence();
@@ -264,7 +301,7 @@ async function postChatMessageWithRetry(payload) {
   const maxAttempts = 3;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
-      return await api("/messages", { method: "POST", body: JSON.stringify(payload) });
+      return await requestAction("messages.send", "/messages", { method: "POST", body: JSON.stringify(payload) });
     } catch (error) {
       const retryable = !error?.status || error.status === 429 || error.status >= 500;
       if (!retryable || attempt === maxAttempts - 1) throw error;
