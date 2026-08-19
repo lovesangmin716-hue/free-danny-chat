@@ -236,6 +236,17 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertNotIn('requestAction("auth.logout", "/logout", { method: "POST", body:', auth_script)
         self.assertIn('${method} ${url} 요청 실패 (HTTP ${statusLabel})', http_script)
 
+    def test_stale_session_check_cannot_overwrite_a_completed_login(self) -> None:
+        core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
+        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+
+        self.assertIn("authEpoch: 0", core_script)
+        self.assertIn("function advanceAuthEpoch()", core_script)
+        self.assertIn("advanceAuthEpoch();\n  state.session = session;", core_script)
+        self.assertIn("advanceAuthEpoch();\n  setAuthRequestBusy(true, message);", core_script)
+        self.assertIn("const authEpoch = state.authEpoch;", bootstrap_script)
+        self.assertEqual(bootstrap_script.count("if (authEpoch !== state.authEpoch) return;"), 2)
+
     def test_attachments_use_signed_grants_and_bounded_streaming(self) -> None:
         attachment_script = (server.ASSETS_DIR / "js" / "attachments.js").read_text(encoding="utf-8")
         server_script = SERVER_PATH.read_text(encoding="utf-8")

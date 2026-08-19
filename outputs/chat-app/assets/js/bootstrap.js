@@ -2,11 +2,13 @@
 
 // Event binding and application startup. Loaded last after every feature module.
 async function checkSession() {
+  const authEpoch = state.authEpoch;
   try {
     const session = await requestAction("auth.check-session", "/session", { headers: {} }, {
       key: "auth.session",
       policy: "join",
     });
+    if (authEpoch !== state.authEpoch) return;
     window.clearTimeout(state.sessionCheckTimer);
     state.sessionCheckTimer = null;
     state.sessionCheckRetryCount = 0;
@@ -17,6 +19,7 @@ async function checkSession() {
       showAuth();
     }
   } catch (error) {
+    if (authEpoch !== state.authEpoch) return;
     setAuthStatus("로그인 상태를 확인하지 못했어요. 연결되면 자동으로 다시 확인합니다.", "error");
     const retryDelay = Math.min(30000, 1000 * (2 ** Math.min(state.sessionCheckRetryCount, 5)));
     state.sessionCheckRetryCount += 1;

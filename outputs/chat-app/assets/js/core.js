@@ -85,6 +85,7 @@ selectedProfilePalette: "default",
   statusPickerTouched: false,
   statusPickerTimer: null,
   statusPickerOpener: null,
+  authEpoch: 0,
   authRequestBusy: false,
   youtube: {
     accessToken: "",
@@ -485,8 +486,17 @@ async function api(url, options = {}) {
 }
 
 function rememberSession(session) {
+  advanceAuthEpoch();
   state.session = session;
   state.isGuest = false;
+}
+
+function advanceAuthEpoch() {
+  state.authEpoch += 1;
+  window.clearTimeout(state.sessionCheckTimer);
+  state.sessionCheckTimer = null;
+  state.sessionCheckRetryCount = 0;
+  return state.authEpoch;
 }
 
 function setAuthRequestBusy(isBusy, message = "") {
@@ -503,11 +513,13 @@ function setAuthRequestBusy(isBusy, message = "") {
 
 function beginAuthRequest(message) {
   if (state.authRequestBusy) return false;
+  advanceAuthEpoch();
   setAuthRequestBusy(true, message);
   return true;
 }
 
 function showAuth(mode = "login") {
+  advanceAuthEpoch();
   if (state.eventSource) {
     state.eventSource.close();
     state.eventSource = null;
@@ -516,9 +528,6 @@ function showAuth(mode = "login") {
   state.eventEverConnected = false;
   window.clearTimeout(state.eventReconnectTimer);
   state.eventReconnectTimer = null;
-  window.clearTimeout(state.sessionCheckTimer);
-  state.sessionCheckTimer = null;
-  state.sessionCheckRetryCount = 0;
   window.clearTimeout(state.appStartRetryTimer);
   state.appStartRetryTimer = null;
   state.appStartRetryCount = 0;
