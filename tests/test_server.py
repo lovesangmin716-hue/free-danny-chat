@@ -247,6 +247,10 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("from public, anon, authenticated", schema.lower())
         self.assertIn("to service_role", schema.lower())
         self.assertIn("::timestamptz", schema.lower())
+        self.assertIn("updated_at double precision not null default extract(epoch from now())", schema.lower())
+        self.assertIn("alter column updated_at type double precision", schema.lower())
+        self.assertNotIn("current_time timestamptz", schema.lower())
+        self.assertGreaterEqual(schema.lower().count("now_value timestamptz"), 2)
         self.assertIn("BEGIN IMMEDIATE", persistence)
         self.assertIn("PRAGMA foreign_keys=ON", persistence)
         self.assertIn("ORDER BY rowid DESC", persistence)
@@ -1475,6 +1479,7 @@ class SupabaseRepositoryContractTestCase(unittest.TestCase):
         self.assertNotIn("profile_pixels", sync_request["payload"]["user_data"])
         art_request = next((path, kwargs) for path, kwargs in requests if "profile_art?on_conflict=" in path)
         self.assertEqual(len(bytes.fromhex(art_request[1]["payload"][0]["pixels_rgb"][2:])), 3072)
+        self.assertIsInstance(art_request[1]["payload"][0]["updated_at"], float)
 
     def test_shorts_catalog_uses_shared_rows_and_atomic_collector_rpcs(self) -> None:
         requests = []
