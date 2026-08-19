@@ -2945,6 +2945,8 @@ class StateStore:
         room: dict,
         user: dict,
         messages: list[dict],
+        *,
+        all_messages: list[dict] | None = None,
     ) -> list[dict]:
         reader_ids: list[str] = []
         if room.get("kind") == "direct":
@@ -2961,7 +2963,8 @@ class StateStore:
                 if user_id != user["id"]
             ]
 
-        all_messages = self._room_messages_locked(room["id"])
+        if all_messages is None:
+            all_messages = self._room_messages_locked(room["id"])
         message_positions = {
             message["id"]: index
             for index, message in enumerate(all_messages)
@@ -3014,7 +3017,12 @@ class StateStore:
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None
             messages = self._room_messages_locked(room_id)
-            return self._messages_with_read_state_locked(room, user, messages)
+            return self._messages_with_read_state_locked(
+                room,
+                user,
+                messages,
+                all_messages=messages,
+            )
 
     def get_messages_page(
         self,
@@ -3029,15 +3037,61 @@ class StateStore:
             room = self._rooms_by_id.get(room_id)
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None
-            messages = self._room_messages_locked(room_id, limit=limit + 1, before=before)
-            has_more = len(messages) > limit
+            all_messages = self._room_messages_locked(room_id)
+            if before:
+                page_end = next(
+                    (index for index, message in enumerate(all_messages) if message.get("id") == before),
+                    0,
+                )
+                available_messages = all_messages[:page_end]
+            else:
+                available_messages = all_messages
+            messages = available_messages[-(limit + 1):]
+            has_more = len(available_messages) > limit
             if has_more:
                 messages = messages[-limit:]
-            page_messages = self._messages_with_read_state_locked(room, user, messages)
+            page_messages = self._messages_with_read_state_locked(
+                room,
+                user,
+                messages,
+                all_messages=all_messages,
+            )
             return {
                 "items": page_messages,
                 "next_cursor": messages[0]["id"] if has_more and page_messages else "",
             }
+
+    def initial_message_read_state(self, room_id: str, username: str, message: dict) -> dict:
+        with self.lock:
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
+            if user is None or room is None or message.get("username") != username:
+                return message
+
+            response_message = {**message, "read": False}
+            reader_ids = [
+                user_id
+                for user_id in room.get("participant_ids", [])
+                if user_id != user["id"]
+            ]
+            last_read_by = room.get("last_read_by", {})
+            if room.get("kind") == "group":
+                response_message["unread_by"] = [
+                    {
+                        "id": reader["id"],
+                        "username": reader["username"],
+                        "display_name": reader.get("display_name") or reader["username"],
+                    }
+                    for reader_id in reader_ids
+                    if str(last_read_by.get(reader_id, "")) != str(message.get("id", ""))
+                    if (reader := self._users_by_id.get(reader_id)) is not None
+                ]
+                response_message["read"] = not response_message["unread_by"]
+            elif room.get("kind") == "direct" and reader_ids:
+                response_message["read"] = (
+                    str(last_read_by.get(reader_ids[0], "")) == str(message.get("id", ""))
+                )
+            return response_message
 
     def mark_room_read(self, room_id: str, username: str) -> tuple[dict | None, bool]:
         with self.lock:
@@ -3967,14 +4021,21 @@ class ApplicationServices:
         if result is None:
             raise CommandFailure("채팅방을 찾을 수 없습니다.", HTTPStatus.NOT_FOUND)
         message, room, created = result
-        visible_message = next(
-            (
-                candidate
-                for candidate in reversed(self.store.get_messages(room_id, user["username"]) or [])
-                if candidate.get("id") == message.get("id")
-            ),
-            message,
-        )
+        if created:
+            visible_message = self.store.initial_message_read_state(
+                room_id,
+                user["username"],
+                message,
+            )
+        else:
+            visible_message = next(
+                (
+                    candidate
+                    for candidate in reversed(self.store.get_messages(room_id, user["username"]) or [])
+                    if candidate.get("id") == message.get("id")
+                ),
+                message,
+            )
         if attachment is not None and created:
             UPLOAD_GRANTS.consume(Path(attachment["url"]).name, user["username"])
         if not created:

@@ -171,11 +171,17 @@ class StaticAppStructureTestCase(unittest.TestCase):
     def test_group_unread_names_are_only_shown_from_message_context_menu(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
+        messenger_script = (server.ASSETS_DIR / "js" / "messenger.js").read_text(encoding="utf-8")
         bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
 
         self.assertIn('id="message-read-menu"', index_html)
         self.assertIn("function showMessageReadMenuFromContext(event)", chat_script)
         self.assertIn('unreadNames.join(", ")', chat_script)
+        self.assertIn("reader.username !== payload.username", messenger_script)
+        self.assertNotRegex(
+            messenger_script,
+            r'if \(currentRoom\(\)\?\.kind === "group"\) \{\s+void loadChatMessages',
+        )
         self.assertNotIn('`안 읽음: ${unreadNames.join', chat_script)
         self.assertIn('chatMessageList.addEventListener("contextmenu", showMessageReadMenuFromContext)', bootstrap_script)
 
@@ -1829,19 +1835,42 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertEqual(group_outcome.data["room"]["kind"], "group")
         self.assertTrue(all(event["type"] == "room_created" for event, _ in group_outcome.events))
 
-        message_outcome = services.create_message(
-            self.alice,
-            {
-                "roomId": group_outcome.data["room"]["id"],
-                "text": "who has not read this",
-                "clientMessageId": "application-read-state",
-            },
-            lambda _value, _username: None,
-        )
+        with mock.patch.object(
+            self.store,
+            "get_messages",
+            side_effect=AssertionError("new messages must not be reloaded from storage"),
+        ):
+            message_outcome = services.create_message(
+                self.alice,
+                {
+                    "roomId": group_outcome.data["room"]["id"],
+                    "text": "who has not read this",
+                    "clientMessageId": "application-read-state",
+                },
+                lambda _value, _username: None,
+            )
         self.assertEqual(
             {reader["username"] for reader in message_outcome.data["unread_by"]},
             {"bob", "eve"},
         )
+
+    def test_message_page_uses_one_repository_read_for_items_and_read_state(self) -> None:
+        for index in range(5):
+            self.store.add_message(self.room_id, "alice", f"message {index}")
+
+        list_messages = self.store.repository.list_messages
+        with mock.patch.object(
+            self.store.repository,
+            "list_messages",
+            wraps=list_messages,
+        ) as list_messages_spy:
+            page = self.store.get_messages_page(self.room_id, "alice", limit=2)
+
+        self.assertIsNotNone(page)
+        assert page is not None
+        self.assertEqual(len(page["items"]), 2)
+        self.assertTrue(page["next_cursor"])
+        self.assertEqual(list_messages_spy.call_count, 1)
 
     def test_profile_art_round_trip_is_lossless_and_not_in_user_rows(self) -> None:
         pixels = [f"#{(index * 2654435761 & 0xFFFFFF):06x}" for index in range(1024)]

@@ -275,16 +275,23 @@ function registerRealtimeHandlers() {
   realtimeEvents.register("room_read", (payload) => {
     recordSyncRevision(payload.revision);
     if (payload.username === state.messenger.user?.username || payload.roomId !== state.selectedRoomId) return;
-    if (currentRoom()?.kind === "group") {
-      void loadChatMessages({ markRead: false });
-      return;
-    }
+    const isGroup = currentRoom()?.kind === "group";
     const changedMessages = [];
     appStore.transact("realtime.room-read", () => {
       for (let index = 0; index < state.messages.length; index += 1) {
         const message = state.messages[index];
         if (message.username !== state.messenger.user?.username || message.read) continue;
-        const readMessage = { ...message, read: true };
+        let readMessage;
+        if (isGroup) {
+          if (!Array.isArray(message.unread_by)) continue;
+          const unreadBy = message.unread_by.filter(
+            (reader) => reader.username !== payload.username,
+          );
+          if (unreadBy.length === message.unread_by.length) continue;
+          readMessage = { ...message, unread_by: unreadBy, read: unreadBy.length === 0 };
+        } else {
+          readMessage = { ...message, read: true };
+        }
         state.messages[index] = readMessage;
         changedMessages.push([message.id, readMessage]);
       }
