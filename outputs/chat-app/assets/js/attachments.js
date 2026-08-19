@@ -85,6 +85,7 @@ function discardChatAttachmentUpload(job) {
 function clearChatAttachment(options = {}) {
   const preserveUpload = options?.preserveUpload === true;
   if (!preserveUpload) discardChatAttachmentUpload(state.chatAttachmentUpload);
+  ColorlessImageProcessing.cancel("chat-attachment");
   state.chatAttachmentSelectionId += 1;
   state.chatAttachment = null;
   state.chatAttachmentType = "";
@@ -138,7 +139,7 @@ function decodeImageElement(file) {
   });
 }
 
-async function decodeAttachmentImage(file, maxEdge = 0) {
+async function decodeAttachmentImage(file, maxEdge = 0, maxPixels = IMAGE_FALLBACK_TOTAL_PIXELS_MAX) {
   let image;
   if (typeof createImageBitmap === "function") {
     try {
@@ -151,7 +152,7 @@ async function decodeAttachmentImage(file, maxEdge = 0) {
   }
   if (!image) image = await decodeImageElement(file);
   const { width, height } = decodedImageSize(image);
-  if (!width || !height || width * height > IMAGE_TOTAL_PIXELS_MAX) {
+  if (!width || !height || width * height > maxPixels || Math.max(width, height) > IMAGE_DIMENSION_MAX) {
     image.close?.();
     throw new Error("image-dimensions-too-large");
   }
@@ -193,8 +194,8 @@ function canvasToWebpBlob(canvas, quality = IMAGE_WEBP_QUALITY) {
   });
 }
 
-async function optimizeAttachmentImage(file) {
-  const bitmap = await decodeAttachmentImage(file, IMAGE_EDGE_PIXELS_MAX);
+async function optimizeAttachmentImageOnMain(file) {
+  const bitmap = await decodeAttachmentImage(file, IMAGE_EDGE_PIXELS_MAX, IMAGE_FALLBACK_TOTAL_PIXELS_MAX);
   try {
     const width = bitmap.width;
     const height = bitmap.height;
@@ -221,6 +222,34 @@ async function optimizeAttachmentImage(file) {
   } finally {
     bitmap.close?.();
   }
+}
+
+function imageProgressMessage(stage, subject = "이미지") {
+  return {
+    metadata: `${subject} 해상도를 확인하는 중이에요.`,
+    decode: `${subject}를 안전한 크기로 읽는 중이에요.`,
+    resize: `${subject} 크기를 줄이는 중이에요.`,
+    encode: `${subject}를 WebP로 저장하는 중이에요.`,
+  }[stage] || `${subject}를 처리하는 중이에요.`;
+}
+
+async function optimizeAttachmentImage(file) {
+  if (!ColorlessImageProcessing.supported()) return optimizeAttachmentImageOnMain(file);
+  const result = await ColorlessImageProcessing.run("chat-attachment", file, "optimize", {
+    maxPixels: IMAGE_TOTAL_PIXELS_MAX,
+    maxDimension: IMAGE_DIMENSION_MAX,
+    maxEdge: IMAGE_EDGE_PIXELS_MAX,
+    quality: IMAGE_WEBP_QUALITY,
+  }, {
+    timeoutMs: 15000,
+    onProgress: (stage) => setAppStatus(imageProgressMessage(stage)),
+  });
+  const blob = result.blob;
+  if (blob.type !== "image/webp" || !blob.size || blob.size > file.size * IMAGE_REQUIRED_SAVINGS_RATIO) return file;
+  return new File([blob], optimizedImageName(file.name), {
+    type: "image/webp",
+    lastModified: file.lastModified,
+  });
 }
 
 async function prepareChatAttachment(file, contentType) {
@@ -323,15 +352,29 @@ function pastedChatFile(clipboardData) {
 }
 
 async function uploadChatAttachment(file, contentType) {
-  const result = await api("/uploads", {
+  const grantResult = await requestAction("attachments.grant", "/uploads/grant", {
     method: "POST",
-    headers: {
-      "Content-Type": contentType,
-      "X-File-Name": encodeURIComponent(file.name),
-    },
-    body: file,
+    body: JSON.stringify({ name: file.name, type: contentType, size: file.size }),
   });
-  return result.attachment;
+  const upload = grantResult.upload;
+  try {
+    await requestAction("attachments.transfer", upload.url, {
+      method: upload.method,
+      headers: upload.headers,
+      body: file,
+    });
+    const completed = await requestAction("attachments.complete", "/uploads/complete", {
+      method: "POST",
+      body: JSON.stringify({ id: upload.id }),
+    });
+    return completed.attachment;
+  } catch (error) {
+    void api("/uploads/discard", {
+      method: "POST",
+      body: JSON.stringify({ url: `/uploads/${upload.id}` }),
+    }).catch(() => {});
+    throw error;
+  }
 }
 
 function startChatAttachmentUpload(selectionId, file, contentType) {

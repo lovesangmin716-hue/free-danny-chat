@@ -3,7 +3,10 @@
 // Event binding and application startup. Loaded last after every feature module.
 async function checkSession() {
   try {
-    const session = await api("/session", { headers: {} });
+    const session = await requestAction("auth.check-session", "/session", { headers: {} }, {
+      key: "auth.session",
+      policy: "join",
+    });
     window.clearTimeout(state.sessionCheckTimer);
     state.sessionCheckTimer = null;
     state.sessionCheckRetryCount = 0;
@@ -33,7 +36,7 @@ openRoomSettingsButton.addEventListener("click", openRoomSettings);
 closeRoomSettingsButton.addEventListener("click", closeRoomSettings);
 saveRoomSettingsButton.addEventListener("click", () => void saveRoomSettings());
 selectRoomPhotoButton.addEventListener("click", () => {
-  if (!state.roomSettingsBusy) roomPhotoInput.click();
+  if (!state.roomSettingsBusy || state.roomImageProcessing) roomPhotoInput.click();
 });
 roomPhotoInput.addEventListener("change", () => {
   const file = roomPhotoInput.files?.[0];
@@ -106,7 +109,7 @@ chatMessageInput.addEventListener("compositionend", () => {
   if (state.selectedRoomId) state.chatDrafts[state.selectedRoomId] = chatMessageInput.value;
 });
 shortMessageToggle.addEventListener("click", toggleShortMessages);
-shortShareSend.addEventListener("click", handleShortShareAction);
+shortShareSend.addEventListener("click", handleContextActionPrimary);
 let shortShareTouch = null;
 shortShareBar.addEventListener("touchstart", (event) => {
   const touch = event.touches[0];
@@ -130,6 +133,16 @@ document.addEventListener("visibilitychange", updatePresence);
 chatsTab.addEventListener("click", () => setActiveList("chats"));
 friendsTab.addEventListener("click", () => setActiveList("friends"));
 shortsTab.addEventListener("click", () => setActiveList("shorts"));
+chatList.addEventListener("scroll", () => {
+  if (chatList.scrollTop + chatList.clientHeight >= chatList.scrollHeight - 160) {
+    void loadRoomsPage({ render: true }).catch(() => {});
+  }
+}, { passive: true });
+friendList.addEventListener("scroll", () => {
+  if (friendList.scrollTop + friendList.clientHeight >= friendList.scrollHeight - 160) {
+    void loadFriendsPage({ render: true }).catch(() => {});
+  }
+}, { passive: true });
 shortsSoundToggle.addEventListener("click", () => {
   state.youtube.soundEnabled = !state.youtube.soundEnabled;
   syncActiveShortAudio();
@@ -138,10 +151,17 @@ shortsView.addEventListener("scroll", () => {
   if (state.shortScrollFrame !== null) return;
   state.shortScrollFrame = requestAnimationFrame(() => {
     state.shortScrollFrame = null;
-    maybeLoadMoreGuestShorts();
-    syncActiveShortAudio();
+    updateShortsFromScroll();
   });
 }, { passive: true });
+window.addEventListener("resize", () => {
+  if (state.shortResizeFrame !== null) return;
+  state.shortResizeFrame = requestAnimationFrame(() => {
+    state.shortResizeFrame = null;
+    resizeShortWindow();
+  });
+}, { passive: true });
+document.addEventListener("visibilitychange", handleShortVisibilityChange);
 openDirectoryButton.addEventListener("click", openDirectory);
 closeDirectoryButton.addEventListener("click", closeDirectory);
 friendCodeAddButton.addEventListener("click", () => addFriend(friendCodeInput.value));
@@ -159,10 +179,36 @@ friendCodeInput.addEventListener("keydown", (event) => {
     addFriend(friendCodeInput.value);
   }
 });
-openProfileButton.addEventListener("click", openProfileEditor);
+openProfileButton.addEventListener("click", () => void openProfileEditor());
+openStatusEmojiButton.addEventListener("click", () => openStatusEmojiPicker(openStatusEmojiButton));
+closeStatusEmojiButton.addEventListener("click", () => closeStatusEmojiPicker());
+skipStatusEmojiButton.addEventListener("click", () => closeStatusEmojiPicker());
+statusEmojiSheet.addEventListener("click", (event) => {
+  if (event.target === statusEmojiSheet) closeStatusEmojiPicker();
+});
+statusEmojiSheet.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeStatusEmojiPicker();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = [...statusEmojiSheet.querySelectorAll("button:not(:disabled), input:not(:disabled)")]
+    .filter((element) => element.getClientRects().length > 0);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable.at(-1);
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
 closeProfileButton.addEventListener("click", closeProfileEditor);
 selectProfilePhotoButton.addEventListener("click", () => {
-  if (!state.profileImagePreparing) profilePhotoInput.click();
+  profilePhotoInput.click();
 });
 profilePhotoInput.addEventListener("change", () => {
   const file = profilePhotoInput.files?.[0];

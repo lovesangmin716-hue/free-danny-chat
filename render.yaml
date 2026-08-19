@@ -4,14 +4,40 @@ services:
     runtime: python
     rootDir: outputs/chat-app
     plan: free
-    buildCommand: python -m py_compile server.py
+    buildCommand: pip install -r requirements.txt && python -m py_compile server.py
     startCommand: python server.py
-    healthCheckPath: /health
+    healthCheckPath: /ready
     envVars:
       - key: HOST
         value: 0.0.0.0
       - key: PORT
         value: 10000
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: MAX_REQUEST_THREADS
+        value: "64"
+      - key: MAX_BODY_READERS
+        value: "16"
+      - key: HEADER_READ_TIMEOUT_SECONDS
+        value: "5"
+      - key: BODY_READ_TIMEOUT_SECONDS
+        value: "10"
+      - key: UPLOAD_READ_TIMEOUT_SECONDS
+        value: "30"
+      - key: MAX_SSE_CONNECTIONS
+        value: "32"
+      - key: MAX_SSE_QUEUE_SIZE
+        value: "32"
+      - key: SSE_HEARTBEAT_SECONDS
+        value: "10"
+      - key: EVENT_POLL_INTERVAL_SECONDS
+        value: "0.1"
+      - key: PRESENCE_TTL_SECONDS
+        value: "45"
+      - key: SHORTS_COLLECTION_INTERVAL_SECONDS
+        value: "1800"
+      - key: SHORTS_DAILY_QUOTA_BUDGET
+        value: "5000"
       - key: REQUIRE_SUPABASE
         value: "true"
       - key: SUPABASE_URL

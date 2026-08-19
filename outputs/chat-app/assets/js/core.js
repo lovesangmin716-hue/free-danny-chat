@@ -1,12 +1,18 @@
 "use strict";
 
 // Shared state, DOM references, API client, and presentation primitives.
-const state = {
+const initialState = {
   session: null,
   providers: {},
   messenger: { friends: [], discoverableUsers: [], rooms: [] },
   activeList: "chats",
-  selectedShareRoomId: "",
+  selectedShareRoomIds: [],
+  actionBarByTab: {
+    chats: { mode: "idle", query: "", filter: "all", selection: [] },
+    friends: { mode: "idle", query: "", filter: "all", selection: [] },
+    shorts: { mode: "idle", query: "", filter: "all", selection: [] },
+  },
+  newChatOriginTab: "",
   shortMessageNotice: null,
   shortMessageTimer: null,
   shortMessagePaused: false,
@@ -16,6 +22,13 @@ const state = {
   messages: [],
   messageIndexes: new Map(),
   messageNodes: new Map(),
+  friendNodes: new Map(),
+  roomNodes: new Map(),
+  friendByUsername: new Map(),
+  roomById: new Map(),
+  roomIdsByPeerUsername: new Map(),
+  presencePatchUsernames: new Set(),
+  presencePatchFrame: null,
   messageRevision: 0,
   renderedMessageRevision: -1,
   renderedMessageRoomId: "",
@@ -31,6 +44,8 @@ const state = {
   chatAttachmentDrag: { active: false, kind: "" },
   chatAttachmentGuideTimer: null,
   roomSettingsBusy: false,
+  roomImageProcessing: false,
+  roomImageSelectionId: 0,
   eventSource: null,
   eventConnected: false,
   eventEverConnected: false,
@@ -42,6 +57,13 @@ const state = {
   liveSyncTimer: null,
   liveSyncBusy: false,
   liveSyncInitialized: false,
+  syncRevision: 0,
+  friendsNextCursor: "",
+  roomsNextCursor: "",
+  friendsLoading: false,
+  roomsLoading: false,
+  roomMemberCursors: new Map(),
+  roomMembersLoading: new Set(),
   lastSeenRoomMessageIds: {},
   profilePixels: "",
   profileImageUrl: "",
@@ -49,6 +71,7 @@ const state = {
   profileImagePreparing: false,
   profileImageSelectionId: 0,
   profileCropImage: null,
+  profileCropSourceBlob: null,
   profileCropOpen: false,
   profileCropZoomPercent: 100,
   profileCropOffsetX: 0,
@@ -61,6 +84,7 @@ selectedProfilePalette: "default",
   selectedStatusEmoji: "",
   statusPickerTouched: false,
   statusPickerTimer: null,
+  statusPickerOpener: null,
   authRequestBusy: false,
   youtube: {
     accessToken: "",
@@ -74,7 +98,9 @@ selectedProfilePalette: "default",
     guestError: "",
     feedVersion: 0,
     renderedFeedVersion: -1,
-    renderedGuestVideoCount: 0,
+    virtualStart: -1,
+    virtualEnd: -1,
+    virtualHeight: 0,
     soundEnabled: false,
     tokenClient: null,
   },
@@ -82,9 +108,15 @@ selectedProfilePalette: "default",
   palettePickerOpen: false,
 lastPixelTapIndex: -1,
   profilePainting: false,
-  profileCells: [],
+  profilePixelCursor: 0,
+  profilePixelPreviousCursor: 0,
+  lastPixelTapAt: 0,
   shortScrollFrame: null,
+  shortResizeFrame: null,
+  shortSnapTimer: null,
 };
+const appStore = ColorlessPlatform.createStore(initialState);
+const state = appStore.state;
 sessionStorage.removeItem("free-danny-session-token");
 
 const ATTACHMENT_UPLOAD_BYTES_MAX = 8 * 1024 * 1024;
@@ -92,6 +124,8 @@ const IMAGE_SOURCE_BYTES_MAX = 50 * 1024 * 1024;
 const IMAGE_OPTIMIZE_BYTES_MIN = 512 * 1024;
 const IMAGE_EDGE_PIXELS_MAX = 2560;
 const IMAGE_TOTAL_PIXELS_MAX = 32 * 1000 * 1000;
+const IMAGE_FALLBACK_TOTAL_PIXELS_MAX = 12 * 1000 * 1000;
+const IMAGE_DIMENSION_MAX = 16384;
 const IMAGE_WEBP_QUALITY = 0.82;
 const IMAGE_REQUIRED_SAVINGS_RATIO = 0.9;
 const PROFILE_IMAGE_SOURCE_BYTES_MAX = 50 * 1024 * 1024;
@@ -103,6 +137,7 @@ const PIXEL_SIDE = 32;
 const PROFILE_PIXEL_COUNT = PIXEL_SIDE * PIXEL_SIDE;
 const PROFILE_PIXEL_CACHE_MAX = 128;
 const MAX_SHORTS_FEED_ITEMS = 200;
+const SHORTS_DOM_WINDOW_SIZE = 5;
 const profilePixelCanvasCache = new Map();
 const DEFAULT_PROFILE_PALETTE = ["#ffffff", "#000000", "#777777", "#d9d9d9", "#e53935", "#fb8c00", "#fdd835", "#43a047", "#1e88e5", "#8e24aa", "#6d4c41", "#ec407a"];
 const PROFILE_PALETTES = [
@@ -240,6 +275,7 @@ const customPaletteEmpty = document.getElementById("custom-palette-empty");
 const togglePalettePickerButton = document.getElementById("toggle-palette-picker-button");
 const palettePicker = document.getElementById("palette-picker");
 const pixelEditorGrid = document.getElementById("pixel-editor-grid");
+const profilePixelStatus = document.getElementById("profile-pixel-status");
 const profileDisplayName = document.getElementById("profile-display-name");
 const profileFriendCode = document.getElementById("profile-friend-code");
 const profilePhotoPreview = document.getElementById("profile-photo-preview");
@@ -256,6 +292,10 @@ const statusEmojiPicker = document.getElementById("status-emoji-picker");
 const profileStatusEmoji = document.getElementById("profile-status-emoji");
 const statusEmojiAdd = document.getElementById("status-emoji-add");
 const statusEmojiSheet = document.getElementById("status-emoji-sheet");
+const openStatusEmojiButton = document.getElementById("open-status-emoji-button");
+const closeStatusEmojiButton = document.getElementById("close-status-emoji-button");
+const skipStatusEmojiButton = document.getElementById("skip-status-emoji-button");
+const statusEmojiCurrent = document.getElementById("status-emoji-current");
 const clearProfileButton = document.getElementById("clear-profile-button");
 const saveProfileButton = document.getElementById("save-profile-button");
 const loginForm = document.getElementById("login-form");
@@ -290,12 +330,40 @@ function renderStatusEmojiPicker() {
   statusEmojiPicker.appendChild(statusEmojiAdd);
 }
 
-function openStatusEmojiPicker() {
-  state.selectedStatusEmoji = "";
+function savedStatusEmoji() {
+  return normalizeStatusEmoji((state.messenger.user || state.session?.user)?.status_message);
+}
+
+function renderStatusEmojiControl() {
+  const emoji = savedStatusEmoji();
+  openStatusEmojiButton.textContent = emoji || "🙂";
+  openStatusEmojiButton.setAttribute("aria-label", emoji
+    ? `현재 상태 ${emoji}. 상태 이모티콘 변경`
+    : "상태 이모티콘 변경");
+}
+
+function openStatusEmojiPicker(opener = openStatusEmojiButton) {
+  state.selectedStatusEmoji = savedStatusEmoji();
   state.statusPickerTouched = false;
-  profileStatusEmoji.value = "";
+  state.statusPickerOpener = opener;
+  profileStatusEmoji.value = state.selectedStatusEmoji;
+  statusEmojiCurrent.textContent = state.selectedStatusEmoji || "없음";
   renderStatusEmojiPicker();
   statusEmojiSheet.classList.remove("hidden");
+  requestAnimationFrame(() => {
+    const selected = statusEmojiPicker.querySelector(".status-emoji-button.active");
+    (selected || closeStatusEmojiButton).focus({ preventScroll: true });
+    selected?.scrollIntoView({ block: "center" });
+  });
+}
+
+function closeStatusEmojiPicker({ restoreFocus = true } = {}) {
+  window.clearTimeout(state.statusPickerTimer);
+  state.statusPickerTimer = null;
+  statusEmojiSheet.classList.add("hidden");
+  const opener = state.statusPickerOpener;
+  state.statusPickerOpener = null;
+  if (restoreFocus && opener?.isConnected) opener.focus({ preventScroll: true });
 }
 
 function selectCenteredStatusEmoji() {
@@ -328,18 +396,18 @@ async function chooseStatusEmoji(emoji) {
   renderStatusEmojiPicker();
 
   try {
-    const data = await api("/profile", {
+    const data = await requestAction("profile.save-status", "/profile", {
       method: "POST",
       body: JSON.stringify({
         displayName: getDisplayName(user),
         statusMessage: emoji,
         friendCode: user.friend_code,
-        pixels: normalizeProfilePixels(user.profile_pixels),
       }),
     });
     state.messenger.user = data.user;
     if (state.session?.user) state.session.user = data.user;
-    statusEmojiSheet.classList.add("hidden");
+    closeStatusEmojiPicker();
+    renderStatusEmojiControl();
     renderMessenger();
     updatePresence();
   } catch (error) {
@@ -387,43 +455,33 @@ window.addEventListener("orientationchange", () => window.setTimeout(() => {
   syncKeyboardInset();
 }, 180));
 
-async function api(url, options = {}) {
-  const { headers: optionHeaders = {}, ...requestOptions } = options;
-  const isJsonBody = typeof requestOptions.body === "string";
-  const method = String(requestOptions.method || "GET").toUpperCase();
-  const response = await fetch(url, {
-    credentials: "same-origin",
-    headers: {
-      ...(isJsonBody ? { "Content-Type": "application/json" } : {}),
-      ...optionHeaders,
-    },
-    ...requestOptions,
-  });
-  const contentType = response.headers.get("Content-Type") || "";
-  let payload = null;
-  if (contentType.includes("application/json")) {
-    try {
-      payload = await response.json();
-    } catch (_) {
-      payload = null;
-    }
-  }
-  const statusLabel = `${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
-  const fallbackMessage = `${method} ${url} 요청 실패 (HTTP ${statusLabel})`;
+const httpClient = ColorlessPlatform.createHttpClient({ onUnauthorized: () => showAuth() });
+const appActions = ColorlessPlatform.createActionPipeline({ store: appStore });
+const realtimeEvents = ColorlessPlatform.createEventRouter({
+  onError: (error) => setAppStatus(error?.message || "실시간 상태를 반영하지 못했습니다.", "error"),
+});
 
-  if (response.status === 401) {
-    showAuth();
-    const error = new Error(payload?.error || fallbackMessage);
-    error.status = response.status;
-    throw error;
-  }
-  if (!response.ok) {
-    const error = new Error(payload?.error || fallbackMessage);
-    error.status = response.status;
-    error.retryAfter = Number(response.headers.get("Retry-After") || 0);
-    throw error;
-  }
-  return payload;
+function runAppAction(name, execute, options = {}) {
+  return appActions.run(name, options.input, {
+    execute,
+    commit: options.commit,
+    effect: options.effect,
+    failure: options.failure,
+    key: options.key,
+    policy: options.policy,
+  });
+}
+
+function requestAction(name, url, requestOptions = {}, actionOptions = {}) {
+  return runAppAction(
+    name,
+    () => httpClient.request(url, requestOptions),
+    actionOptions,
+  );
+}
+
+async function api(url, options = {}) {
+  return httpClient.request(url, options);
 }
 
 function rememberSession(session) {
@@ -468,6 +526,14 @@ function showAuth(mode = "login") {
   state.liveSyncTimer = null;
   state.liveSyncBusy = false;
   state.liveSyncInitialized = false;
+  sessionStorage.removeItem("colorless-realtime-cursor");
+  state.syncRevision = 0;
+  state.friendsNextCursor = "";
+  state.roomsNextCursor = "";
+  state.friendsLoading = false;
+  state.roomsLoading = false;
+  state.roomMemberCursors.clear();
+  state.roomMembersLoading.clear();
   state.lastSeenRoomMessageIds = {};
   state.selectedRoomId = "";
   state.messages = [];
@@ -480,6 +546,11 @@ function showAuth(mode = "login") {
   state.messagesLoadingOlder = false;
   state.chatAttachmentUpload = null;
   state.profileImageSelectionId += 1;
+  state.roomImageSelectionId += 1;
+  ColorlessImageProcessing.cancel("chat-attachment");
+  ColorlessImageProcessing.cancel("profile-image");
+  ColorlessImageProcessing.cancel("room-image");
+  state.roomImageProcessing = false;
   state.profileImagePreparing = false;
   state.profileImageUrl = "";
   setAuthRequestBusy(false);
@@ -538,16 +609,18 @@ function createPixelAvatar(value, pixels) {
   avatar.width = PIXEL_SIDE;
   avatar.height = PIXEL_SIDE;
   avatar.setAttribute("aria-label", `profile-${value}`);
-  const cacheKey = Array.isArray(pixels) ? pixels.join("") : "blank";
-  let cachedCanvas = profilePixelCanvasCache.get(cacheKey);
+  const cacheKey = Array.isArray(pixels) && pixels.length ? null : "blank";
+  let cachedCanvas = cacheKey ? profilePixelCanvasCache.get(cacheKey) : null;
   if (!cachedCanvas) {
     cachedCanvas = document.createElement("canvas");
     cachedCanvas.width = PIXEL_SIDE;
     cachedCanvas.height = PIXEL_SIDE;
     drawProfilePixels(cachedCanvas, pixels);
-    profilePixelCanvasCache.set(cacheKey, cachedCanvas);
-    if (profilePixelCanvasCache.size > PROFILE_PIXEL_CACHE_MAX) {
-      profilePixelCanvasCache.delete(profilePixelCanvasCache.keys().next().value);
+    if (cacheKey) {
+      profilePixelCanvasCache.set(cacheKey, cachedCanvas);
+      if (profilePixelCanvasCache.size > PROFILE_PIXEL_CACHE_MAX) {
+        profilePixelCanvasCache.delete(profilePixelCanvasCache.keys().next().value);
+      }
     }
   }
   avatar.getContext("2d").drawImage(cachedCanvas, 0, 0);

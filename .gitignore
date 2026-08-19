@@ -32,6 +32,7 @@ outputs/chat-app/uploads/
 outputs/chat-app/*.log
 
 # Local workspaces and temporary files
+.codex-*-data/
 work/
 tmp/
 temp/

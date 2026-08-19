@@ -7,7 +7,10 @@ function setAuthMode(mode) {
 
 async function loadProviders() {
   try {
-    const data = await api("/auth/providers");
+    const data = await requestAction("auth.load-providers", "/auth/providers", {}, {
+      key: "auth.providers",
+      policy: "join",
+    });
     state.providers = data.providers || {};
     const googleEnabled = Boolean(state.providers.google?.enabled);
     const kakaoEnabled = Boolean(state.providers.kakao?.enabled);
@@ -52,7 +55,7 @@ async function submitLogin(event) {
   event.preventDefault();
   if (!beginAuthRequest("로그인 정보를 확인하고 있어요.")) return;
   try {
-    rememberSession(await api("/login", {
+    rememberSession(await requestAction("auth.login", "/login", {
       method: "POST",
       body: JSON.stringify({ username: loginUsername.value.trim(), password: loginPassword.value }),
     }));
@@ -67,7 +70,7 @@ async function submitLogin(event) {
 
 async function logout() {
   try {
-    await api("/logout", { method: "POST" });
+    await requestAction("auth.logout", "/logout", { method: "POST" });
     showAuth();
     setAuthStatus("로그아웃했어요. 쇼츠를 보려면 로그인해 주세요.");
   } catch (error) {
@@ -102,7 +105,7 @@ async function handleGoogleCredential(response) {
   }
   if (!beginAuthRequest("구글 계정으로 로그인하고 있어요.")) return;
   try {
-    rememberSession(await api("/auth/google/credential", {
+    rememberSession(await requestAction("auth.google", "/auth/google/credential", {
       method: "POST",
       body: JSON.stringify({ credential: response.credential }),
     }));
@@ -161,7 +164,7 @@ async function startDemoLogin() {
   if (adminPassword === null) return;
   if (!beginAuthRequest("체험 계정으로 로그인하고 있어요.")) return;
   try {
-    rememberSession(await api("/auth/demo-login", {
+    rememberSession(await requestAction("auth.demo", "/auth/demo-login", {
       method: "POST",
       body: JSON.stringify({ provider: "demo", adminPassword }),
     }));

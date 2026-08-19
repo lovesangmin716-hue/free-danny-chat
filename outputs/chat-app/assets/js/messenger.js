@@ -12,6 +12,15 @@ function recentChatRooms() {
 
 function renderChats() {
   chatList.replaceChildren();
+  state.roomNodes.clear();
+  const context = state.actionBarByTab.chats;
+  const query = context.query.trim().toLocaleLowerCase();
+  const rooms = recentChatRooms().filter((room) => {
+    if (context.filter === "unread" && !(room.unread_count > 0)) return false;
+    if (!query) return true;
+    const message = room.last_message?.text || "";
+    return `${room.name} ${message}`.toLocaleLowerCase().includes(query);
+  });
   if (!state.messenger.rooms.length) {
     const empty = document.createElement("p");
     empty.className = "empty-list";
@@ -24,16 +33,27 @@ function renderChats() {
       newChatButton.type = "button";
       newChatButton.className = "secondary-button empty-list-action";
       newChatButton.textContent = "새 채팅";
+      ColorlessPlatform.decorateIconButton(newChatButton, "message-plus", { label: "새 채팅", visibleLabel: true });
       newChatButton.addEventListener("click", openNewChat);
       chatList.appendChild(newChatButton);
     }
     return;
   }
 
-  recentChatRooms().forEach((room) => {
+  if (!rooms.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-list";
+    empty.textContent = query ? "검색 결과가 없어요." : "안 읽은 채팅이 없어요.";
+    chatList.appendChild(empty);
+    return;
+  }
+
+  rooms.forEach((room) => {
     const item = document.createElement("button");
     item.type = "button";
     item.className = "list-item";
+    item.dataset.roomId = room.id;
+    if (room.peer?.username) item.dataset.peerUsername = room.peer.username;
     item.addEventListener("click", () => openChatRoom(room.id));
 
     const copy = document.createElement("div");
@@ -64,6 +84,7 @@ function renderChats() {
     time.textContent = formatTime(room.updated_at);
     item.append(createRoomAvatar(room), copy, time);
     chatList.appendChild(item);
+    state.roomNodes.set(room.id, item);
   });
 }
 
@@ -95,6 +116,21 @@ function mergeRoomPeer(room) {
   return friend ? { ...room, peer: { ...friend, ...room.peer } } : room;
 }
 
+function rebuildPresenceIndexes() {
+  state.friendByUsername.clear();
+  state.roomById.clear();
+  state.roomIdsByPeerUsername.clear();
+  for (const friend of state.messenger.friends) state.friendByUsername.set(friend.username, friend);
+  for (const room of state.messenger.rooms) {
+    state.roomById.set(room.id, room);
+    const username = room.peer?.username;
+    if (!username) continue;
+    const roomIds = state.roomIdsByPeerUsername.get(username) || new Set();
+    roomIds.add(room.id);
+    state.roomIdsByPeerUsername.set(username, roomIds);
+  }
+}
+
 function upsertMessengerRoom(incomingRoom) {
   if (!incomingRoom?.id) return null;
   const index = state.messenger.rooms.findIndex((room) => room.id === incomingRoom.id);
@@ -103,160 +139,243 @@ function upsertMessengerRoom(incomingRoom) {
   if (index >= 0) state.messenger.rooms[index] = room;
   else state.messenger.rooms.push(room);
   state.messenger.rooms.sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)));
+  rebuildPresenceIndexes();
   return room;
 }
 
 function removeMessengerRoom(roomId) {
   const previousLength = state.messenger.rooms.length;
   state.messenger.rooms = state.messenger.rooms.filter((room) => room.id !== roomId);
-  if (state.selectedShareRoomId === roomId) state.selectedShareRoomId = "";
+  state.selectedShareRoomIds = state.selectedShareRoomIds.filter((selectedId) => selectedId !== roomId);
   delete state.chatDrafts[roomId];
   delete state.lastSeenRoomMessageIds[roomId];
+  rebuildPresenceIndexes();
   return state.messenger.rooms.length !== previousLength;
 }
 
 function applyPresenceEvent(payload) {
-  if (!payload.username || !payload.presence) return;
-  state.messenger.friends = state.messenger.friends.map((friend) => (
-    friend.username === payload.username ? { ...friend, presence: payload.presence } : friend
+  if (!payload.username || !payload.presence) return false;
+  let changed = false;
+  const friend = state.friendByUsername.get(payload.username);
+  if (friend) {
+    friend.presence = payload.presence;
+    changed = true;
+  }
+  for (const roomId of state.roomIdsByPeerUsername.get(payload.username) || []) {
+    const room = state.roomById.get(roomId);
+    if (!room?.peer) continue;
+    room.peer.presence = payload.presence;
+    changed = true;
+  }
+  return changed;
+}
+
+function replacePresenceAvatar(container, avatar) {
+  const currentAvatar = container?.querySelector(".avatar-wrap");
+  if (currentAvatar) currentAvatar.replaceWith(avatar);
+}
+
+function patchFriendPresence(username) {
+  const friend = state.friendByUsername.get(username);
+  const row = state.friendNodes.get(username);
+  if (!friend || !row?.isConnected) return;
+  replacePresenceAvatar(row, createAvatar(
+    getDisplayName(friend),
+    friend.profile_pixels,
+    friend.presence,
+    friend.status_message,
+    friend.profile_thumbnail_url || friend.profile_image_url,
   ));
-  state.messenger.rooms = state.messenger.rooms.map((room) => (
-    room.peer?.username === payload.username
-      ? { ...room, peer: { ...room.peer, presence: payload.presence } }
-      : room
-  ));
+  const preview = row.querySelector(".item-preview");
+  if (preview) preview.textContent = friend.presence?.online ? "online" : (friend.status_message || "offline");
+}
+
+function patchRoomPresence(username) {
+  for (const roomId of state.roomIdsByPeerUsername.get(username) || []) {
+    const room = state.roomById.get(roomId);
+    if (!room) continue;
+    const row = state.roomNodes.get(room.id);
+    if (row?.isConnected) replacePresenceAvatar(row, createRoomAvatar(room));
+    shortShareList.querySelectorAll(".short-share-person").forEach((person) => {
+      if (person.dataset.roomId === room.id) replacePresenceAvatar(person, createRoomAvatar(room));
+    });
+    if (room.id === state.selectedRoomId && !chatRoom.classList.contains("hidden")) {
+      const presence = room.peer?.presence;
+      const isInThisRoom = Boolean(presence?.online && presence.active_room_ids?.includes(room.id));
+      chatRoomAvatar.replaceChildren(createRoomAvatar(room));
+      chatRoomPresence.textContent = isInThisRoom ? "in chat" : (presence?.online ? "online" : "");
+    }
+  }
+}
+
+function flushPresencePatches() {
+  state.presencePatchFrame = null;
+  const usernames = [...state.presencePatchUsernames];
+  state.presencePatchUsernames.clear();
+  if (state.activeList === "friends") {
+    for (const username of usernames) patchFriendPresence(username);
+    renderFriendActionBar();
+    return;
+  }
+  if (state.activeList === "chats") {
+    for (const username of usernames) patchRoomPresence(username);
+    return;
+  }
+  if (state.activeList === "shorts") {
+    for (const username of usernames) patchRoomPresence(username);
+  }
+}
+
+function schedulePresencePatch(username) {
+  if (!username) return;
+  state.presencePatchUsernames.add(username);
+  if (state.presencePatchFrame !== null) return;
+  state.presencePatchFrame = requestAnimationFrame(flushPresencePatches);
+}
+
+let realtimeHandlersRegistered = false;
+
+function realtimeViewContext() {
+  return { isShortsView: state.activeList === "shorts" };
+}
+
+function renderRealtimeLists(isShortsView) {
+  if (!isShortsView) renderChats();
+  renderShortShareBar();
+}
+
+function registerRealtimeHandlers() {
+  if (realtimeHandlersRegistered) return;
+  realtimeHandlersRegistered = true;
+
+  realtimeEvents.register("hello", () => updatePresence());
+  realtimeEvents.register("message_created", async (payload, { isShortsView }) => {
+    recordSyncRevision(payload.revision);
+    const isIncoming = payload.message?.username !== state.messenger.user?.username;
+    if (!isIncoming) return;
+    let room;
+    appStore.transact("realtime.message-created", () => {
+      room = upsertMessengerRoom(payload.room);
+      state.lastSeenRoomMessageIds[payload.roomId] = payload.message?.id || "";
+      if (payload.roomId === state.selectedRoomId && payload.message?.id) {
+        if (appendChatMessageState(payload.message)) appendChatMessageNode(payload.message, true);
+      }
+    }, { event: payload.type });
+    if (payload.roomId === state.selectedRoomId && payload.message?.id) {
+      void requestAction("rooms.mark-read", "/rooms/read", {
+        method: "POST",
+        body: JSON.stringify({ roomId: payload.roomId }),
+      }).catch(() => {});
+    } else if (!isShortsView) {
+      renderChats();
+    }
+    if (!state.shortInlineReply && room) showShortMessageNotice(room, payload.message);
+    else if (!state.shortInlineReply) renderShortShareBar();
+  });
+  realtimeEvents.register("room_read", (payload) => {
+    recordSyncRevision(payload.revision);
+    if (payload.username === state.messenger.user?.username || payload.roomId !== state.selectedRoomId) return;
+    if (currentRoom()?.kind === "group") {
+      void loadChatMessages({ markRead: false });
+      return;
+    }
+    const changedMessages = [];
+    appStore.transact("realtime.room-read", () => {
+      for (let index = 0; index < state.messages.length; index += 1) {
+        const message = state.messages[index];
+        if (message.username !== state.messenger.user?.username || message.read) continue;
+        const readMessage = { ...message, read: true };
+        state.messages[index] = readMessage;
+        changedMessages.push([message.id, readMessage]);
+      }
+      if (changedMessages.length) state.messageRevision += 1;
+    }, { event: payload.type });
+    for (const [messageId, message] of changedMessages) replaceChatMessageNode(messageId, message);
+  });
+  realtimeEvents.register("room_updated", (payload, { isShortsView }) => {
+    recordSyncRevision(payload.revision);
+    let room;
+    appStore.transact("realtime.room-updated", () => { room = upsertMessengerRoom(payload.room); }, { event: payload.type });
+    if (room?.id === state.selectedRoomId) renderChatRoom();
+    renderRealtimeLists(isShortsView);
+    if (!roomSettingsSheet.classList.contains("hidden")) renderRoomSettings();
+  });
+  realtimeEvents.register("room_created", (payload, { isShortsView }) => {
+    recordSyncRevision(payload.revision);
+    let room;
+    appStore.transact("realtime.room-created", () => { room = upsertMessengerRoom(payload.room); }, { event: payload.type });
+    renderRealtimeLists(isShortsView);
+    if (room?.id === state.selectedRoomId) renderChatRoom();
+  });
+  realtimeEvents.register("friends_updated", async (payload, { isShortsView }) => {
+    recordSyncRevision(payload.revision);
+    await loadFriendsPage({ reset: true, render: !isShortsView });
+    if (isShortsView && !state.shortInlineReply) renderShortShareBar();
+  });
+  realtimeEvents.register("room_left", (payload, { isShortsView }) => {
+    recordSyncRevision(payload.revision);
+    appStore.transact("realtime.room-left", () => {
+      const selfLeft = payload.username === state.messenger.user?.username;
+      if (selfLeft || !payload.room) removeMessengerRoom(payload.roomId);
+      else upsertMessengerRoom(payload.room);
+    }, { event: payload.type });
+    const selfLeft = payload.username === state.messenger.user?.username;
+    if ((selfLeft || !payload.room) && payload.roomId === state.selectedRoomId) closeChatRoom();
+    if (!selfLeft && payload.room?.id === state.selectedRoomId) {
+      renderChatRoom();
+      void loadChatMessages({ markRead: false });
+    }
+    renderRealtimeLists(isShortsView);
+  });
+  realtimeEvents.register("presence_updated", (payload) => {
+    recordSyncRevision(payload.revision);
+    let changed = false;
+    appStore.transact("realtime.presence-updated", () => { changed = applyPresenceEvent(payload); }, { event: payload.type });
+    if (changed) schedulePresencePatch(payload.username);
+  });
 }
 
 function connectEvents() {
   if (state.eventSource || !state.session?.user) return;
-  const source = new EventSource("/events");
+  registerRealtimeHandlers();
+  const source = ColorlessPlatform.createRealtimeClient({
+    url: "/events",
+    router: realtimeEvents,
+    context: realtimeViewContext,
+    onUnhandled: async (payload, context) => {
+      recordSyncRevision(payload?.revision);
+      await Promise.all([
+        loadFriendsPage({ reset: true, render: !context.isShortsView }),
+        loadRoomsPage({ reset: true, render: !context.isShortsView }),
+      ]);
+      if (context.isShortsView && !state.shortInlineReply) renderShortShareBar();
+    },
+    onOpen: () => {
+      if (state.eventSource !== source) return;
+      const isReconnect = state.eventEverConnected;
+      state.eventEverConnected = true;
+      state.eventConnected = true;
+      stopLiveSync();
+      if (isReconnect) void syncLiveState();
+    },
+    onError: () => {
+      source.close();
+      if (state.eventSource === source) {
+        state.eventSource = null;
+        state.eventConnected = false;
+        startLiveSync();
+        window.clearTimeout(state.eventReconnectTimer);
+        state.eventReconnectTimer = window.setTimeout(connectEvents, 1200);
+      }
+    },
+  });
   state.eventSource = source;
-  source.onopen = () => {
-    if (state.eventSource !== source) return;
-    const isReconnect = state.eventEverConnected;
-    state.eventEverConnected = true;
-    state.eventConnected = true;
-    stopLiveSync();
-    if (isReconnect) void syncLiveState();
-  };
-  source.onmessage = (event) => {
-    let payload;
-    try {
-      payload = JSON.parse(event.data);
-    } catch (_) {
-      return;
-    }
-    if (payload.type === "hello") {
-      updatePresence();
-      return;
-    }
-    const isShortsView = state.activeList === "shorts";
-    if (payload.type === "message_created") {
-      const isIncoming = payload.message?.username !== state.messenger.user?.username;
-      if (!isIncoming) return;
-      const room = upsertMessengerRoom(payload.room);
-      state.lastSeenRoomMessageIds[payload.roomId] = payload.message?.id || "";
-      if (payload.roomId === state.selectedRoomId && payload.message?.id) {
-        if (appendChatMessageState(payload.message)) {
-          appendChatMessageNode(payload.message, true);
-        }
-        void api("/rooms/read", {
-          method: "POST",
-          body: JSON.stringify({ roomId: payload.roomId }),
-        }).catch(() => {});
-      } else if (!isShortsView) {
-        renderChats();
-      }
-      if (isShortsView) {
-        if (!state.shortInlineReply && isIncoming && room) showShortMessageNotice(room, payload.message);
-        else if (!state.shortInlineReply) renderShortShareBar();
-      }
-      return;
-    }
-    if (payload.type === "room_read") {
-      if (payload.username !== state.messenger.user?.username && payload.roomId === state.selectedRoomId) {
-        if (currentRoom()?.kind === "group") {
-          void loadChatMessages({ markRead: false });
-          return;
-        }
-        const changedMessages = [];
-        for (let index = 0; index < state.messages.length; index += 1) {
-          const message = state.messages[index];
-          if (message.username !== state.messenger.user?.username || message.read) continue;
-          const readMessage = { ...message, read: true };
-          state.messages[index] = readMessage;
-          changedMessages.push([message.id, readMessage]);
-        }
-        if (changedMessages.length) {
-          state.messageRevision += 1;
-          for (const [messageId, message] of changedMessages) {
-            replaceChatMessageNode(messageId, message);
-          }
-        }
-      }
-      return;
-    }
-    if (payload.type === "room_updated") {
-      const room = upsertMessengerRoom(payload.room);
-      if (room?.id === state.selectedRoomId) renderChatRoom();
-      if (isShortsView) renderShortShareBar();
-      else renderChats();
-      if (!roomSettingsSheet.classList.contains("hidden")) renderRoomSettings();
-      return;
-    }
-    if (payload.type === "room_created") {
-      const room = upsertMessengerRoom(payload.room);
-      if (isShortsView) renderShortShareBar();
-      else renderChats();
-      if (room?.id === state.selectedRoomId) renderChatRoom();
-      return;
-    }
-    if (payload.type === "friends_updated") {
-      void loadMessenger(!isShortsView).then(() => {
-        if (isShortsView && !state.shortInlineReply) renderShortShareBar();
-      }).catch(() => {});
-      return;
-    }
-    if (payload.type === "room_left") {
-      const selfLeft = payload.username === state.messenger.user?.username;
-      if (selfLeft || !payload.room) {
-        removeMessengerRoom(payload.roomId);
-        if (payload.roomId === state.selectedRoomId) closeChatRoom();
-      } else {
-        const room = upsertMessengerRoom(payload.room);
-        if (room?.id === state.selectedRoomId) {
-          renderChatRoom();
-          void loadChatMessages({ markRead: false });
-        }
-      }
-      if (isShortsView) renderShortShareBar();
-      else renderChats();
-      return;
-    }
-    if (payload.type === "presence_updated") {
-      applyPresenceEvent(payload);
-      if (isShortsView) renderShortShareBar();
-      else renderMessenger();
-      return;
-    }
-    void loadMessenger(!isShortsView).then(() => {
-      if (isShortsView && !state.shortInlineReply) renderShortShareBar();
-    }).catch(() => {});
-  };
-  source.onerror = () => {
-    source.close();
-    if (state.eventSource === source) {
-      state.eventSource = null;
-      state.eventConnected = false;
-      startLiveSync();
-      window.clearTimeout(state.eventReconnectTimer);
-      state.eventReconnectTimer = window.setTimeout(connectEvents, 1200);
-    }
-  };
+  source.open();
 }
 
 function renderFriends() {
   friendList.replaceChildren();
+  state.friendNodes.clear();
   if (!state.messenger.friends.length) {
     const empty = document.createElement("p");
     empty.className = "empty-list";
@@ -271,7 +390,9 @@ function renderFriends() {
     const item = document.createElement("button");
     item.type = "button";
     item.className = "list-item";
-    item.addEventListener("click", () => openDirectChat(friend.id));
+    item.dataset.username = friend.username;
+    item.setAttribute("aria-label", `${getDisplayName(friend)} 프로필 보기`);
+    item.addEventListener("click", () => selectFriendForActionBar(friend.id));
     const copy = document.createElement("div");
     copy.className = "item-copy";
     const title = document.createElement("strong");
@@ -299,6 +420,7 @@ function renderFriends() {
     item.append(createAvatar(getDisplayName(friend), friend.profile_pixels, friend.presence), copy, startButton); */
     item.append(createAvatar(getDisplayName(friend), friend.profile_pixels, friend.presence, friend.status_message, friend.profile_thumbnail_url || friend.profile_image_url), copy);
     friendList.appendChild(item);
+    state.friendNodes.set(friend.username, item);
   });
 }
 
