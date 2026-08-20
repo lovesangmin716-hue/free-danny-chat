@@ -34,6 +34,10 @@ const initialState = {
   renderedMessageRoomId: "",
   messagesNextCursor: "",
   messagesLoadingOlder: false,
+  messagesInitialLoading: false,
+  messagesLoadEpoch: 0,
+  messagesLoadController: null,
+  messagesOlderLoadController: null,
   chatDrafts: {},
   chatAttachment: null,
   chatAttachmentType: "",
@@ -139,6 +143,7 @@ const PROFILE_PIXEL_COUNT = PIXEL_SIDE * PIXEL_SIDE;
 const PROFILE_PIXEL_CACHE_MAX = 128;
 const MAX_SHORTS_FEED_ITEMS = 200;
 const SHORTS_DOM_WINDOW_SIZE = 5;
+const CHAT_MESSAGE_PAGE_SIZE = 30;
 const profilePixelCanvasCache = new Map();
 const DEFAULT_PROFILE_PALETTE = ["#ffffff", "#000000", "#777777", "#d9d9d9", "#e53935", "#fb8c00", "#fdd835", "#43a047", "#1e88e5", "#8e24aa", "#6d4c41", "#ec407a"];
 const PROFILE_PALETTES = [

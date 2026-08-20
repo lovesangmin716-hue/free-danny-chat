@@ -244,6 +244,12 @@ class NormalizedSupabaseRepository:
         return dict(rows[0]["data"]) if rows else None
 
     def list_messages(self, room_id: str, *, limit: int = 200, before: str = "") -> list[dict]:
+        return [
+            {key: value for key, value in message.items() if key != "_sequence"}
+            for message in self.list_messages_with_sequences(room_id, limit=limit, before=before)
+        ]
+
+    def list_messages_with_sequences(self, room_id: str, *, limit: int = 200, before: str = "") -> list[dict]:
         query = {"select": "sequence,data", "room_id": f"eq.{room_id}", "order": "sequence.desc", "limit": str(limit)}
         if before:
             cursor = self.rows("messages", {"select": "sequence", "room_id": f"eq.{room_id}", "id": f"eq.{before}", "limit": "1"})
@@ -251,7 +257,25 @@ class NormalizedSupabaseRepository:
                 return []
             query["sequence"] = f"lt.{cursor[0]['sequence']}"
         rows = self.rows("messages", query)
-        return [dict(row["data"]) for row in reversed(rows)]
+        return [
+            {**dict(row["data"]), "_sequence": int(row["sequence"])}
+            for row in reversed(rows)
+        ]
+
+    def message_sequences(self, room_id: str, message_ids: list[str]) -> dict[str, int]:
+        unique_ids = list(dict.fromkeys(message_id for message_id in message_ids if message_id))
+        if not unique_ids:
+            return {}
+        rows = self.rows(
+            "messages",
+            {
+                "select": "id,sequence",
+                "room_id": f"eq.{room_id}",
+                "id": f"in.({','.join(unique_ids)})",
+                "limit": str(len(unique_ids)),
+            },
+        )
+        return {str(row["id"]): int(row["sequence"]) for row in rows}
 
     def latest_message(self, room_id: str) -> dict | None:
         messages = self.list_messages(room_id, limit=1)
@@ -1321,6 +1345,12 @@ class NormalizedSqliteRepository:
         return self.decode(row[0]) if row else None
 
     def list_messages(self, room_id: str, *, limit: int = 200, before: str = "") -> list[dict]:
+        return [
+            {key: value for key, value in message.items() if key != "_sequence"}
+            for message in self.list_messages_with_sequences(room_id, limit=limit, before=before)
+        ]
+
+    def list_messages_with_sequences(self, room_id: str, *, limit: int = 200, before: str = "") -> list[dict]:
         with self.connection() as database:
             if before:
                 cursor = database.execute(
@@ -1330,16 +1360,31 @@ class NormalizedSqliteRepository:
                 if not cursor:
                     return []
                 rows = database.execute(
-                    "SELECT data_json FROM messages WHERE room_id=? "
+                    "SELECT rowid, data_json FROM messages WHERE room_id=? "
                     "AND rowid < ? ORDER BY rowid DESC LIMIT ?",
                     (room_id, cursor[0], limit),
                 ).fetchall()
             else:
                 rows = database.execute(
-                    "SELECT data_json FROM messages WHERE room_id=? ORDER BY rowid DESC LIMIT ?",
+                    "SELECT rowid, data_json FROM messages WHERE room_id=? ORDER BY rowid DESC LIMIT ?",
                     (room_id, limit),
                 ).fetchall()
-        return [self.decode(row[0]) for row in reversed(rows)]
+        return [
+            {**self.decode(row[1]), "_sequence": int(row[0])}
+            for row in reversed(rows)
+        ]
+
+    def message_sequences(self, room_id: str, message_ids: list[str]) -> dict[str, int]:
+        unique_ids = list(dict.fromkeys(message_id for message_id in message_ids if message_id))
+        if not unique_ids:
+            return {}
+        placeholders = ",".join("?" for _ in unique_ids)
+        with self.connection() as database:
+            rows = database.execute(
+                f"SELECT id, rowid FROM messages WHERE room_id=? AND id IN ({placeholders})",
+                (room_id, *unique_ids),
+            ).fetchall()
+        return {str(row[0]): int(row[1]) for row in rows}
 
     def latest_message(self, room_id: str) -> dict | None:
         messages = self.list_messages(room_id, limit=1)

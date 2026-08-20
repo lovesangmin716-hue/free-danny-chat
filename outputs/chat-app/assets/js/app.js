@@ -214,10 +214,14 @@ async function loadOlderChatMessages() {
   const cursor = state.messagesNextCursor;
   const previousScrollHeight = chatMessageList.scrollHeight;
   state.messagesLoadingOlder = true;
+  const controller = new AbortController();
+  state.messagesOlderLoadController?.abort();
+  state.messagesOlderLoadController = controller;
   try {
     const payload = await requestAction(
       "messages.load-older",
-      `/messages?room_id=${encodeURIComponent(roomId)}&limit=30&before=${encodeURIComponent(cursor)}`,
+      `/messages?room_id=${encodeURIComponent(roomId)}&limit=${CHAT_MESSAGE_PAGE_SIZE}&before=${encodeURIComponent(cursor)}`,
+      { signal: controller.signal },
     );
     if (state.selectedRoomId !== roomId || state.messagesNextCursor !== cursor) return;
     const olderMessages = payload.items || [];
@@ -237,9 +241,13 @@ async function loadOlderChatMessages() {
     }
     state.messagesNextCursor = payload.next_cursor || "";
   } catch (error) {
+    if (error?.name === "AbortError") return;
     setAppStatus(error.message, "error");
   } finally {
-    if (state.selectedRoomId === roomId) state.messagesLoadingOlder = false;
+    if (state.messagesOlderLoadController === controller) {
+      state.messagesOlderLoadController = null;
+      if (state.selectedRoomId === roomId) state.messagesLoadingOlder = false;
+    }
   }
 }
 

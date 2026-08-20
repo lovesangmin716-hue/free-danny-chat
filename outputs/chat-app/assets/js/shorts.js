@@ -309,8 +309,16 @@ async function shareShortToRooms(rooms) {
 }
 
 function shortEmbedSource(videoId) {
-  const origin = encodeURIComponent(window.location.origin);
-  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?autoplay=0&mute=1&playsinline=1&rel=0&enablejsapi=1&origin=${origin}`;
+  const params = new URLSearchParams({
+    autoplay: "0",
+    mute: "1",
+    playsinline: "1",
+    rel: "0",
+    enablejsapi: "1",
+    origin: window.location.origin,
+    widget_referrer: window.location.href,
+  });
+  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?${params}`;
 }
 
 function sendShortPlayerCommand(frame, command, args = []) {

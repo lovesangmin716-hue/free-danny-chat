@@ -273,6 +273,22 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('loadRoomsPage({ render: true })', bootstrap_script)
         self.assertIn('loadFriendsPage({ render: true })', bootstrap_script)
 
+    def test_chat_history_is_chunked_lazy_and_unloaded_between_rooms(self) -> None:
+        core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
+        chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
+        app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
+        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+
+        self.assertIn("const CHAT_MESSAGE_PAGE_SIZE = 30", core_script)
+        self.assertIn("function unloadChatMessages()", chat_script)
+        self.assertIn("state.messagesLoadController?.abort()", chat_script)
+        self.assertIn("state.messagesOlderLoadController?.abort()", chat_script)
+        self.assertIn("new AbortController()", chat_script)
+        self.assertIn("new AbortController()", app_script)
+        self.assertIn("limit=${CHAT_MESSAGE_PAGE_SIZE}", chat_script)
+        self.assertIn("limit=${CHAT_MESSAGE_PAGE_SIZE}", app_script)
+        self.assertIn("if (chatMessageList.scrollTop < 80) void loadOlderChatMessages()", bootstrap_script)
+
     def test_auth_client_omits_logout_body_and_reports_http_status(self) -> None:
         auth_script = (server.ASSETS_DIR / "js" / "auth.js").read_text(encoding="utf-8")
         http_script = (server.ASSETS_DIR / "js" / "platform" / "http.js").read_text(encoding="utf-8")
@@ -429,6 +445,12 @@ class StaticAppStructureTestCase(unittest.TestCase):
         create_card = re.search(r"function createShortCard\(.*?\n\}", shorts_script, re.DOTALL)
         self.assertIsNotNone(create_card)
         self.assertNotIn("createShortFrame", create_card.group(0))
+
+    def test_shorts_embed_identifies_its_web_origin(self) -> None:
+        shorts_script = (server.ASSETS_DIR / "js" / "shorts.js").read_text(encoding="utf-8")
+        self.assertIn("origin: window.location.origin", shorts_script)
+        self.assertIn("widget_referrer: window.location.href", shorts_script)
+        self.assertIn('frame.referrerPolicy = "strict-origin-when-cross-origin"', shorts_script)
 
     def test_large_images_use_a_cancellable_worker_pipeline(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -1207,6 +1229,49 @@ class ShortsCatalogTestCase(unittest.TestCase):
         timings.sort()
         self.assertLess(timings[18], 300)
 
+    def test_http_feed_replays_emergency_catalog_after_every_item_was_seen(self) -> None:
+        suffix = str(time.time_ns())[-10:]
+        user = server.STORE.create_or_update_social_user(
+            "demo", f"emergency-http-{suffix}", nickname=f"emergency{suffix}"
+        )
+        session_token = server.SESSIONS.create(user["username"])
+        http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
+        server_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+        server_thread.start()
+        address = ("127.0.0.1", http_server.server_address[1])
+        try:
+            with (
+                mock.patch.object(server.STORE.repository, "list_shorts_catalog", return_value=[]),
+                mock.patch.object(
+                    server.STORE,
+                    "get_shorts_feed",
+                    return_value=([item["id"] for item in server.EMERGENCY_SHORTS], "catalog:0"),
+                ),
+                mock.patch.object(server.STORE, "save_shorts_feed") as save_feed,
+            ):
+                connection = http.client.HTTPConnection(*address, timeout=5)
+                connection.request(
+                    "GET",
+                    "/youtube/shorts?refresh=1",
+                    headers={"Cookie": f"{server.SESSION_COOKIE_NAME}={session_token}"},
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read().decode("utf-8"))
+                connection.close()
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(
+                [item["id"] for item in payload["items"]],
+                [item["id"] for item in server.EMERGENCY_SHORTS],
+            )
+            self.assertEqual(payload["retry_after"], 0)
+            saved_seen_ids = save_feed.call_args.args[1]
+            self.assertEqual(saved_seen_ids, [item["id"] for item in server.EMERGENCY_SHORTS])
+        finally:
+            http_server.shutdown()
+            http_server.server_close()
+            server_thread.join(timeout=5)
+
 
 class AttachmentGrantContractTestCase(unittest.TestCase):
     def test_pending_upload_is_not_usable_until_verified(self) -> None:
@@ -1824,15 +1889,21 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertEqual(group_outcome.data["room"]["kind"], "group")
         self.assertTrue(all(event["type"] == "room_created" for event, _ in group_outcome.events))
 
-        message_outcome = services.create_message(
-            self.alice,
-            {
-                "roomId": group_outcome.data["room"]["id"],
-                "text": "who has not read this",
-                "clientMessageId": "application-read-state",
-            },
-            lambda _value, _username: None,
-        )
+        with mock.patch.object(
+            self.store.repository,
+            "list_messages",
+            wraps=self.store.repository.list_messages,
+        ) as list_messages:
+            message_outcome = services.create_message(
+                self.alice,
+                {
+                    "roomId": group_outcome.data["room"]["id"],
+                    "text": "who has not read this",
+                    "clientMessageId": "application-read-state",
+                },
+                lambda _value, _username: None,
+            )
+        self.assertEqual(list_messages.call_count, 0)
         self.assertEqual(
             {reader["username"] for reader in message_outcome.data["unread_by"]},
             {"bob", "eve"},
@@ -2458,6 +2529,44 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertEqual(older["items"][0]["text"], "message-0")
         self.assertEqual(older["next_cursor"], "")
         self.assertEqual(self.store.state["messages"].get(self.room_id, []), [])
+
+    def test_message_pages_compute_read_state_without_loading_full_history(self) -> None:
+        for index in range(80):
+            self.store.add_message(self.room_id, "alice", f"message-{index}")
+        self.store.mark_room_read(self.room_id, "bob")
+        for index in range(80, 120):
+            self.store.add_message(self.room_id, "alice", f"message-{index}")
+
+        with (
+            mock.patch.object(
+                self.store.repository,
+                "list_messages_with_sequences",
+                wraps=self.store.repository.list_messages_with_sequences,
+            ) as list_message_pages,
+            mock.patch.object(
+                self.store.repository,
+                "message_sequences",
+                wraps=self.store.repository.message_sequences,
+            ) as message_sequences,
+        ):
+            latest = self.store.get_messages_page(self.room_id, "alice", limit=30)
+            assert latest is not None
+            older = self.store.get_messages_page(
+                self.room_id,
+                "alice",
+                limit=30,
+                before=latest["next_cursor"],
+            )
+
+        self.assertIsNotNone(older)
+        assert older is not None
+        by_text = {message["text"]: message for message in older["items"]}
+        self.assertTrue(by_text["message-79"]["read"])
+        self.assertFalse(by_text["message-80"]["read"])
+        self.assertNotIn("_sequence", by_text["message-79"])
+        self.assertEqual(list_message_pages.call_count, 2)
+        self.assertTrue(all(call.kwargs["limit"] == 31 for call in list_message_pages.call_args_list))
+        self.assertEqual(message_sequences.call_count, 2)
 
     def test_shorts_history_is_bounded_and_persisted(self) -> None:
         seen_ids = [f"video-{index}" for index in range(600)]

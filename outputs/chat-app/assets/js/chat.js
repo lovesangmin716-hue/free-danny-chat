@@ -132,7 +132,7 @@ function renderAllChatMessages({ scrollToBottom = false, preserveScrollHeight = 
   if (!state.messages.length) {
     const empty = document.createElement("p");
     empty.className = "chat-empty";
-    empty.textContent = "첫 메시지를 보내 보세요.";
+    empty.textContent = state.messagesInitialLoading ? "채팅을 불러오는 중…" : "첫 메시지를 보내 보세요.";
     chatMessageList.appendChild(empty);
   } else {
     const fragment = document.createDocumentFragment();
@@ -232,12 +232,20 @@ async function updatePresence() {
 async function loadChatMessages({ markRead = true, scrollToBottom = false } = {}) {
   if (!state.selectedRoomId) return;
   const roomId = state.selectedRoomId;
+  state.messagesLoadController?.abort();
+  const controller = new AbortController();
+  const loadEpoch = state.messagesLoadEpoch + 1;
+  state.messagesLoadEpoch = loadEpoch;
+  state.messagesLoadController = controller;
+  state.messagesInitialLoading = true;
+  renderChatRoom();
   try {
     const payload = await requestAction(
       "messages.load",
-      `/messages?room_id=${encodeURIComponent(roomId)}&limit=30`,
+      `/messages?room_id=${encodeURIComponent(roomId)}&limit=${CHAT_MESSAGE_PAGE_SIZE}`,
+      { signal: controller.signal },
     );
-    if (state.selectedRoomId !== roomId) return;
+    if (state.selectedRoomId !== roomId || state.messagesLoadEpoch !== loadEpoch) return;
     const messages = Array.isArray(payload) ? payload : (payload.items || []);
     const serverClientMessageIds = new Set();
     for (const message of messages) {
@@ -259,8 +267,32 @@ async function loadChatMessages({ markRead = true, scrollToBottom = false } = {}
       }).catch(() => {});
     }
   } catch (error) {
+    if (error?.name === "AbortError") return;
     setAppStatus(error.message, "error");
+  } finally {
+    if (state.messagesLoadEpoch === loadEpoch) {
+      state.messagesLoadController = null;
+      state.messagesInitialLoading = false;
+      if (state.selectedRoomId === roomId) {
+        if (!state.messages.length) state.renderedMessageRoomId = "";
+        renderChatRoom();
+      }
+    }
   }
+}
+
+function unloadChatMessages() {
+  state.messagesLoadEpoch += 1;
+  state.messagesLoadController?.abort();
+  state.messagesOlderLoadController?.abort();
+  state.messagesLoadController = null;
+  state.messagesOlderLoadController = null;
+  state.messagesInitialLoading = false;
+  state.messagesLoadingOlder = false;
+  setChatMessages([]);
+  state.messagesNextCursor = "";
+  state.messageNodes.clear();
+  chatMessageList.replaceChildren();
 }
 
 async function loadRoomMembers(roomId, { reset = true } = {}) {
@@ -291,10 +323,9 @@ async function loadRoomMembers(roomId, { reset = true } = {}) {
 }
 
 async function openChatRoom(roomId) {
+  unloadChatMessages();
   state.selectedRoomId = roomId;
-  setChatMessages([]);
-  state.messagesNextCursor = "";
-  state.messagesLoadingOlder = false;
+  state.messagesInitialLoading = true;
   state.renderedMessageRoomId = "";
   chatMessageInput.value = state.chatDrafts[roomId] || "";
   renderChatRoom();
@@ -309,9 +340,7 @@ async function openChatRoom(roomId) {
 function closeChatRoom() {
   const wasReplyingToShortNotice = state.activeList === "shorts" && state.shortMessagePaused;
   state.selectedRoomId = "";
-  setChatMessages([]);
-  state.messagesNextCursor = "";
-  state.messagesLoadingOlder = false;
+  unloadChatMessages();
   state.renderedMessageRoomId = "";
   closeMessageReadMenu();
   clearChatAttachment();

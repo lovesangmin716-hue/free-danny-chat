@@ -272,8 +272,9 @@ SHORTS_AGE_TRENDING_TOPICS = {
 }
 YOUTH_SHORTS_BLOCKLIST = ("로보카 폴리", "뽀로로", "핑크퐁", "옐언니", "키즈", "어린이", "유아", "아기", "동요", "nursery", "kids")
 EMERGENCY_SHORTS = (
-    {"id": "C-50DxR1fGc", "title": "추천 쇼츠", "channel_title": "YouTube"},
-    {"id": "WK7Fuaxpffg", "title": "추천 쇼츠", "channel_title": "YouTube"},
+    {"id": "k_ANHTu0XlA", "title": "2080년 한국 학생", "channel_title": "김켈리 Kellyfornia"},
+    {"id": "7F1vyoPlh98", "title": "같은 기술 다른 느낌", "channel_title": "웃또또"},
+    {"id": "UloIWifOjt0", "title": "한국 유머 쇼츠", "channel_title": "world with Funny video"},
 )
 POPULAR_VIDEO_CATEGORIES = (
     "24", "23", "10", "17", "20", "22", "26", "1", "2", "19", "25", "27", "28",
@@ -2945,6 +2946,8 @@ class StateStore:
         room: dict,
         user: dict,
         messages: list[dict],
+        *,
+        all_messages: list[dict] | None = None,
     ) -> list[dict]:
         reader_ids: list[str] = []
         if room.get("kind") == "direct":
@@ -2961,39 +2964,48 @@ class StateStore:
                 if user_id != user["id"]
             ]
 
-        all_messages = self._room_messages_locked(room["id"])
-        message_positions = {
-            message["id"]: index
-            for index, message in enumerate(all_messages)
-        }
-        reader_positions: dict[str, int] = {}
         last_read_by = room.get("last_read_by", {})
-        for reader_id in reader_ids:
-            reader_positions[reader_id] = message_positions.get(
-                str(last_read_by.get(reader_id, "")),
-                -1,
-            )
+        if all_messages is not None or self.repository is None:
+            if all_messages is None:
+                all_messages = self._room_messages_locked(room["id"])
+            message_positions = {
+                str(message["id"]): index
+                for index, message in enumerate(all_messages)
+            }
+            reader_positions = {
+                reader_id: message_positions.get(str(last_read_by.get(reader_id, "")), -1)
+                for reader_id in reader_ids
+            }
 
-        read_message_ids: set[str] = set()
-        if room.get("kind") == "group" and not reader_ids:
-            read_message_ids = {message["id"] for message in all_messages}
-        elif reader_ids and all_messages:
-            if all(position >= 0 for position in reader_positions.values()):
-                read_through_index = min(reader_positions.values())
-                read_message_ids = {
-                    message["id"]
-                    for message in all_messages[:read_through_index + 1]
-                }
+            def reader_has_read(reader_id: str, message: dict) -> bool:
+                message_position = message_positions.get(str(message.get("id", "")), -1)
+                return message_position >= 0 and reader_positions.get(reader_id, -1) >= message_position
+        else:
+            reader_cursor_ids = {
+                reader_id: str(last_read_by.get(reader_id, ""))
+                for reader_id in reader_ids
+            }
+            cursor_sequences = self.repository.message_sequences(
+                room["id"],
+                list(reader_cursor_ids.values()),
+            )
+            reader_sequences = {
+                reader_id: cursor_sequences.get(cursor_id, -1)
+                for reader_id, cursor_id in reader_cursor_ids.items()
+            }
+
+            def reader_has_read(reader_id: str, message: dict) -> bool:
+                message_sequence = int(message.get("_sequence", -1))
+                return message_sequence >= 0 and reader_sequences.get(reader_id, -1) >= message_sequence
 
         response_messages: list[dict] = []
         for message in messages:
             mine = message.get("username") == user["username"]
             response_message = {
-                **message,
-                "read": mine and message.get("id") in read_message_ids,
+                **{key: value for key, value in message.items() if key != "_sequence"},
+                "read": mine and (not reader_ids or all(reader_has_read(reader_id, message) for reader_id in reader_ids)),
             }
             if room.get("kind") == "group" and mine:
-                message_position = message_positions.get(str(message.get("id")), -1)
                 response_message["unread_by"] = [
                     {
                         "id": reader["id"],
@@ -3001,7 +3013,7 @@ class StateStore:
                         "display_name": reader.get("display_name") or reader["username"],
                     }
                     for reader_id in reader_ids
-                    if reader_positions.get(reader_id, -1) < message_position
+                    if not reader_has_read(reader_id, message)
                     if (reader := self._users_by_id.get(reader_id)) is not None
                 ]
             response_messages.append(response_message)
@@ -3014,7 +3026,45 @@ class StateStore:
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None
             messages = self._room_messages_locked(room_id)
-            return self._messages_with_read_state_locked(room, user, messages)
+            return self._messages_with_read_state_locked(room, user, messages, all_messages=messages)
+
+    def sent_message_with_read_state(
+        self,
+        room_id: str,
+        username: str,
+        message: dict,
+        *,
+        created: bool,
+    ) -> dict:
+        """Build the sender response without reloading the room after a new insert."""
+        if not created:
+            messages = self.get_messages(room_id, username) or []
+            return next(
+                (candidate for candidate in reversed(messages) if candidate.get("id") == message.get("id")),
+                message,
+            )
+
+        with self.lock:
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
+            if user is None or room is None or not self._can_access_room_locked(room, user):
+                return message
+
+            response_message = {**message, "read": False}
+            if room.get("kind") == "group":
+                unread_by = [
+                    {
+                        "id": reader["id"],
+                        "username": reader["username"],
+                        "display_name": reader.get("display_name") or reader["username"],
+                    }
+                    for reader_id in room.get("participant_ids", [])
+                    if reader_id != user["id"]
+                    if (reader := self._users_by_id.get(reader_id)) is not None
+                ]
+                response_message["unread_by"] = unread_by
+                response_message["read"] = not unread_by
+            return response_message
 
     def get_messages_page(
         self,
@@ -3029,7 +3079,11 @@ class StateStore:
             room = self._rooms_by_id.get(room_id)
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None
-            messages = self._room_messages_locked(room_id, limit=limit + 1, before=before)
+            messages = (
+                self.repository.list_messages_with_sequences(room_id, limit=limit + 1, before=before)
+                if self.repository is not None
+                else self._room_messages_locked(room_id, limit=limit + 1, before=before)
+            )
             has_more = len(messages) > limit
             if has_more:
                 messages = messages[-limit:]
@@ -3586,7 +3640,11 @@ class StateStore:
                     or existing_message.get("attachment") != attachment
                 ):
                     raise ValueError("client message id was reused with different content")
-                return existing_message, self._room_summary(room), False
+                return existing_message, self._room_summary(
+                    room,
+                    latest_message=existing_message,
+                    latest_message_loaded=True,
+                ), False
 
             message = {
                 "id": new_id("msg"),
@@ -3638,14 +3696,22 @@ class StateStore:
                     room_messages.pop()
                     existing_message = self.repository.message_by_client_id(room_id, user["id"], client_message_id) if client_message_id else None
                     if existing_message is not None:
-                        return existing_message, self._room_summary(room), False
+                        return existing_message, self._room_summary(
+                            room,
+                            latest_message=existing_message,
+                            latest_message_loaded=True,
+                        ), False
                     raise ValueError("message persistence constraint failed")
                 room_messages.clear()
             if self.repository is not None:
                 self._save_locked("rooms")
             else:
                 self._save_locked("rooms", f"messages:{room_id}")
-            return message, self._room_summary(room), True
+            return message, self._room_summary(
+                room,
+                latest_message=message,
+                latest_message_loaded=True,
+            ), True
 
 
 def push_event(event: dict, recipients: set[str]) -> None:
@@ -3967,13 +4033,11 @@ class ApplicationServices:
         if result is None:
             raise CommandFailure("채팅방을 찾을 수 없습니다.", HTTPStatus.NOT_FOUND)
         message, room, created = result
-        visible_message = next(
-            (
-                candidate
-                for candidate in reversed(self.store.get_messages(room_id, user["username"]) or [])
-                if candidate.get("id") == message.get("id")
-            ),
+        visible_message = self.store.sent_message_with_read_state(
+            room_id,
+            user["username"],
             message,
+            created=created,
         )
         if attachment is not None and created:
             UPLOAD_GRANTS.consume(Path(attachment["url"]).name, user["username"])
@@ -5361,6 +5425,12 @@ class ChatHandler(BaseHTTPRequestHandler):
         emergency_hit = False
         if not items:
             items = [item for item in EMERGENCY_SHORTS if item["id"] not in recent_set]
+            # A deployment without a YouTube API key only has the emergency
+            # catalog. Once those videos have been seen, start a new cycle
+            # instead of returning an empty feed forever.
+            if not items:
+                items = list(EMERGENCY_SHORTS)
+                seen_ids = []
             emergency_hit = bool(items)
         next_cursor = f"catalog:{next_offset}"
         with SHORTS_FEED_LOCK:
