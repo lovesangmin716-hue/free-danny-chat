@@ -298,6 +298,8 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("alter column updated_at type double precision", schema.lower())
         self.assertNotIn("current_time timestamptz", schema.lower())
         self.assertGreaterEqual(schema.lower().count("now_value timestamptz"), 2)
+        for content_type in ("audio/webm", "audio/mp4", "audio/ogg"):
+            self.assertIn(content_type, schema)
         self.assertIn("BEGIN IMMEDIATE", persistence)
         self.assertIn("PRAGMA foreign_keys=ON", persistence)
         self.assertIn("ORDER BY rowid DESC", persistence)
@@ -1524,6 +1526,26 @@ class AttachmentGrantContractTestCase(unittest.TestCase):
         self.assertNotIn("service-secret", upload_url + download_url)
         self.assertIn("/object/upload/sign/chat-uploads/", fetch.call_args_list[0].args[0])
         self.assertEqual(json.loads(fetch.call_args_list[1].kwargs["data"]), {"expiresIn": 60})
+
+    def test_supabase_upload_bucket_configuration_includes_voice_mime_types(self) -> None:
+        with (
+            mock.patch.object(server, "SUPABASE_ENABLED", True),
+            mock.patch.object(server, "SUPABASE_URL", "https://project.supabase.co"),
+            mock.patch.object(server, "SUPABASE_SERVICE_ROLE_KEY", "service-secret"),
+            mock.patch.object(server, "UPLOAD_BUCKET_CONFIGURED", False),
+            mock.patch.object(server, "fetch_json", return_value={"message": "Successfully updated"}) as fetch,
+        ):
+            server.configure_supabase_upload_bucket()
+            self.assertTrue(server.UPLOAD_BUCKET_CONFIGURED)
+
+        self.assertEqual(fetch.call_args.args[0], "https://project.supabase.co/storage/v1/bucket/chat-uploads")
+        self.assertEqual(fetch.call_args.kwargs["method"], "PUT")
+        payload = json.loads(fetch.call_args.kwargs["data"])
+        self.assertFalse(payload["public"])
+        self.assertEqual(payload["file_size_limit"], server.MAX_ATTACHMENT_BYTES)
+        self.assertEqual(payload["allowed_mime_types"], list(server.ATTACHMENT_TYPES))
+        for content_type in server.VOICE_ATTACHMENT_TYPES:
+            self.assertIn(content_type, payload["allowed_mime_types"])
 
 
 class AttachmentTransferIntegrationTestCase(unittest.TestCase):
