@@ -3,9 +3,11 @@ services:
     name: colorless
     runtime: python
     plan: free
-    buildCommand: npm --prefix frontend ci && npm --prefix frontend run build && npm --prefix frontend run build:check && python -m pip install . && python -m compileall -q src/colorless
+    buildCommand: npm --prefix frontend ci && npm --prefix frontend run build && npm --prefix frontend run build:check && python tests/deploy_preflight.py --environment --remote && python -m pip install . && python -m compileall -q src/colorless
     startCommand: python -m colorless
     healthCheckPath: /ready
+    autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 45
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.11
@@ -19,6 +21,9 @@ services:
         sync: false
       - key: PHONE_VERIFICATION_MODE
         value: prod
+      # No production SMS adapter is configured yet; OAuth and existing local logins remain available.
+      - key: LOCAL_SIGNUP_ENABLED
+        value: "false"
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET

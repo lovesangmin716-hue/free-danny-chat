@@ -51,10 +51,15 @@ def seed(database_path: Path, users: int, rooms: int, messages_per_room: int) ->
     with repository.connection() as database:
         database.execute("BEGIN IMMEDIATE")
         user_rows = []
+        account_rows = []
         for index in range(users):
-            user = {"id": f"user_{index:08d}", "username": f"user{index:08d}", "friend_code": f"scale{index:08d}"}
-            user_rows.append((user["id"], user["username"], user["friend_code"], json.dumps(user, separators=(",", ":"))))
-        database.executemany("INSERT OR REPLACE INTO users(id, username, friend_code, data_json) VALUES(?, ?, ?, ?)", user_rows)
+            account_id = f"account_{index:08d}"
+            account = {"id": account_id, "status": "active"}
+            user = {"id": f"user_{index:08d}", "account_id": account_id, "username": f"user{index:08d}", "friend_code": f"scale{index:08d}"}
+            account_rows.append((account_id, "active", json.dumps(account, separators=(",", ":"))))
+            user_rows.append((user["id"], account_id, user["username"], user["friend_code"], json.dumps(user, separators=(",", ":"))))
+        database.executemany("INSERT OR REPLACE INTO accounts(id, status, data_json) VALUES(?, ?, ?)", account_rows)
+        database.executemany("INSERT OR REPLACE INTO users(id, account_id, username, friend_code, data_json) VALUES(?, ?, ?, ?, ?)", user_rows)
         for room_index in range(rooms):
             room_id = f"room_{room_index:08d}"
             sender_index = room_index % users

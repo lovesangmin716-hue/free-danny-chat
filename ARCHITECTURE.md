@@ -76,6 +76,14 @@ Lower-level modules do not import `server.py`. Route mixins receive a live `Hand
 5. StateStore remains the persistence boundary for SQLite and Supabase.
 6. Domain events are returned with command results and published only after the HTTP response is attempted.
 
+## Account and activity identity boundary
+
+Authentication and social activity use different identifiers. `accounts.id` is the private, immutable login and enforcement key. `users.id` is an activity identity key; one account owns at most three user rows, each with its own globally unique `username`, display name, profile, friendships, rooms, messages, reads, presence, and Shorts state.
+
+Sessions persist both `account_id` and `active_user_id`. Creating or switching an identity always verifies that the target `users.account_id` matches the session account. Public social responses expose the activity identity but never its owning `account_id`; the owner-only session response includes the account identifier and owned identity list for the MY switcher. Password hashes, phone numbers, age group, and gender live only in the account record.
+
+Existing installations are migrated without rewriting social foreign keys: every legacy user receives a deterministic account, remains the first activity identity, and existing friendship, room, message, and read references continue to point at the same `users.id`. SQLite and Supabase enforce the three-identity limit at the persistence boundary as well as in the application service.
+
 ## Profile pixel editor performance
 
 The 32×32 profile editor is one 320×320 canvas and one live status node. The previous DOM grid created 1,024 button nodes and attached three listeners to each button every time the profile opened (3,072 per-cell listener registrations per open). The canvas implementation creates no nodes when reopened and installs six delegated canvas listeners only once. One canvas is in the Tab order; arrow keys move the logical cursor, Space/Enter paints, and Delete/Backspace erases.

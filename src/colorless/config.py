@@ -51,6 +51,7 @@ MAX_ENTITY_PAGE_SIZE = 100
 MAX_SYNC_EVENTS = 200
 MIN_GROUP_PARTICIPANTS = 3
 MAX_GROUP_PARTICIPANTS = 50
+MAX_IDENTITIES_PER_ACCOUNT = 3
 MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 MAX_VOICE_MESSAGE_DURATION_MS = 5 * 60 * 1000
 MAX_PROFILE_IMAGE_BYTES = 3 * 1024 * 1024
@@ -172,6 +173,7 @@ PHONE_CODE_TTL_SECONDS = 180
 PHONE_TOKEN_TTL_SECONDS = 900
 OAUTH_STATE_TTL_SECONDS = 600
 PHONE_VERIFICATION_MODE = os.getenv("PHONE_VERIFICATION_MODE", "dev")
+LOCAL_SIGNUP_ENABLED = os.getenv("LOCAL_SIGNUP_ENABLED", "true").lower() != "false"
 KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY", "").strip()
 KAKAO_CLIENT_SECRET = os.getenv("KAKAO_CLIENT_SECRET", "").strip()
 KAKAO_REDIRECT_URI = os.getenv("KAKAO_REDIRECT_URI", "").strip()
@@ -197,6 +199,10 @@ if REQUIRE_SUPABASE and not SUPABASE_ENABLED:
     raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for persistent storage.")
 if REQUIRE_SUPABASE and (GOOGLE_CLIENT_ID or KAKAO_REST_API_KEY) and not PUBLIC_BASE_URL:
     raise RuntimeError("PUBLIC_BASE_URL is required when OAuth providers are enabled in production.")
+if REQUIRE_SUPABASE and LOCAL_SIGNUP_ENABLED and PHONE_VERIFICATION_MODE == "prod":
+    raise RuntimeError(
+        "LOCAL_SIGNUP_ENABLED must be false until a production SMS delivery provider is configured."
+    )
 
 APP_NAME = "Colorless"
 AGE_GROUPS = {"10대", "20대", "30대", "40대", "50대 이상"}

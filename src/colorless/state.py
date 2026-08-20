@@ -16,6 +16,7 @@ from .config import (
     FRIEND_CODE_PATTERN,
     GENDERS,
     MAX_GROUP_PARTICIPANTS,
+    MAX_IDENTITIES_PER_ACCOUNT,
     MAX_MESSAGES_PER_ROOM,
     MAX_SESSIONS,
     MAX_SHORTS_SEEN_IDS,
@@ -111,6 +112,7 @@ class StateStore:
     def _default_state(self) -> dict:
         rooms = self._default_rooms()
         return {
+            "accounts": [],
             "users": [],
             "friendships": [],
             "rooms": rooms,
@@ -212,6 +214,7 @@ class StateStore:
     @staticmethod
     def _state_to_parts(state: dict) -> dict[str, object]:
         parts: dict[str, object] = {
+            "accounts": state["accounts"],
             "users": state["users"],
             "friendships": state["friendships"],
             "rooms": state["rooms"],
@@ -237,6 +240,7 @@ class StateStore:
             self._users_by_friend_code[user["friend_code"]] = user
         if user.get("provider_user_id"):
             self._users_by_social_key[(user.get("auth_provider", "local"), user["provider_user_id"])] = user
+        self._users_by_account_id.setdefault(user["account_id"], []).append(user)
 
     def _register_friendship_locked(self, first_id: str, second_id: str) -> None:
         pair = tuple(sorted((first_id, second_id)))
@@ -253,8 +257,17 @@ class StateStore:
             self._direct_rooms_by_pair[tuple(sorted(participant_ids))] = room
 
     def _rebuild_indexes_locked(self) -> None:
+        self._accounts_by_id = {account["id"]: account for account in self.state["accounts"]}
+        self._accounts_by_social_key = {
+            (account.get("auth_provider", "local"), account.get("provider_user_id", "")): account
+            for account in self.state["accounts"]
+            if account.get("provider_user_id")
+        }
         self._users_by_username = {user["username"]: user for user in self.state["users"]}
         self._users_by_id = {user["id"]: user for user in self.state["users"]}
+        self._users_by_account_id: dict[str, list[dict]] = {}
+        for user in self.state["users"]:
+            self._users_by_account_id.setdefault(user["account_id"], []).append(user)
         self._users_by_friend_code = {
             user["friend_code"]: user for user in self.state["users"] if user.get("friend_code")
         }
@@ -375,6 +388,7 @@ class StateStore:
         return flushed and not self._persist_thread.is_alive()
 
     def _migrate_state(self, state: dict) -> dict:
+        state.setdefault("accounts", [])
         state.setdefault("users", [])
         state.setdefault("friendships", [])
         state.setdefault("rooms", [])
@@ -383,7 +397,8 @@ class StateStore:
         state.setdefault("sessions", {})
 
         if (
-            not isinstance(state["users"], list)
+            not isinstance(state["accounts"], list)
+            or not isinstance(state["users"], list)
             or not isinstance(state["friendships"], list)
             or not isinstance(state["rooms"], list)
             or not isinstance(state["messages"], dict)
@@ -392,16 +407,48 @@ class StateStore:
         ):
             return self._default_state()
 
+        accounts_by_id = {
+            str(account.get("id")): account
+            for account in state["accounts"]
+            if isinstance(account, dict) and account.get("id")
+        }
         for user in state["users"]:
             user.setdefault("id", new_id("user"))
+            account_id = str(user.get("account_id") or f"account_{user['id']}")
+            user["account_id"] = account_id
+            account = accounts_by_id.get(account_id)
+            if account is None:
+                account = {
+                    "id": account_id,
+                    "auth_provider": user.get("auth_provider", "local"),
+                    "provider_user_id": user.get("provider_user_id", ""),
+                    "password_salt": user.get("password_salt", ""),
+                    "password_hash": user.get("password_hash", ""),
+                    "phone": user.get("phone", ""),
+                    "age_group": user.get("age_group", ""),
+                    "gender": user.get("gender", ""),
+                    "created_at": user.get("created_at", utc_now_iso()),
+                    "status": "active",
+                }
+                state["accounts"].append(account)
+                accounts_by_id[account_id] = account
+            else:
+                account.setdefault("auth_provider", user.get("auth_provider", "local"))
+                account.setdefault("provider_user_id", user.get("provider_user_id", ""))
+                account.setdefault("password_salt", user.get("password_salt", ""))
+                account.setdefault("password_hash", user.get("password_hash", ""))
+                account.setdefault("phone", user.get("phone", ""))
+                account.setdefault("age_group", user.get("age_group", ""))
+                account.setdefault("gender", user.get("gender", ""))
+                account.setdefault("created_at", user.get("created_at", utc_now_iso()))
+                account.setdefault("status", "active")
+            for account_field in ("password_salt", "password_hash", "phone", "age_group", "gender"):
+                user.pop(account_field, None)
             user.setdefault("display_name", user.get("username", ""))
             user.setdefault("status_message", "")
-            user.setdefault("phone", "")
             user.setdefault("auth_provider", "local")
             user.setdefault("provider_user_id", "")
             user.setdefault("created_at", utc_now_iso())
-            user.setdefault("age_group", "")
-            user.setdefault("gender", "")
             legacy_pixels = user.get("profile_pixels")
             if valid_profile_pixels(legacy_pixels) or isinstance(legacy_pixels, str):
                 normalized_pixels = normalize_profile_pixels(legacy_pixels)
@@ -506,9 +553,12 @@ class StateStore:
 
         valid_usernames = {user["username"] for user in state["users"]}
         now = time.time()
+        users_by_name = {user["username"]: user for user in state["users"]}
         sessions = {
             token_hash: {
                 "username": str(session["username"]),
+                "account_id": str(session.get("account_id") or users_by_name[str(session["username"])]["account_id"]),
+                "active_user_id": str(session.get("active_user_id") or users_by_name[str(session["username"])]["id"]),
                 "created_at": float(session["created_at"]),
                 "expires_at": float(session["expires_at"]),
             }
@@ -543,6 +593,7 @@ class StateStore:
         if not {"users", "friendships", "rooms", "sessions"}.issubset(parts):
             return None
         state = {
+            "accounts": parts.get("accounts", []),
             "users": parts["users"],
             "friendships": parts["friendships"],
             "rooms": parts["rooms"],
@@ -680,9 +731,14 @@ class StateStore:
     def create_session(self, token_hash: str, username: str, ttl_seconds: int, max_sessions: int) -> None:
         now = time.time()
         with self.lock:
+            user = self._users_by_username.get(username)
+            if user is None:
+                raise ValueError("cannot create a session for an unknown identity")
             changed = self._cleanup_sessions_locked(now, max_sessions) if now >= self._session_cleanup_deadline else False
             self.state["sessions"][token_hash] = {
                 "username": username,
+                "account_id": user["account_id"],
+                "active_user_id": user["id"],
                 "created_at": now,
                 "expires_at": now + ttl_seconds,
             }
@@ -690,10 +746,54 @@ class StateStore:
             self._session_validation_cache[token_hash] = (username, now + SESSION_VALIDATION_CACHE_SECONDS)
             if len(self.state["sessions"]) > max_sessions:
                 changed = self._cleanup_sessions_locked(now, max_sessions) or changed
-            user = self._users_by_username.get(username)
-            if self.repository is not None and user is not None:
-                self.repository.create_session(token_hash, user["id"], now, now + ttl_seconds, max_sessions)
+            if self.repository is not None:
+                self.repository.create_session(
+                    token_hash, user["account_id"], user["id"], now, now + ttl_seconds, max_sessions
+                )
             self._save_locked("sessions")
+
+    def switch_session_identity(self, token_hash: str, user_id: str) -> str | None:
+        with self.lock:
+            session = self.state["sessions"].get(token_hash)
+            if session is not None:
+                account_id = str(session.get("account_id", ""))
+            elif self.repository is not None:
+                current_username = self.repository.session_username(token_hash, time.time())
+                current_user = self._users_by_username.get(current_username or "")
+                account_id = str(current_user.get("account_id", "")) if current_user is not None else ""
+            else:
+                account_id = ""
+            if not account_id:
+                return None
+            target = self._users_by_id.get(user_id)
+            if target is None and self.repository is not None:
+                loaded_target = self.repository.identity_by_id(account_id, user_id)
+                if loaded_target is not None and loaded_target.get("account_id") == account_id:
+                    self.state["users"].append(loaded_target)
+                    self._register_user_locked(loaded_target)
+                    target = loaded_target
+            if target is None:
+                return None
+            if not account_id or target.get("account_id") != account_id:
+                return None
+            if target.get("disabled_at"):
+                return None
+            if self.repository is not None and not self.repository.switch_session_identity(
+                token_hash, account_id, user_id
+            ):
+                return None
+            username = target["username"]
+            if session is not None:
+                session["username"] = username
+                session["active_user_id"] = user_id
+            self._session_validation_versions[token_hash] = self._session_validation_versions.get(token_hash, 0) + 1
+            self._session_validation_cache[token_hash] = (
+                username,
+                time.time() + SESSION_VALIDATION_CACHE_SECONDS,
+            )
+            if session is not None:
+                self._save_locked("sessions")
+            return username
 
     def get_session_username(self, token_hash: str, ttl_seconds: int) -> str | None:
         now = time.time()
@@ -783,7 +883,8 @@ class StateStore:
             self._save_locked(f"shorts:{username}")
 
     def _user_public(self, user: dict) -> dict:
-        provider = user.get("auth_provider", "local")
+        account = self._accounts_by_id.get(user.get("account_id", ""), {})
+        provider = account.get("auth_provider", user.get("auth_provider", "local"))
         profile_image_url = normalize_profile_image_url(user.get("profile_image_url"))
         profile_thumbnail_url = normalize_profile_image_url(user.get("profile_thumbnail_url"))
         profile_image_version = user.get("profile_image_version", 0)
@@ -799,7 +900,7 @@ class StateStore:
             "friend_code": user["friend_code"],
             "display_name": user.get("display_name") or user["username"],
             "status_message": user.get("status_message", ""),
-            "phone_masked": mask_phone(user.get("phone", "")),
+            "phone_masked": mask_phone(account.get("phone", "")),
             "auth_provider": provider,
             "auth_provider_label": {
                 "local": "비밀번호 계정",
@@ -815,6 +916,94 @@ class StateStore:
             "profile_art_version": profile_art_version,
             "custom_palette": user.get("custom_palette", []),
         }
+
+    def get_account_context(self, username: str) -> dict | None:
+        with self.lock:
+            active_user = self._users_by_username.get(username)
+            if active_user is None:
+                return None
+            account = self._accounts_by_id.get(active_user["account_id"])
+            if account is None or account.get("status", "active") != "active":
+                return None
+            identities = [
+                self._user_public(identity)
+                for identity in self._users_by_account_id.get(account["id"], [])
+                if not identity.get("disabled_at")
+            ]
+            identities.sort(key=lambda identity: (identity.get("created_at", ""), identity["id"]))
+            return {
+                "account": {
+                    "id": account["id"],
+                    "created_at": account.get("created_at", ""),
+                    "identity_limit": MAX_IDENTITIES_PER_ACCOUNT,
+                },
+                "identities": identities,
+                "active_identity_id": active_user["id"],
+            }
+
+    def create_identity(
+        self,
+        owner_username: str,
+        username: str,
+        display_name: str,
+        friend_code: str,
+        status_message: str = "",
+    ) -> tuple[dict | None, str | None]:
+        normalized_username = username.strip()[:24]
+        normalized_display_name = display_name.strip()[:24] or normalized_username
+        normalized_friend_code = normalize_friend_code(friend_code)
+        if len(normalized_username) < 2:
+            return None, "사용자 이름은 2자 이상이어야 합니다."
+        if len(normalized_display_name) < 2:
+            return None, "표시 이름은 2자 이상이어야 합니다."
+        if not FRIEND_CODE_PATTERN.fullmatch(normalized_friend_code):
+            return None, "친구 ID는 영문 소문자, 숫자, 밑줄로 4~20자여야 합니다."
+        with self.lock:
+            owner = self._users_by_username.get(owner_username)
+            if owner is None:
+                return None, "로그인 계정을 찾을 수 없습니다."
+            account = self._accounts_by_id.get(owner["account_id"])
+            if account is None or account.get("status", "active") != "active":
+                return None, "로그인 계정을 사용할 수 없습니다."
+            active_identities = [
+                identity
+                for identity in self._users_by_account_id.get(account["id"], [])
+                if not identity.get("disabled_at")
+            ]
+            if len(active_identities) >= MAX_IDENTITIES_PER_ACCOUNT:
+                return None, f"활동 ID는 최대 {MAX_IDENTITIES_PER_ACCOUNT}개까지 만들 수 있습니다."
+            if normalized_username in self._users_by_username:
+                return None, "이미 존재하는 사용자 이름입니다."
+            if normalized_friend_code in self._users_by_friend_code:
+                return None, "이미 사용 중인 친구 ID입니다."
+            identity = {
+                "id": new_id("user"),
+                "account_id": account["id"],
+                "username": normalized_username,
+                "friend_code": normalized_friend_code,
+                "display_name": normalized_display_name,
+                "status_message": status_message.strip()[:40] or build_status_message(account.get("auth_provider", "local")),
+                "created_at": utc_now_iso(),
+                "profile_pixels_blank": True,
+                "profile_art_version": 0,
+                "profile_image_url": "",
+                "profile_thumbnail_url": "",
+                "profile_image_version": 0,
+                "custom_palette": [],
+                "auth_provider": account.get("auth_provider", "local"),
+                "provider_user_id": "",
+            }
+            self.state["users"].append(identity)
+            self._register_user_locked(identity)
+            if self.repository is not None:
+                try:
+                    self.repository.sync_user(identity)
+                except Exception:
+                    self.state["users"].remove(identity)
+                    self._rebuild_indexes_locked()
+                    raise
+            self._save_locked("users")
+            return self._user_public(identity), None
 
     def _user_list_summary(self, user: dict) -> dict:
         public = self._user_public(user)
@@ -918,7 +1107,13 @@ class StateStore:
     def get_user_record(self, username: str) -> dict | None:
         with self.lock:
             user = self._users_by_username.get(username)
-            return dict(user) if user is not None else None
+            if user is None:
+                return None
+            account = self._accounts_by_id.get(user["account_id"], {})
+            return {**user, **{
+                field: account.get(field, "")
+                for field in ("auth_provider", "provider_user_id", "phone", "age_group", "gender")
+            }}
 
     def get_user_public(self, username: str) -> dict | None:
         with self.lock:
@@ -1106,7 +1301,8 @@ class StateStore:
         }
 
     def get_messenger_bootstrap(self, user: dict) -> dict:
-        if user.get("auth_provider") == "demo":
+        account = self._accounts_by_id.get(user.get("account_id", ""), {})
+        if account.get("auth_provider", user.get("auth_provider")) == "demo":
             self.seed_demo_network(user["username"])
         with self.lock:
             friend_ids = self._friend_ids_locked(user["id"])
@@ -1131,10 +1327,12 @@ class StateStore:
         return int(self.repository.latest_event_sequence()) if self.repository is not None else 0
 
     def get_me_summary(self, user: dict) -> dict:
+        context = self.get_account_context(user["username"]) or {}
         return {
             "app_name": APP_NAME,
             "user": self._user_list_summary(user),
             "revision": self.current_sync_revision(),
+            **context,
         }
 
     def get_friends_page(self, user: dict, *, limit: int, cursor: str = "") -> dict:
@@ -1930,17 +2128,27 @@ class StateStore:
                 return None, "이미 존재하는 사용자 이름입니다."
             if normalized_friend_code in self._users_by_friend_code:
                 return None, "이미 사용 중인 친구 ID입니다."
-            user = {
-                "id": new_id("user"),
-                "username": normalized_username,
-                "friend_code": normalized_friend_code,
-                "display_name": normalized_username,
-                "status_message": status_message.strip()[:40] or build_status_message("local"),
-                "phone": normalized_phone,
+            account = {
+                "id": new_id("account"),
                 "auth_provider": "local",
                 "provider_user_id": "",
                 "password_salt": salt_hex,
                 "password_hash": digest,
+                "phone": normalized_phone,
+                "age_group": age_group,
+                "gender": gender,
+                "created_at": utc_now_iso(),
+                "status": "active",
+            }
+            user = {
+                "id": new_id("user"),
+                "account_id": account["id"],
+                "username": normalized_username,
+                "friend_code": normalized_friend_code,
+                "display_name": normalized_username,
+                "status_message": status_message.strip()[:40] or build_status_message("local"),
+                "auth_provider": "local",
+                "provider_user_id": "",
                 "created_at": utc_now_iso(),
                 "profile_pixels_blank": True,
                 "profile_art_version": 0,
@@ -1948,14 +2156,15 @@ class StateStore:
                 "profile_thumbnail_url": "",
                 "profile_image_version": 0,
                 "custom_palette": [],
-                "age_group": age_group,
-                "gender": gender,
             }
+            self.state["accounts"].append(account)
+            self._accounts_by_id[account["id"]] = account
             self.state["users"].append(user)
             self._register_user_locked(user)
             if self.repository is not None:
+                self.repository.sync_account(account)
                 self.repository.sync_user(user)
-            self._save_locked("users")
+            self._save_locked("accounts", "users")
             return self._user_public(user), None
 
     def create_or_update_social_user(
@@ -1967,61 +2176,83 @@ class StateStore:
         status_message: str = "",
     ) -> dict:
         with self.lock:
-            user = self._users_by_social_key.get((provider, provider_user_id))
+            account = self._accounts_by_social_key.get((provider, provider_user_id))
+            user = None
+            if account is not None:
+                user = next(iter(self._users_by_account_id.get(account["id"], [])), None)
+            if user is None:
+                user = self._users_by_social_key.get((provider, provider_user_id))
             if user is None:
                 username = self._unique_username_locked(nickname, provider, provider_user_id)
-                user = {
-                "id": new_id("user"),
-                "username": username,
-                "friend_code": self._new_friend_code_locked(),
-                    "display_name": nickname.strip()[:24] or username,
-                    "status_message": (status_message or build_status_message(provider))[:40],
-                    "phone": "",
+                account = {
+                    "id": new_id("account"),
                     "auth_provider": provider,
                     "provider_user_id": provider_user_id,
                     "password_salt": "",
-                "password_hash": "",
-                "created_at": utc_now_iso(),
-                "profile_pixels_blank": True,
-                "profile_art_version": 0,
-                "profile_image_url": "",
-                "profile_thumbnail_url": "",
-                "profile_image_version": 0,
-                "custom_palette": [],
-                "age_group": "",
-                "gender": "",
+                    "password_hash": "",
+                    "phone": "",
+                    "age_group": "",
+                    "gender": "",
+                    "created_at": utc_now_iso(),
+                    "status": "active",
                 }
+                user = {
+                    "id": new_id("user"),
+                    "account_id": account["id"],
+                    "username": username,
+                    "friend_code": self._new_friend_code_locked(),
+                    "display_name": nickname.strip()[:24] or username,
+                    "status_message": (status_message or build_status_message(provider))[:40],
+                    "auth_provider": provider,
+                    "provider_user_id": provider_user_id,
+                    "created_at": utc_now_iso(),
+                    "profile_pixels_blank": True,
+                    "profile_art_version": 0,
+                    "profile_image_url": "",
+                    "profile_thumbnail_url": "",
+                    "profile_image_version": 0,
+                    "custom_palette": [],
+                }
+                self.state["accounts"].append(account)
+                self._accounts_by_id[account["id"]] = account
+                self._accounts_by_social_key[(provider, provider_user_id)] = account
                 self.state["users"].append(user)
                 self._register_user_locked(user)
             else:
+                account = self._accounts_by_id.get(user["account_id"])
                 if status_message:
                     user["status_message"] = status_message[:40]
             if self.repository is not None:
+                if account is not None:
+                    self.repository.sync_account(account)
                 self.repository.sync_user(user)
-            self._save_locked("users")
+            self._save_locked("accounts", "users")
             return self._user_public(user)
 
     def authenticate_user(self, username: str, password: str) -> dict | None:
         normalized_username = username.strip()
         with self.lock:
             user = self._users_by_username.get(normalized_username)
-            if user is None or not user.get("password_hash"):
+            account = self._accounts_by_id.get(user["account_id"]) if user is not None else None
+            if account is None or account.get("status", "active") != "active" or not account.get("password_hash"):
                 return None
-            password_salt = str(user["password_salt"])
-            password_hash = str(user["password_hash"])
+            password_salt = str(account["password_salt"])
+            password_hash = str(account["password_hash"])
         _, digest = hash_password(password, password_salt)
         if not hmac.compare_digest(digest, password_hash):
             return None
         with self.lock:
             user = self._users_by_username.get(normalized_username)
-            if user is None or not hmac.compare_digest(str(user.get("password_hash", "")), password_hash):
+            account = self._accounts_by_id.get(user["account_id"]) if user is not None else None
+            if account is None or not hmac.compare_digest(str(account.get("password_hash", "")), password_hash):
                 return None
             return self._user_public(user)
 
     def seed_demo_network(self, username: str) -> None:
         with self.lock:
             user = self._users_by_username.get(username)
-            if user is None or user.get("auth_provider") != "demo":
+            account = self._accounts_by_id.get(user.get("account_id", ""), {}) if user is not None else {}
+            if user is None or account.get("auth_provider", user.get("auth_provider")) != "demo":
                 return
 
             changed = False
@@ -2032,17 +2263,27 @@ class StateStore:
                 provider_user_id = f"demo-contact-{index:02d}"
                 contact = self._users_by_social_key.get(("demo", provider_user_id))
                 if contact is None:
-                    contact = {
-                        "id": new_id("user"),
-                        "username": self._unique_username_locked(f"test_{index:02d}", "demo", provider_user_id),
-                        "friend_code": self._new_friend_code_locked(),
-                        "display_name": f"Test {index:02d}",
-                        "status_message": "test account",
-                        "phone": "",
+                    contact_account = {
+                        "id": new_id("account"),
                         "auth_provider": "demo",
                         "provider_user_id": provider_user_id,
                         "password_salt": "",
                         "password_hash": "",
+                        "phone": "",
+                        "age_group": "",
+                        "gender": "",
+                        "created_at": utc_now_iso(),
+                        "status": "active",
+                    }
+                    contact = {
+                        "id": new_id("user"),
+                        "account_id": contact_account["id"],
+                        "username": self._unique_username_locked(f"test_{index:02d}", "demo", provider_user_id),
+                        "friend_code": self._new_friend_code_locked(),
+                        "display_name": f"Test {index:02d}",
+                        "status_message": "test account",
+                        "auth_provider": "demo",
+                        "provider_user_id": provider_user_id,
                         "created_at": utc_now_iso(),
                         "profile_pixels_blank": True,
                         "profile_art_version": 0,
@@ -2050,12 +2291,14 @@ class StateStore:
                         "profile_thumbnail_url": "",
                         "profile_image_version": 0,
                         "custom_palette": [],
-                        "age_group": "",
-                        "gender": "",
                     }
+                    self.state["accounts"].append(contact_account)
+                    self._accounts_by_id[contact_account["id"]] = contact_account
+                    self._accounts_by_social_key[("demo", provider_user_id)] = contact_account
                     self.state["users"].append(contact)
                     self._register_user_locked(contact)
                     if self.repository is not None:
+                        self.repository.sync_account(contact_account)
                         self.repository.sync_user(contact)
                     changed = True
                 if index <= len(active_emojis):
@@ -2093,6 +2336,7 @@ class StateStore:
                     changed = True
             if changed:
                 self._save_locked(
+                    "accounts",
                     "users",
                     "friendships",
                     "rooms",

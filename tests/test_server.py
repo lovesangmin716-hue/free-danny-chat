@@ -11,6 +11,7 @@ import queue
 import re
 import shutil
 import socket
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -916,6 +917,41 @@ class AuthenticationHttpIntegrationTestCase(unittest.TestCase):
             http_server.server_close()
             server_thread.join(timeout=5)
 
+    def test_production_can_disable_local_signup_without_disabling_login(self) -> None:
+        with mock.patch.object(server, "LOCAL_SIGNUP_ENABLED", False):
+            http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
+            server_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+            server_thread.start()
+            connection = http.client.HTTPConnection("127.0.0.1", http_server.server_address[1], timeout=5)
+            try:
+                connection.request("GET", "/auth/providers")
+                providers_response = connection.getresponse()
+                providers = json.loads(providers_response.read())
+                self.assertEqual(providers_response.status, 200)
+                self.assertFalse(providers["local_signup_enabled"])
+
+                connection.request("GET", "/signup")
+                signup_page_response = connection.getresponse()
+                signup_page_response.read()
+                self.assertEqual(signup_page_response.status, 404)
+
+                body = b"{}"
+                connection.request(
+                    "POST",
+                    "/signup",
+                    body=body,
+                    headers={"Content-Type": "application/json", "Content-Length": str(len(body))},
+                )
+                signup_response = connection.getresponse()
+                payload = json.loads(signup_response.read())
+                self.assertEqual(signup_response.status, 503)
+                self.assertIn("회원가입", payload["error"])
+            finally:
+                connection.close()
+                http_server.shutdown()
+                http_server.server_close()
+                server_thread.join(timeout=5)
+
     def test_logout_body_does_not_corrupt_next_login_on_keep_alive_connection(self) -> None:
         unique_suffix = str(time.time_ns())[-10:]
         username = f"http{unique_suffix}"
@@ -1677,6 +1713,37 @@ class AttachmentTransferIntegrationTestCase(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_identity_creation_switch_and_ownership_boundary(self) -> None:
+        suffix = str(time.time_ns())[-8:]
+        body = json.dumps({
+            "username": f"alt{suffix}",
+            "displayName": "Alternate Identity",
+            "friendCode": f"alt{suffix}",
+        }).encode("utf-8")
+        status, _, content = self.request(
+            "POST", "/identities", body, {"Content-Type": "application/json"}
+        )
+        self.assertEqual(status, 201)
+        created = json.loads(content)
+        identity = created["identity"]
+        self.assertEqual(len(created["identities"]), 2)
+        self.assertNotIn("account_id", identity)
+
+        switch_body = json.dumps({"identityId": identity["id"]}).encode("utf-8")
+        status, _, content = self.request(
+            "POST", "/identities/switch", switch_body, {"Content-Type": "application/json"}
+        )
+        self.assertEqual(status, 200)
+        switched = json.loads(content)
+        self.assertEqual(switched["user"]["id"], identity["id"])
+        self.assertEqual(switched["active_identity_id"], identity["id"])
+
+        forbidden_body = json.dumps({"identityId": self.peer["id"]}).encode("utf-8")
+        status, _, _ = self.request(
+            "POST", "/identities/switch", forbidden_body, {"Content-Type": "application/json"}
+        )
+        self.assertEqual(status, 403)
+
     def grant(self, payload: bytes, name: str = "report.pdf", content_type: str = "application/pdf") -> dict:
         status, _, body = self.request(
             "POST",
@@ -1887,6 +1954,109 @@ class AttachmentTransferIntegrationTestCase(unittest.TestCase):
         self.assertEqual(body, payload)
 
 
+class AccountIdentityTestCase(unittest.TestCase):
+    def test_account_owns_at_most_three_switchable_identities(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="colorless-identities-") as temp_dir:
+            store = server.StateStore(Path(temp_dir) / "state.json")
+            try:
+                primary, error = store.create_local_user(
+                    "primary_user", "primary_code", "password", "", "01012345678", "20대", "남성"
+                )
+                self.assertIsNone(error)
+                assert primary is not None
+                second, error = store.create_identity(
+                    primary["username"], "second_user", "Second User", "second_code"
+                )
+                self.assertIsNone(error)
+                third, error = store.create_identity(
+                    primary["username"], "third_user", "Third User", "third_code"
+                )
+                self.assertIsNone(error)
+                fourth, error = store.create_identity(
+                    primary["username"], "fourth_user", "Fourth User", "fourth_code"
+                )
+                self.assertIsNone(fourth)
+                self.assertIn("최대 3개", error or "")
+
+                context = store.get_account_context(primary["username"])
+                assert context is not None and second is not None and third is not None
+                self.assertEqual(len(context["identities"]), 3)
+                self.assertNotIn("account_id", primary)
+
+                sessions = server.SessionStore(state_store=store)
+                token = sessions.create(primary["username"])
+                self.assertEqual(sessions.switch_identity(token, second["id"]), second["username"])
+                self.assertEqual(sessions.get_username(token), second["username"])
+
+                outsider, error = store.create_local_user(
+                    "outside_user", "outside_code", "password", "", "01087654321", "20대", "여성"
+                )
+                self.assertIsNone(error)
+                assert outsider is not None
+                self.assertIsNone(sessions.switch_identity(token, outsider["id"]))
+                self.assertEqual(sessions.get_username(token), second["username"])
+            finally:
+                store.close()
+
+    def test_legacy_sqlite_user_becomes_account_and_first_identity(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="colorless-account-migration-") as temp_dir:
+            database_path = Path(temp_dir) / "legacy.sqlite3"
+            database = sqlite3.connect(database_path)
+            legacy_user = {
+                "id": "user_legacy",
+                "username": "legacy_user",
+                "friend_code": "legacy_code",
+                "password_salt": "salt",
+                "password_hash": "digest",
+                "phone": "01012345678",
+                "age_group": "20대",
+                "gender": "남성",
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+            database.executescript(
+                "CREATE TABLE users(id TEXT PRIMARY KEY, username TEXT UNIQUE, friend_code TEXT UNIQUE, data_json TEXT NOT NULL);"
+                "CREATE TABLE sessions(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at REAL NOT NULL, expires_at REAL NOT NULL);"
+                "CREATE TABLE social_accounts(provider TEXT NOT NULL, provider_user_id TEXT NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY(provider, provider_user_id));"
+            )
+            database.execute(
+                "INSERT INTO users(id, username, friend_code, data_json) VALUES(?, ?, ?, ?)",
+                ("user_legacy", "legacy_user", "legacy_code", json.dumps(legacy_user)),
+            )
+            database.execute(
+                "INSERT INTO sessions(token_hash, user_id, created_at, expires_at) VALUES('token', 'user_legacy', 1, 9999999999)"
+            )
+            database.commit()
+            database.close()
+
+            repository = server.NormalizedSqliteRepository(database_path)
+            state = repository.load_state()
+            self.assertEqual(state["users"][0]["account_id"], "account_user_legacy")
+            self.assertEqual(state["accounts"][0]["password_hash"], "digest")
+            self.assertNotIn("password_hash", state["users"][0])
+            self.assertEqual(state["sessions"]["token"]["active_user_id"], "user_legacy")
+            self.assertEqual(repository.session_username("token", 2), "legacy_user")
+
+            database = sqlite3.connect(database_path)
+            marker = database.execute(
+                "SELECT value FROM schema_meta WHERE key='account_identity_schema_version'"
+            ).fetchone()
+            indexes = {row[1] for row in database.execute("PRAGMA index_list(users)")}
+            self.assertEqual(marker, ("2",))
+            self.assertIn("users_account_idx", indexes)
+            database.execute(
+                "CREATE TRIGGER forbid_repeat_account_migration BEFORE UPDATE ON users "
+                "BEGIN SELECT RAISE(ABORT, 'unexpected user rewrite'); END"
+            )
+            database.commit()
+            database.close()
+
+            restarted_repository = server.NormalizedSqliteRepository(database_path)
+            self.assertEqual(
+                restarted_repository.identity_by_id("account_user_legacy", "user_legacy")["username"],
+                "legacy_user",
+            )
+
+
 class SupabaseRepositoryContractTestCase(unittest.TestCase):
     def test_profile_art_uses_a_separate_fixed_size_binary_resource(self) -> None:
         requests = []
@@ -1976,12 +2146,13 @@ class SupabaseRepositoryContractTestCase(unittest.TestCase):
     def test_load_state_uses_bounded_table_reads_without_per_user_queries(self) -> None:
         requests = []
         responses = {
-            "users": [{"data": {"id": "u1", "username": "alice"}, "revision": 3}],
+            "accounts": [{"data": {"id": "a1", "status": "active"}}],
+            "users": [{"data": {"id": "u1", "account_id": "a1", "username": "alice"}, "revision": 3}],
             "friendships": [],
             "rooms": [{"data": {"id": "r1", "name": "Room"}, "revision": 4, "updated_at": "2026-08-19T00:00:00Z"}],
             "room_members": [{"room_id": "r1", "user_id": "u1"}],
             "read_positions": [{"room_id": "r1", "user_id": "u1", "message_id": "m1"}],
-            "sessions": [{"token_hash": "token", "user_id": "u1", "created_at": 1, "expires_at": 2}],
+            "sessions": [{"token_hash": "token", "user_id": "u1", "account_id": "a1", "active_user_id": "u1", "created_at": 1, "expires_at": 2}],
             "shorts_feeds": [{"user_id": "u1", "next_cursor": "next"}],
             "shorts_seen": [
                 {"user_id": "u1", "video_id": "v1", "seen_order": 0},
@@ -1997,7 +2168,7 @@ class SupabaseRepositoryContractTestCase(unittest.TestCase):
         repository = server.NormalizedSupabaseRepository("https://example.test", "secret", transport)
         state = repository.load_state()
 
-        self.assertEqual(len(requests), 8)
+        self.assertEqual(len(requests), 9)
         self.assertEqual(sum(path.startswith("/rest/v1/shorts_feeds?") for path, _ in requests), 1)
         self.assertEqual(sum(path.startswith("/rest/v1/shorts_seen?") for path, _ in requests), 1)
         self.assertEqual(state["rooms"][0]["participant_ids"], ["u1"])
@@ -2014,18 +2185,18 @@ class SupabaseRepositoryContractTestCase(unittest.TestCase):
                 return 1
             if path.endswith("/colorless_insert_message"):
                 return 2
-            if path.endswith("/colorless_session_username"):
+            if path.endswith("/colorless_account_session_username"):
                 return "alice"
             return {}
 
         repository = server.NormalizedSupabaseRepository("https://example.test", "secret", transport)
-        user = {"id": "u1", "username": "alice", "friend_code": "ABC123"}
+        user = {"id": "u1", "account_id": "a1", "username": "alice", "friend_code": "ABC123"}
         room = {"id": "r1", "participant_ids": ["u1"], "last_read_by": {}}
         message = {"id": "m1", "room_id": "r1", "username": "alice"}
         repository.sync_user(user)
         repository.sync_room(room)
         self.assertTrue(repository.insert_message(message, "u1", room, 200))
-        repository.create_session("token", "u1", 1, 2, 5)
+        repository.create_session("token", "a1", "u1", 1, 2, 5)
         self.assertEqual(repository.session_username("token", 1.5), "alice")
         repository.save_shorts_feed("u1", ["v1"], "next")
 
@@ -2034,7 +2205,7 @@ class SupabaseRepositoryContractTestCase(unittest.TestCase):
             rpc_names,
             {
                 "colorless_sync_user", "colorless_sync_room", "colorless_insert_message",
-                "colorless_create_session", "colorless_session_username", "colorless_save_shorts_feed",
+                "colorless_create_account_session", "colorless_account_session_username", "colorless_save_shorts_feed",
             },
         )
 

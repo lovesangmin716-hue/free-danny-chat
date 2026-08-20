@@ -25,6 +25,19 @@ Render free/small 단일 인스턴스의 목표는 동시 실시간 사용자 25
 
 Render의 health check는 `/ready`를 사용합니다. 장애 조사에서는 `/live`가 200이고 `/ready`가 503이면 프로세스 재시작보다 `checks`, `database.error`, persistence lag/error, outbox와 saturation을 먼저 확인합니다.
 
+## Deployment gate
+
+계정과 아이덴티티 스키마를 포함한 배포는 다음 순서를 지킵니다.
+
+1. Supabase 백업과 `app_state` 내보내기를 생성합니다.
+2. 최신 `src/colorless/database/supabase-schema.sql`을 적용합니다.
+3. `python tests/deploy_preflight.py`와 전체 CI를 통과시킵니다.
+4. 운영 비밀 값을 주입한 환경에서 `python tests/deploy_preflight.py --environment --remote`를 통과시킵니다. Render 빌드도 같은 읽기 전용 검사를 다시 실행하고 실패하면 새 인스턴스 배포를 중단합니다.
+5. 배포 후 `/live`, `/ready`, `select public.colorless_storage_counts();`를 확인합니다.
+6. `users.account_id` 누락, 계정당 아이덴티티 3개 초과, `sessions.account_id/active_user_id` 누락이 모두 0인지 확인한 뒤 정상 트래픽을 엽니다.
+
+Render Blueprint는 GitHub 검사가 성공한 커밋만 자동 배포합니다. SMS 발송 연동 전에는 `LOCAL_SIGNUP_ENABLED=false`를 유지합니다. 새 서버가 쓰기를 받기 전 실패하면 직전 커밋과 보존된 `app_state`로 되돌릴 수 있고, 쓰기 재개 뒤의 데이터 rollback은 전환 직전 Supabase 백업 복원이 필요합니다.
+
 ## Structured request log
 
 모든 완료된 HTTP 요청은 한 줄 JSON으로 기록됩니다. `request_id`, method, query가 제거된 정규화 route, status, latency, request/response bytes와 SHA-256으로 가명화한 `user_id`가 포함되며 동일 request ID가 `X-Request-ID` 응답 헤더에도 전달됩니다.
