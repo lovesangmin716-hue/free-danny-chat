@@ -394,11 +394,14 @@ class StaticAppStructureTestCase(unittest.TestCase):
             self.assertIn("aria-label=", button.group(0))
         self.assertNotIn('shortShareSend.textContent = ">"', shorts_script)
 
-    def test_status_emoji_picker_opens_once_at_connection_and_cannot_be_reopened(self) -> None:
+    def test_status_emoji_picker_is_mandatory_once_and_accepts_only_one_emoji(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
         app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
         bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+        chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
+        messenger_script = (server.ASSETS_DIR / "js" / "messenger.js").read_text(encoding="utf-8")
+        server_script = SERVER_PATH.read_text(encoding="utf-8")
 
         start_app = re.search(r"async function startApp\(\) \{(.*?)\n\}", app_script, re.DOTALL)
         self.assertIsNotNone(start_app)
@@ -407,15 +410,33 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('id="open-status-emoji-button"', index_html)
         self.assertIn('aria-labelledby="status-emoji-title"', index_html)
         self.assertIn('aria-describedby="status-emoji-description"', index_html)
-        self.assertIn('id="close-status-emoji-button"', index_html)
-        self.assertIn('id="skip-status-emoji-button"', index_html)
+        self.assertNotIn('id="close-status-emoji-button"', index_html)
+        self.assertNotIn('id="skip-status-emoji-button"', index_html)
+        self.assertIn('id="status-emoji-required"', index_html)
+        self.assertIn('placeholder="이모티콘 1개"', index_html)
         self.assertIn("state.selectedStatusEmoji = savedStatusEmoji()", core_script)
         self.assertIn("openStatusEmojiButton.disabled = true", core_script)
         self.assertNotIn('openStatusEmojiButton.addEventListener("click"', bootstrap_script)
+        self.assertIn("if (segments.length !== 1) return", core_script)
+        self.assertIn("statusEmojiPicker.appendChild(profileStatusEmoji)", core_script)
+        self.assertIn("function openCustomStatusEmojiInput()", core_script)
+        self.assertIn("statusEmojiOnly: true", core_script)
+        self.assertIn("openCustomStatusEmojiInput()", bootstrap_script)
+        self.assertIn("saved_activity_emoji(status_message) != status_message.strip()", server_script)
         self.assertIn("state.statusPickerOpener", core_script)
         self.assertIn('event.key === "Escape"', bootstrap_script)
         self.assertIn('event.key !== "Tab"', bootstrap_script)
-        self.assertIn("closeStatusEmojiPicker()", bootstrap_script)
+        self.assertNotIn("closeStatusEmojiPicker()", bootstrap_script)
+        self.assertIn("normalizeStatusEmoji(presence.emoji)", core_script)
+        self.assertIn("body: JSON.stringify({ activeRoomId: document.hidden ? \"\" : state.selectedRoomId, emoji })", chat_script)
+        self.assertIn('realtimeEvents.register("presence_updated"', messenger_script)
+        self.assertIn("schedulePresencePatch(payload.username)", messenger_script)
+
+        self.assertEqual(server.saved_activity_emoji("😀"), "😀")
+        self.assertEqual(server.saved_activity_emoji("👨‍👩‍👧‍👦"), "👨‍👩‍👧‍👦")
+        self.assertEqual(server.saved_activity_emoji("🇰🇷"), "🇰🇷")
+        self.assertEqual(server.saved_activity_emoji("hello 😀"), "")
+        self.assertEqual(server.saved_activity_emoji("😀😃"), "")
 
     def test_mobile_header_keeps_title_on_one_line(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -1899,6 +1920,15 @@ class StateStoreTestCase(unittest.TestCase):
             {reader["username"] for reader in message_outcome.data["unread_by"]},
             {"bob", "eve"},
         )
+
+        presence_outcome = services.update_presence(
+            "activity-token",
+            self.alice,
+            {"activeRoomId": group_outcome.data["room"]["id"], "emoji": "🧑‍💻"},
+        )
+        self.assertEqual(presence_outcome.data["presence"]["emoji"], "🧑‍💻")
+        self.assertEqual(presence_outcome.events[0][0]["type"], "presence_updated")
+        self.assertEqual(presence_outcome.events[0][0]["presence"]["emoji"], "🧑‍💻")
 
     def test_message_page_uses_one_repository_read_for_items_and_read_state(self) -> None:
         for index in range(5):

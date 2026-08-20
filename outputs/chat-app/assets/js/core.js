@@ -299,9 +299,8 @@ const profileStatusEmoji = document.getElementById("profile-status-emoji");
 const statusEmojiAdd = document.getElementById("status-emoji-add");
 const statusEmojiSheet = document.getElementById("status-emoji-sheet");
 const openStatusEmojiButton = document.getElementById("open-status-emoji-button");
-const closeStatusEmojiButton = document.getElementById("close-status-emoji-button");
-const skipStatusEmojiButton = document.getElementById("skip-status-emoji-button");
 const statusEmojiCurrent = document.getElementById("status-emoji-current");
+const statusEmojiRequired = document.getElementById("status-emoji-required");
 const clearProfileButton = document.getElementById("clear-profile-button");
 const saveProfileButton = document.getElementById("save-profile-button");
 const loginForm = document.getElementById("login-form");
@@ -315,10 +314,16 @@ const loginPassword = document.getElementById("login-password");
 
 function normalizeStatusEmoji(value) {
   const trimmed = (value || "").trim();
-  const emoji = emojiSegmenter
-    ? [...emojiSegmenter.segment(trimmed)][0]?.segment || ""
-    : Array.from(trimmed)[0] || "";
+  const segments = emojiSegmenter
+    ? [...emojiSegmenter.segment(trimmed)].map((part) => part.segment)
+    : Array.from(trimmed);
+  if (segments.length !== 1) return "";
+  const emoji = segments[0] || "";
   return /[\p{Extended_Pictographic}\p{Regional_Indicator}]/u.test(emoji) ? emoji : "";
+}
+
+function showStatusEmojiRequirement(message = "감정을 선택해야 시작할 수 있어요.") {
+  statusEmojiRequired.textContent = message;
 }
 
 function renderStatusEmojiPicker() {
@@ -334,6 +339,7 @@ function renderStatusEmojiPicker() {
     statusEmojiPicker.appendChild(button);
   });
   statusEmojiPicker.appendChild(statusEmojiAdd);
+  statusEmojiPicker.appendChild(profileStatusEmoji);
 }
 
 function savedStatusEmoji() {
@@ -352,12 +358,16 @@ function openStatusEmojiPicker(opener = openStatusEmojiButton) {
   state.statusPickerTouched = false;
   state.statusPickerOpener = opener;
   profileStatusEmoji.value = state.selectedStatusEmoji;
+  profileStatusEmoji.classList.remove("customizing");
+  profileStatusEmoji.removeAttribute("aria-invalid");
   statusEmojiCurrent.textContent = state.selectedStatusEmoji || "없음";
+  showStatusEmojiRequirement();
   renderStatusEmojiPicker();
   statusEmojiSheet.classList.remove("hidden");
   requestAnimationFrame(() => {
     const selected = statusEmojiPicker.querySelector(".status-emoji-button.active");
-    (selected || closeStatusEmojiButton).focus({ preventScroll: true });
+    (selected || statusEmojiPicker.querySelector(".status-emoji-button") || statusEmojiAdd)
+      .focus({ preventScroll: true });
     selected?.scrollIntoView({ block: "center" });
   });
 }
@@ -365,10 +375,20 @@ function openStatusEmojiPicker(opener = openStatusEmojiButton) {
 function closeStatusEmojiPicker({ restoreFocus = true } = {}) {
   window.clearTimeout(state.statusPickerTimer);
   state.statusPickerTimer = null;
+  profileStatusEmoji.classList.remove("customizing");
   statusEmojiSheet.classList.add("hidden");
   const opener = state.statusPickerOpener;
   state.statusPickerOpener = null;
   if (restoreFocus && opener?.isConnected) opener.focus({ preventScroll: true });
+}
+
+function openCustomStatusEmojiInput() {
+  profileStatusEmoji.value = "";
+  profileStatusEmoji.classList.add("customizing");
+  profileStatusEmoji.removeAttribute("aria-invalid");
+  showStatusEmojiRequirement("원하는 이모티콘 하나만 입력하세요.");
+  profileStatusEmoji.focus({ preventScroll: true });
+  profileStatusEmoji.scrollIntoView({ block: "center" });
 }
 
 function selectCenteredStatusEmoji() {
@@ -385,8 +405,7 @@ function selectCenteredStatusEmoji() {
 
   if (!centeredChoice) return;
   if (centeredChoice === statusEmojiAdd) {
-    profileStatusEmoji.value = "";
-    profileStatusEmoji.focus({ preventScroll: true });
+    openCustomStatusEmojiInput();
     return;
   }
   chooseStatusEmoji(centeredChoice.dataset.emoji);
@@ -394,10 +413,17 @@ function selectCenteredStatusEmoji() {
 
 async function chooseStatusEmoji(emoji) {
   const user = state.messenger.user || state.session?.user;
-  if (!user || !emoji) return;
+  const normalizedEmoji = normalizeStatusEmoji(emoji);
+  if (!user || !normalizedEmoji || normalizedEmoji !== emoji.trim()) {
+    profileStatusEmoji.setAttribute("aria-invalid", "true");
+    showStatusEmojiRequirement("텍스트 없이 이모티콘 하나만 입력해 주세요.");
+    return;
+  }
 
-  state.selectedStatusEmoji = emoji;
-  profileStatusEmoji.value = emoji;
+  state.selectedStatusEmoji = normalizedEmoji;
+  profileStatusEmoji.value = normalizedEmoji;
+  profileStatusEmoji.removeAttribute("aria-invalid");
+  showStatusEmojiRequirement("감정을 저장하는 중이에요.");
   renderStatusEmojiPicker();
 
   try {
@@ -405,7 +431,8 @@ async function chooseStatusEmoji(emoji) {
       method: "POST",
       body: JSON.stringify({
         displayName: getDisplayName(user),
-        statusMessage: emoji,
+        statusMessage: normalizedEmoji,
+        statusEmojiOnly: true,
         friendCode: user.friend_code,
       }),
     });
@@ -416,6 +443,7 @@ async function chooseStatusEmoji(emoji) {
     renderMessenger();
     updatePresence();
   } catch (error) {
+    showStatusEmojiRequirement(error.message);
     setAppStatus(error.message, "error");
   }
 }

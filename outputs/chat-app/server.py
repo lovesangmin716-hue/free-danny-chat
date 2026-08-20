@@ -801,8 +801,41 @@ def normalize_phone(phone: str) -> str:
 
 
 def saved_activity_emoji(value: object) -> str:
-    normalized = str(value or "").strip()[:16]
-    return normalized if any(ord(character) >= 0x1F000 for character in normalized) else ""
+    normalized = str(value or "").strip()
+    if not normalized or len(normalized) > 16:
+        return ""
+    if re.fullmatch(r"[0-9#*]\ufe0f?\u20e3", normalized):
+        return normalized
+
+    base_codepoints: list[int] = []
+    regional_count = 0
+    has_joiner = "\u200d" in normalized
+    for character in normalized:
+        codepoint = ord(character)
+        if 0x1F3FB <= codepoint <= 0x1F3FF:
+            continue
+        is_regional = 0x1F1E6 <= codepoint <= 0x1F1FF
+        is_emoji_base = (
+            0x1F000 <= codepoint <= 0x1FAFF
+            or 0x2300 <= codepoint <= 0x23FF
+            or 0x2600 <= codepoint <= 0x27BF
+            or 0x2B00 <= codepoint <= 0x2BFF
+            or codepoint in {0x00A9, 0x00AE, 0x203C, 0x2049, 0x2122, 0x2139, 0x3030, 0x303D, 0x3297, 0x3299}
+        )
+        if is_emoji_base:
+            base_codepoints.append(codepoint)
+            regional_count += int(is_regional)
+            continue
+        if codepoint in {0x200D, 0x20E3, 0xFE0E, 0xFE0F} or 0xE0020 <= codepoint <= 0xE007F:
+            continue
+        return ""
+    if not base_codepoints:
+        return ""
+    if len(base_codepoints) == 1 or has_joiner:
+        return normalized
+    if len(base_codepoints) == 2 and regional_count == 2:
+        return normalized
+    return ""
 
 
 def mask_phone(phone: str) -> str:
@@ -4101,7 +4134,7 @@ class ApplicationServices:
 
     def update_presence(self, session_token: str | None, user: dict, payload: dict) -> CommandOutcome:
         active_room_id = str(payload.get("activeRoomId", "")).strip()[:80]
-        emoji = str(payload.get("emoji", "")).strip()[:16]
+        emoji = saved_activity_emoji(payload.get("emoji"))
         changed = self.presence.update(session_token, user["username"], active_room_id, emoji)
         current = self.presence.for_user(user["username"])
         events = []
@@ -5638,6 +5671,9 @@ class ChatHandler(BaseHTTPRequestHandler):
         display_name = str(payload.get("displayName", ""))
         status_message = str(payload.get("statusMessage", ""))
         friend_code = str(payload.get("friendCode", ""))
+        if payload.get("statusEmojiOnly") and saved_activity_emoji(status_message) != status_message.strip():
+            self.send_json({"error": "텍스트 없이 이모티콘 하나만 선택해 주세요."}, HTTPStatus.BAD_REQUEST)
+            return
         profile, error = STORE.update_profile(user["username"], display_name, status_message, friend_code, payload.get("pixels"))
         if error:
             self.send_json({"error": error}, HTTPStatus.BAD_REQUEST)

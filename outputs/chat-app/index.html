@@ -12,7 +12,7 @@
     <script defer src="assets/js/platform/events.js?v=e67ecd100954"></script>
     <script defer src="assets/js/platform/icons.js?v=10894f1a61f3"></script>
     <script defer src="assets/js/platform/image-processing.js?v=c3632b3197bf"></script>
-    <script defer src="assets/js/core.js?v=3595143d4f15"></script>
+    <script defer src="assets/js/core.js?v=20d1103c3696"></script>
     <script defer src="assets/js/profile.js?v=94132f3ffcbb"></script>
     <script defer src="assets/js/messenger.js?v=0a09ef9a97c3"></script>
     <script defer src="assets/js/attachments.js?v=0c018e271851"></script>
@@ -22,7 +22,7 @@
     <script defer src="assets/js/action-bar.js?v=021a9bcbe046"></script>
     <script defer src="assets/js/app.js?v=66ce48813be2"></script>
     <script defer src="assets/js/auth.js?v=84a7ef3fc787"></script>
-    <script defer src="assets/js/bootstrap.js?v=55559ebb0646"></script>
+    <script defer src="assets/js/bootstrap.js?v=0185f3a2b9bc"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -568,14 +568,14 @@
       .status-emoji-button:hover:not(:disabled), .status-emoji-add:hover:not(:disabled) { box-shadow: none; transform: none; }
       .status-emoji-button.active { transform: scale(1.12); }
       .status-emoji-add { font-size: 74px; font-weight: 300; }
-      .status-emoji-input { height: 1px; opacity: 0; pointer-events: none; position: absolute; width: 1px; }
+      .status-emoji-input { border: 1px solid var(--black); display: none; flex: 0 0 58px; font-size: 30px; margin: 8px 20px 40px; min-height: 58px; text-align: center; width: calc(100% - 40px); }
+      .status-emoji-input.customizing { display: block; }
       .status-emoji-sheet { background: var(--white); border: 1px solid var(--line); border-radius: 24px; box-shadow: 0 24px 80px rgba(0, 0, 0, .22); max-height: calc(100dvh - 32px); overflow: hidden; padding: 0; width: min(calc(100% - 24px), 380px); }
       .status-emoji-heading { padding: 20px 20px 8px; }
       .status-emoji-heading h2 { font-size: 20px; margin: 0; }
       .status-emoji-heading p { color: var(--muted); font-size: 14px; line-height: 1.45; margin: 6px 0 0; }
       .status-emoji-current { font-weight: 700; }
-      .status-emoji-actions { display: flex; gap: 8px; padding: 8px 20px 20px; }
-      .status-emoji-actions button { flex: 1; min-height: 44px; }
+      .status-emoji-required { color: var(--gray); font-size: 13px; line-height: 1.45; margin: 0; padding: 8px 20px 20px; text-align: center; }
       .pixel-editor-grid { aspect-ratio: 1; background: var(--white); border: 1px solid var(--black); cursor: crosshair; display: block; height: auto; image-rendering: pixelated; margin: 0 auto 16px; touch-action: none; width: min(100%, 320px); }
       .pixel-editor-grid:focus-visible { outline: 3px solid var(--black); outline-offset: 3px; }
       .profile-actions { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
@@ -1068,12 +1068,9 @@
           </header>
           <div class="status-emoji-picker" id="status-emoji-picker">
             <button class="status-emoji-add" id="status-emoji-add" type="button" aria-label="직접 이모티콘 선택"><span aria-hidden="true">+</span></button>
-            <input class="status-emoji-input" id="profile-status-emoji" maxlength="16" inputmode="text" autocomplete="off" autocapitalize="off" />
+            <input class="status-emoji-input" id="profile-status-emoji" maxlength="16" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="이모티콘 1개" aria-describedby="status-emoji-required" />
           </div>
-          <footer class="status-emoji-actions">
-            <button type="button" class="secondary-button" id="skip-status-emoji-button">변경 없이 닫기</button>
-            <button type="button" class="sheet-close" id="close-status-emoji-button" aria-label="상태 이모티콘 선택 닫기">닫기</button>
-          </footer>
+          <p class="status-emoji-required" id="status-emoji-required" role="status">감정을 선택해야 시작할 수 있어요.</p>
         </section>
       </div>
     </main>

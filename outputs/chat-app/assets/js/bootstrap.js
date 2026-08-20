@@ -200,15 +200,16 @@ friendCodeInput.addEventListener("keydown", (event) => {
   }
 });
 openProfileButton.addEventListener("click", () => void openProfileEditor());
-closeStatusEmojiButton.addEventListener("click", () => closeStatusEmojiPicker());
-skipStatusEmojiButton.addEventListener("click", () => closeStatusEmojiPicker());
 statusEmojiSheet.addEventListener("click", (event) => {
-  if (event.target === statusEmojiSheet) closeStatusEmojiPicker();
+  if (event.target !== statusEmojiSheet) return;
+  showStatusEmojiRequirement();
+  statusEmojiPicker.querySelector(".status-emoji-button")?.focus({ preventScroll: true });
 });
 statusEmojiSheet.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
-    closeStatusEmojiPicker();
+    showStatusEmojiRequirement();
+    statusEmojiPicker.querySelector(".status-emoji-button")?.focus({ preventScroll: true });
     return;
   }
   if (event.key !== "Tab") return;
@@ -305,8 +306,7 @@ customProfileColor.addEventListener("input", () => {
   addCustomPaletteColor(color);
 });
 statusEmojiAdd.addEventListener("click", () => {
-  profileStatusEmoji.value = "";
-  profileStatusEmoji.focus({ preventScroll: true });
+  openCustomStatusEmojiInput();
 });
 statusEmojiPicker.addEventListener("pointerdown", () => {
   state.statusPickerTouched = true;
@@ -321,8 +321,12 @@ statusEmojiPicker.addEventListener("scroll", () => {
 }, { passive: true });
 profileStatusEmoji.addEventListener("input", () => {
   const emoji = normalizeStatusEmoji(profileStatusEmoji.value);
-  profileStatusEmoji.value = emoji;
-  if (emoji) chooseStatusEmoji(emoji);
+  if (emoji && emoji === profileStatusEmoji.value.trim()) {
+    chooseStatusEmoji(emoji);
+    return;
+  }
+  profileStatusEmoji.setAttribute("aria-invalid", "true");
+  showStatusEmojiRequirement("텍스트 없이 이모티콘 하나만 입력해 주세요.");
 });
 saveProfileButton.addEventListener("click", saveProfilePixels);
 window.addEventListener("pointerup", () => { state.profilePainting = false; });
