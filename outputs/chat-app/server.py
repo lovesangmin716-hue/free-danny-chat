@@ -3020,26 +3020,46 @@ class StateStore:
         *,
         all_messages: list[dict] | None = None,
     ) -> list[dict]:
-if all_messages is None:
-    all_messages = self._room_messages_locked(room["id"])
-message_positions = {
-    message["id"]: index
-    for index, message in enumerate(all_messages)
-}
-participant_ids = list(room.get("participant_ids", []))
-reader_positions: dict[str, int] = {}
-last_read_by = room.get("last_read_by", {})
-for reader_id in participant_ids:
-    reader_positions[reader_id] = message_positions.get(
-        str(last_read_by.get(reader_id, "")),
-        -1,
-    )
+        participant_ids = list(room.get("participant_ids", []))
+        last_read_by = room.get("last_read_by", {})
+        if all_messages is not None or self.repository is None:
+            if all_messages is None:
+                all_messages = self._room_messages_locked(room["id"])
+            message_positions = {
+                str(message["id"]): index
+                for index, message in enumerate(all_messages)
+            }
+            reader_positions = {
+                reader_id: message_positions.get(str(last_read_by.get(reader_id, "")), -1)
+                for reader_id in participant_ids
+            }
+
+            def reader_has_read(reader_id: str, message: dict) -> bool:
+                message_position = message_positions.get(str(message.get("id", "")), -1)
+                return message_position >= 0 and reader_positions.get(reader_id, -1) >= message_position
+        else:
+            reader_cursor_ids = {
+                reader_id: str(last_read_by.get(reader_id, ""))
+                for reader_id in participant_ids
+            }
+            cursor_sequences = self.repository.message_sequences(
+                room["id"],
+                list(reader_cursor_ids.values()),
+            )
+            reader_sequences = {
+                reader_id: cursor_sequences.get(cursor_id, -1)
+                for reader_id, cursor_id in reader_cursor_ids.items()
+            }
+
+            def reader_has_read(reader_id: str, message: dict) -> bool:
+                message_sequence = int(message.get("_sequence", -1))
+                return message_sequence >= 0 and reader_sequences.get(reader_id, -1) >= message_sequence
+
         response_messages: list[dict] = []
         for message in messages:
             mine = message.get("username") == user["username"]
             sender = self._users_by_username.get(str(message.get("username", "")))
             sender_id = str(sender.get("id", "")) if sender is not None else ""
-            message_position = message_positions.get(str(message.get("id")), -1)
             eligible_reader_ids = [
                 reader_id
                 for reader_id in participant_ids
@@ -3052,7 +3072,7 @@ for reader_id in participant_ids:
                     "display_name": reader.get("display_name") or reader["username"],
                 }
                 for reader_id in eligible_reader_ids
-                if reader_positions.get(reader_id, -1) >= message_position >= 0
+                if reader_has_read(reader_id, message)
                 if (reader := self._users_by_id.get(reader_id)) is not None
             ]
             unread_by = [
@@ -3062,15 +3082,15 @@ for reader_id in participant_ids:
                     "display_name": reader.get("display_name") or reader["username"],
                 }
                 for reader_id in eligible_reader_ids
-                if reader_positions.get(reader_id, -1) < message_position or message_position < 0
+                if not reader_has_read(reader_id, message)
                 if (reader := self._users_by_id.get(reader_id)) is not None
             ]
             response_message = {
-**message,
-"read": mine and not unread_by,
-"read_by": read_by,
-"unread_by": unread_by,
-}
+                **{key: value for key, value in message.items() if key != "_sequence"},
+                "read": mine and not unread_by,
+                "read_by": read_by,
+                "unread_by": unread_by,
+            }
             response_messages.append(response_message)
         return response_messages
 
@@ -3081,43 +3101,50 @@ for reader_id in participant_ids:
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None
             messages = self._room_messages_locked(room_id)
-async def sent_message_with_read_state(
-    self,
-    room_id: str,
-    username: str,
-    message: dict,
-    *,
-    created: bool,
-) -> dict:
-    """Build the sender response without reloading the room after a new insert."""
-    if not created:
-        messages = self.get_messages(room_id, username) or []
-        return next(
-            (candidate for candidate in reversed(messages) if candidate.get("id") == message.get("id")),
-            message,
-        )
+            return self._messages_with_read_state_locked(
+                room,
+                user,
+                messages,
+                all_messages=messages,
+            )
 
-    with self.lock:
-        user = self._users_by_username.get(username)
-        room = self._rooms_by_id.get(room_id)
-        if user is None or room is None or not self._can_access_room_locked(room, user):
-            return message
+    def sent_message_with_read_state(
+        self,
+        room_id: str,
+        username: str,
+        message: dict,
+        *,
+        created: bool,
+    ) -> dict:
+        """Build the sender response without reloading the room after a new insert."""
+        if not created:
+            messages = self.get_messages(room_id, username) or []
+            return next(
+                (candidate for candidate in reversed(messages) if candidate.get("id") == message.get("id")),
+                message,
+            )
 
-        response_message = {**message, "read": False}
-        if room.get("kind") == "group":
-            unread_by = [
-                {
-                    "id": reader["id"],
-                    "username": reader["username"],
-                    "display_name": reader.get("display_name") or reader["username"],
-                }
-                for reader_id in room.get("participant_ids", [])
-                if reader_id != user["id"]
-                if (reader := self._users_by_id.get(reader_id)) is not None
-            ]
-            response_message["unread_by"] = unread_by
-            response_message["read"] = not unread_by
-        return response_message
+        with self.lock:
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
+            if user is None or room is None or not self._can_access_room_locked(room, user):
+                return message
+
+            response_message = {**message, "read": False}
+            if room.get("kind") == "group":
+                unread_by = [
+                    {
+                        "id": reader["id"],
+                        "username": reader["username"],
+                        "display_name": reader.get("display_name") or reader["username"],
+                    }
+                    for reader_id in room.get("participant_ids", [])
+                    if reader_id != user["id"]
+                    if (reader := self._users_by_id.get(reader_id)) is not None
+                ]
+                response_message["unread_by"] = unread_by
+                response_message["read"] = not unread_by
+            return response_message
 
     def get_messages_page(
         self,
@@ -3133,42 +3160,37 @@ async def sent_message_with_read_state(
             room = self._rooms_by_id.get(room_id)
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None
-messages = (
-    self.repository.list_messages_with_sequences(room_id, limit=limit + 1, before=before)
-    if self.repository is not None
-    else self._room_messages_locked(room_id, limit=limit + 1, before=before)
-)
-has_more = len(messages) > limit
-if around:
-    all_messages = self._room_messages_locked(room_id)
-    target_index = next(
-        (index for index, message in enumerate(all_messages) if message.get("id") == around),
-        -1,
-    )
-    if target_index >= 0:
-        page_start = max(0, target_index - (limit // 2))
-        page_end = min(len(all_messages), page_start + limit)
-        page_start = max(0, page_end - limit)
-        messages = all_messages[page_start:page_end]
-        page_messages = self._messages_with_read_state_locked(
-            room,
-            user,
-            messages,
-            all_messages=all_messages,
-        )
-        return {
-            "items": page_messages,
-            "next_cursor": messages[0]["id"] if page_start > 0 and page_messages else "",
-            "around": around,
-        }
+            if around:
+                all_messages = self._room_messages_locked(room_id)
+                target_index = next(
+                    (index for index, message in enumerate(all_messages) if message.get("id") == around),
+                    -1,
+                )
+                if target_index >= 0:
+                    page_start = max(0, target_index - (limit // 2))
+                    page_end = min(len(all_messages), page_start + limit)
+                    page_start = max(0, page_end - limit)
+                    messages = all_messages[page_start:page_end]
+                    page_messages = self._messages_with_read_state_locked(
+                        room,
+                        user,
+                        messages,
+                        all_messages=all_messages,
+                    )
+                    return {
+                        "items": page_messages,
+                        "next_cursor": messages[0]["id"] if page_start > 0 and page_messages else "",
+                        "around": around,
+                    }
+            messages = (
+                self.repository.list_messages_with_sequences(room_id, limit=limit + 1, before=before)
+                if self.repository is not None
+                else self._room_messages_locked(room_id, limit=limit + 1, before=before)
+            )
+            has_more = len(messages) > limit
             if has_more:
                 messages = messages[-limit:]
-            page_messages = self._messages_with_read_state_locked(
-                room,
-                user,
-                messages,
-                all_messages=all_messages,
-            )
+            page_messages = self._messages_with_read_state_locked(room, user, messages)
             return {
                 "items": page_messages,
                 "next_cursor": messages[0]["id"] if has_more and page_messages else "",
@@ -4227,12 +4249,12 @@ class ApplicationServices:
         if result is None:
             raise CommandFailure("채팅방을 찾을 수 없습니다.", HTTPStatus.NOT_FOUND)
         message, room, created = result
-visible_message = self.store.sent_message_with_read_state(
-    room_id,
-    user["username"],
-    message,
-    created=created,
-)
+        visible_message = self.store.sent_message_with_read_state(
+            room_id,
+            user["username"],
+            message,
+            created=created,
+        )
         if attachment is not None and created:
             UPLOAD_GRANTS.consume(Path(attachment["url"]).name, user["username"])
         if not created:
@@ -5677,10 +5699,10 @@ class ChatHandler(BaseHTTPRequestHandler):
                 cycled = True
         if not items:
             items = [item for item in EMERGENCY_SHORTS if item["id"] not in recent_set]
-if not items:
-    items = list(EMERGENCY_SHORTS)
-    seen_ids = []
-    cycled = bool(items)
+            if not items:
+                items = list(EMERGENCY_SHORTS)
+                seen_ids = []
+                cycled = bool(items)
             emergency_hit = bool(items)
         next_cursor = f"catalog:{next_offset}"
         with SHORTS_FEED_LOCK:

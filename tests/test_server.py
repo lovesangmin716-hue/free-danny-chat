@@ -342,7 +342,10 @@ class StaticAppStructureTestCase(unittest.TestCase):
         bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
         server_script = SERVER_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("?autoplay=0&mute=1&playsinline=1", shorts_script)
+        self.assertIn('autoplay: "0"', shorts_script)
+        self.assertIn('mute: "1"', shorts_script)
+        self.assertIn('playsinline: "1"', shorts_script)
+        self.assertIn("youtube-nocookie.com/embed", shorts_script)
         self.assertIn('payload?.event !== "onReady"', shorts_script)
         self.assertIn("if (distance > 1)", shorts_script)
         self.assertIn('window.addEventListener("message", handleShortPlayerMessage)', bootstrap_script)
@@ -2031,14 +2034,14 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertTrue(all(event["type"] == "room_created" for event, _ in group_outcome.events))
 
         with mock.patch.object(
-self.store.repository,
-"list_messages",
-wraps=self.store.repository.list_messages,
-) as list_messages, mock.patch.object(
-    self.store,
-    "get_messages",
-    side_effect=AssertionError("new messages must not be reloaded_from storage"),
-):
+            self.store.repository,
+            "list_messages",
+            wraps=self.store.repository.list_messages,
+        ) as list_messages, mock.patch.object(
+            self.store,
+            "get_messages",
+            side_effect=AssertionError("new messages must not be reloaded from storage"),
+        ):
             message_outcome = services.create_message(
                 self.alice,
                 {
@@ -2048,7 +2051,7 @@ wraps=self.store.repository.list_messages,
                 },
                 lambda _value, _username: None,
             )
-self.assertEqual(list_messages.call_count, 0)
+        self.assertEqual(list_messages.call_count, 0)
         self.assertEqual(
             {reader["username"] for reader in message_outcome.data["unread_by"]},
             {"bob", "eve"},
@@ -2063,14 +2066,14 @@ self.assertEqual(list_messages.call_count, 0)
         self.assertEqual(presence_outcome.events[0][0]["type"], "presence_updated")
         self.assertEqual(presence_outcome.events[0][0]["presence"]["emoji"], "🧑‍💻")
 
-    def test_message_page_uses_one_repository_read_for_items_and_read_state(self) -> None:
+    def test_message_page_uses_one_repository_page_read(self) -> None:
         for index in range(5):
             self.store.add_message(self.room_id, "alice", f"message {index}")
 
-        list_messages = self.store.repository.list_messages
+        list_messages = self.store.repository.list_messages_with_sequences
         with mock.patch.object(
             self.store.repository,
-            "list_messages",
+            "list_messages_with_sequences",
             wraps=list_messages,
         ) as list_messages_spy:
             page = self.store.get_messages_page(self.room_id, "alice", limit=2)
@@ -2726,81 +2729,80 @@ self.assertEqual(list_messages.call_count, 0)
         self.assertEqual(older["next_cursor"], "")
         self.assertEqual(self.store.state["messages"].get(self.room_id, []), [])
 
-def test_message_pages_compute_read_state_without_loading_full_history(self) -> None:
-    for index in range(80):
-        self.store.add_message(self.room_id, "alice", f"message-{index}")
-    self.store.mark_room_read(self.room_id, "bob")
-    for index in range(80, 120):
-        self.store.add_message(self.room_id, "alice", f"message-{index}")
+    def test_message_pages_compute_read_state_without_loading_full_history(self) -> None:
+        for index in range(80):
+            self.store.add_message(self.room_id, "alice", f"message-{index}")
+        self.store.mark_room_read(self.room_id, "bob")
+        for index in range(80, 120):
+            self.store.add_message(self.room_id, "alice", f"message-{index}")
 
-    with (
-        mock.patch.object(
-            self.store.repository,
-            "list_messages_with_sequences",
-            wraps=self.store.repository.list_messages_with_sequences,
-        ) as list_message_pages,
-        mock.patch.object(
-            self.store.repository,
-            "message_sequences",
-            wraps=self.store.repository.message_sequences,
-        ) as message_sequences,
-    ):
-        latest = self.store.get_messages_page(self.room_id, "alice", limit=30)
-        assert latest is not None
-        older = self.store.get_messages_page(
+        with (
+            mock.patch.object(
+                self.store.repository,
+                "list_messages_with_sequences",
+                wraps=self.store.repository.list_messages_with_sequences,
+            ) as list_message_pages,
+            mock.patch.object(
+                self.store.repository,
+                "message_sequences",
+                wraps=self.store.repository.message_sequences,
+            ) as message_sequences,
+        ):
+            latest = self.store.get_messages_page(self.room_id, "alice", limit=30)
+            assert latest is not None
+            older = self.store.get_messages_page(
+                self.room_id,
+                "alice",
+                limit=30,
+                before=latest["next_cursor"],
+            )
+
+        self.assertIsNotNone(older)
+        assert older is not None
+        by_text = {message["text"]: message for message in older["items"]}
+        self.assertTrue(by_text["message-79"]["read"])
+        self.assertFalse(by_text["message-80"]["read"])
+        self.assertNotIn("_sequence", by_text["message-79"])
+        self.assertEqual(list_message_pages.call_count, 2)
+        self.assertTrue(all(call.kwargs["limit"] == 31 for call in list_message_pages.call_args_list))
+        self.assertEqual(message_sequences.call_count, 2)
+
+    def test_message_search_finds_room_people_content_and_returns_target_window(self) -> None:
+        self.store.update_profile("bob", "Robert", "😀", self.bob["friend_code"], None)
+        messages = []
+        for index in range(40):
+            result = self.store.add_message(
+                self.room_id,
+                "alice" if index % 2 == 0 else "bob",
+                "needle in history" if index == 7 else f"ordinary-{index}",
+            )
+            self.assertIsNotNone(result)
+            assert result is not None
+            messages.append(result[0])
+
+        content_results = self.store.search_messages("alice", "needle", limit=10)
+        self.assertIsNotNone(content_results)
+        assert content_results is not None
+        content_item = next(item for item in content_results["items"] if item["kind"] == "message")
+        self.assertEqual(content_item["room"]["id"], self.room_id)
+        self.assertEqual(content_item["message"]["id"], messages[7]["id"])
+
+        person_results = self.store.search_messages("alice", "Robert", limit=10)
+        self.assertIsNotNone(person_results)
+        assert person_results is not None
+        self.assertTrue(any(item["kind"] == "room" and item["room"]["id"] == self.room_id for item in person_results["items"]))
+        self.assertEqual(self.store.search_messages("eve", "needle", limit=10), {"items": []})
+
+        around = self.store.get_messages_page(
             self.room_id,
             "alice",
-            limit=30,
-            before=latest["next_cursor"],
+            limit=10,
+            around=messages[7]["id"],
         )
-
-    self.assertIsNotNone(older)
-    assert older is not None
-    by_text = {message["text"]: message for message in older["items"]}
-    self.assertTrue(by_text["message-79"]["read"])
-    self.assertFalse(by_text["message-80"]["read"])
-    self.assertNotIn("_sequence", by_text["message-79"])
-    self.assertEqual(list_message_pages.call_count, 2)
-    self.assertTrue(all(call.kwargs["limit"] == 31 for call in list_message_pages.call_args_list))
-    self.assertEqual(message_sequences.call_count, 2)
-
-
-def test_message_search_finds_room_people_content_and_returns_target_window(self) -> None:
-    self.store.update_profile("bob", "Robert", "😀", self.bob["friend_code"], None)
-    messages = []
-    for index in range(40):
-        result = self.store.add_message(
-            self.room_id,
-            "alice" if index % 2 == 0 else "bob",
-            "needle in history" if index == 7 else f"ordinary-{index}",
-        )
-        self.assertIsNotNone(result)
-        assert result is not None
-        messages.append(result[0])
-
-    content_results = self.store.search_messages("alice", "needle", limit=10)
-    self.assertIsNotNone(content_results)
-    assert content_results is not None
-    content_item = next(item for item in content_results["items"] if item["kind"] == "message")
-    self.assertEqual(content_item["room"]["id"], self.room_id)
-    self.assertEqual(content_item["message"]["id"], messages[7]["id"])
-
-    person_results = self.store.search_messages("alice", "Robert", limit=10)
-    self.assertIsNotNone(person_results)
-    assert person_results is not None
-    self.assertTrue(any(item["kind"] == "room" and item["room"]["id"] == self.room_id for item in person_results["items"]))
-    self.assertEqual(self.store.search_messages("eve", "needle", limit=10), {"items": []})
-
-    around = self.store.get_messages_page(
-        self.room_id,
-        "alice",
-        limit=10,
-        around=messages[7]["id"],
-    )
-    self.assertIsNotNone(around)
-    assert around is not None
-    self.assertIn(messages[7]["id"], {message["id"] for message in around["items"]})
-    self.assertEqual(around["around"], messages[7]["id"])
+        self.assertIsNotNone(around)
+        assert around is not None
+        self.assertIn(messages[7]["id"], {message["id"] for message in around["items"]})
+        self.assertEqual(around["around"], messages[7]["id"])
 
     def test_shorts_history_is_bounded_and_persisted(self) -> None:
         seen_ids = [f"video-{index}" for index in range(600)]
