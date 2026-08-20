@@ -190,6 +190,10 @@ async function startApp() {
   try {
     registerRealtimeHandlers();
     await loadMessenger();
+    if (!state.statusPromptShown) {
+      state.statusPromptShown = true;
+      openStatusEmojiPicker(null);
+    }
     await syncLiveState();
     connectEvents();
     startLiveSync();

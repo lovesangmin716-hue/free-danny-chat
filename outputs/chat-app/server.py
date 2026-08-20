@@ -3036,9 +3036,8 @@ class StateStore:
                 **message,
                 "read": mine and not unread_by,
                 "read_by": read_by,
+                "unread_by": unread_by,
             }
-            if mine:
-                response_message["unread_by"] = unread_by
             response_messages.append(response_message)
         return response_messages
 

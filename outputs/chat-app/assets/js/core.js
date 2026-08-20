@@ -82,6 +82,7 @@ selectedProfileColor: "#000000",
 selectedProfilePalette: "default",
   customPalette: [],
   selectedStatusEmoji: "",
+  statusPromptShown: false,
   statusPickerTouched: false,
   statusPickerTimer: null,
   statusPickerOpener: null,
@@ -342,9 +343,8 @@ function savedStatusEmoji() {
 function renderStatusEmojiControl() {
   const emoji = savedStatusEmoji();
   openStatusEmojiButton.textContent = emoji || "🙂";
-  openStatusEmojiButton.setAttribute("aria-label", emoji
-    ? `현재 상태 ${emoji}. 상태 이모티콘 변경`
-    : "상태 이모티콘 변경");
+  openStatusEmojiButton.disabled = true;
+  openStatusEmojiButton.setAttribute("aria-label", emoji ? `현재 상태 ${emoji}` : "선택한 상태 없음");
 }
 
 function openStatusEmojiPicker(opener = openStatusEmojiButton) {
@@ -566,6 +566,8 @@ function showAuth(mode = "login") {
   state.roomImageProcessing = false;
   state.profileImagePreparing = false;
   state.profileImageUrl = "";
+  state.statusPromptShown = false;
+  closeStatusEmojiPicker({ restoreFocus: false });
   setAuthRequestBusy(false);
   revokeProfileImagePreview();
   resetProfileImageCrop();

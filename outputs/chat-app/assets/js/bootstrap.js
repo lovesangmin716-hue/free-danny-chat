@@ -200,7 +200,6 @@ friendCodeInput.addEventListener("keydown", (event) => {
   }
 });
 openProfileButton.addEventListener("click", () => void openProfileEditor());
-openStatusEmojiButton.addEventListener("click", () => openStatusEmojiPicker(openStatusEmojiButton));
 closeStatusEmojiButton.addEventListener("click", () => closeStatusEmojiPicker());
 skipStatusEmojiButton.addEventListener("click", () => closeStatusEmojiPicker());
 statusEmojiSheet.addEventListener("click", (event) => {

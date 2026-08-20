@@ -82,17 +82,67 @@ function applyMessageReaderToCurrentMessages(username, transactionName = "messag
   for (const [messageId, message] of changedMessages) replaceChatMessageNode(messageId, message);
 }
 
+function nextOwnMessageIndex(messageIndex) {
+  const username = state.messenger.user?.username;
+  for (let index = messageIndex + 1; index < state.messages.length; index += 1) {
+    if (state.messages[index].username === username) return index;
+  }
+  return -1;
+}
+
+function previousOwnMessageIndex(messageIndex) {
+  const username = state.messenger.user?.username;
+  for (let index = messageIndex - 1; index >= 0; index -= 1) {
+    if (state.messages[index].username === username) return index;
+  }
+  return -1;
+}
+
+function shouldShowMessageReadReceipt(message, messageIndex) {
+  if (message.username !== state.messenger.user?.username) return false;
+  if (message.pending || message.failed) return true;
+  const nextIndex = nextOwnMessageIndex(messageIndex);
+  if (nextIndex < 0) return true;
+  const nextReaders = new Set((state.messages[nextIndex].read_by || []).map((reader) => reader.username));
+  return (message.read_by || []).some((reader) => !nextReaders.has(reader.username));
+}
+
+function messageReadReceiptLabel(message, room = currentRoom()) {
+  if (message.pending) return "보내는 중";
+  if (message.failed) return "전송 실패";
+  const readerCount = Array.isArray(message.read_by) ? message.read_by.length : 0;
+  return room?.kind === "group" ? `${readerCount}명 읽음` : (readerCount ? "읽음" : "안 읽음");
+}
+
+function syncMessageMetaEmpty(row) {
+  const meta = row.querySelector(".message-meta");
+  if (!meta) return;
+  meta.classList.toggle("message-meta-empty", ![...meta.children].some(
+    (child) => !child.classList.contains("hidden"),
+  ));
+}
+
 function setMessageGroupMetaVisibility(row, message, nextMessage) {
   const showGroupMeta = shouldShowMessageTime(message, nextMessage);
   row.querySelector("time")?.classList.toggle("hidden", !showGroupMeta);
   row.querySelector(".message-sender")?.classList.toggle("hidden", !showGroupMeta);
-  row.querySelector(".message-meta")?.classList.toggle(
-    "message-meta-empty",
-    !showGroupMeta && message.username !== state.messenger.user?.username,
-  );
+  syncMessageMetaEmpty(row);
 }
 
-function createChatMessageRow(message, nextMessage = null) {
+function syncMessageReadReceiptVisibility(messageIndex) {
+  if (!Number.isInteger(messageIndex) || messageIndex < 0 || messageIndex >= state.messages.length) return;
+  const message = state.messages[messageIndex];
+  const row = state.messageNodes.get(message.id);
+  const receipt = row?.querySelector(".message-read, .message-unread");
+  if (!row || !receipt) return;
+  receipt.textContent = messageReadReceiptLabel(message);
+  const hasReaders = Array.isArray(message.read_by) && message.read_by.length > 0;
+  receipt.className = message.failed || !hasReaders ? "message-unread" : "message-read";
+  receipt.classList.toggle("hidden", !shouldShowMessageReadReceipt(message, messageIndex));
+  syncMessageMetaEmpty(row);
+}
+
+function createChatMessageRow(message, nextMessage = null, messageIndex = -1) {
   const mine = message.username === state.messenger.user?.username;
   const row = document.createElement("article");
   row.className = `message-row ${mine ? "mine" : "theirs"}${message.pending ? " pending" : ""}${message.failed ? " failed" : ""}`;
@@ -129,22 +179,18 @@ function createChatMessageRow(message, nextMessage = null) {
   meta.className = "message-meta";
   if (mine) {
     const read = document.createElement("span");
-    read.className = message.failed ? "message-unread" : (message.read ? "message-read" : "message-unread");
-    if (message.pending) {
-      read.textContent = "보내는 중";
-    } else if (message.failed) {
-      read.textContent = "전송 실패";
-    } else if (room?.kind === "group") {
-      read.textContent = message.read ? "모두 읽음" : "안 읽음";
-    } else {
-      read.textContent = message.read ? "읽음" : "안 읽음";
-    }
+    const hasReaders = Array.isArray(message.read_by) && message.read_by.length > 0;
+    read.className = message.failed || !hasReaders ? "message-unread" : "message-read";
+    read.textContent = messageReadReceiptLabel(message, room);
+    read.classList.toggle("hidden", !shouldShowMessageReadReceipt(message, messageIndex));
     meta.appendChild(read);
   }
-  const sender = document.createElement("strong");
-  sender.className = "message-sender";
-  sender.textContent = messageSenderDisplayName(room, message);
-  meta.appendChild(sender);
+  if (!mine) {
+    const sender = document.createElement("strong");
+    sender.className = "message-sender";
+    sender.textContent = messageSenderDisplayName(room, message);
+    meta.appendChild(sender);
+  }
   const time = document.createElement("time");
   time.textContent = formatTime(message.timestamp);
   meta.appendChild(time);
@@ -167,13 +213,13 @@ function closeMessageReadMenu() {
 }
 
 function openMessageReadMenu(message, row) {
-  const readNames = (message.read_by || [])
+  const unreadNames = (message.unread_by || [])
     .map((reader) => reader.display_name || reader.username)
     .filter(Boolean);
-  messageReadMenuTitle.textContent = `읽은 사람 ${readNames.length}명`;
-  messageReadMenuCopy.textContent = readNames.length
-    ? readNames.join(", ")
-    : "아직 읽은 사람이 없어요.";
+  messageReadMenuTitle.textContent = `안 읽은 사람 ${unreadNames.length}명`;
+  messageReadMenuCopy.textContent = unreadNames.length
+    ? unreadNames.join(", ")
+    : "모두 읽었어요.";
   messageReadMenu.classList.remove("hidden");
   messageReadMenu.setAttribute("aria-hidden", "false");
   const width = messageReadMenu.offsetWidth;
@@ -283,7 +329,7 @@ function renderAllChatMessages({ scrollToBottom = false, preserveScrollHeight = 
     const fragment = document.createDocumentFragment();
     for (let index = 0; index < state.messages.length; index += 1) {
       const message = state.messages[index];
-      const row = createChatMessageRow(message, state.messages[index + 1]);
+      const row = createChatMessageRow(message, state.messages[index + 1], index);
       state.messageNodes.set(message.id, row);
       fragment.appendChild(row);
     }
@@ -308,10 +354,12 @@ function renderAllChatMessages({ scrollToBottom = false, preserveScrollHeight = 
 
 function appendChatMessageNode(message, scrollToBottom = false) {
   chatMessageList.querySelector(".chat-empty")?.remove();
-  const row = createChatMessageRow(message);
+  const messageIndex = state.messages.length - 1;
+  const row = createChatMessageRow(message, null, messageIndex);
   state.messageNodes.set(message.id, row);
   chatMessageList.appendChild(row);
   syncMessageTimeVisibility(state.messages.length - 2);
+  syncMessageReadReceiptVisibility(previousOwnMessageIndex(messageIndex));
   state.renderedMessageRevision = state.messageRevision;
   state.renderedMessageRoomId = state.selectedRoomId;
   if (scrollToBottom) chatMessageList.scrollTop = chatMessageList.scrollHeight;
@@ -327,11 +375,14 @@ function replaceChatMessageNode(messageId, message) {
   const nextRow = createChatMessageRow(
     message,
     Number.isInteger(messageIndex) ? state.messages[messageIndex + 1] : null,
+    messageIndex,
   );
   currentRow.replaceWith(nextRow);
   state.messageNodes.delete(messageId);
   state.messageNodes.set(message.id, nextRow);
   syncMessageTimeVisibility(messageIndex - 1);
+  syncMessageReadReceiptVisibility(messageIndex);
+  syncMessageReadReceiptVisibility(previousOwnMessageIndex(messageIndex));
   state.renderedMessageRevision = state.messageRevision;
 }
 

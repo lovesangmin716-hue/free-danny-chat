@@ -12,17 +12,17 @@
     <script defer src="assets/js/platform/events.js?v=e67ecd100954"></script>
     <script defer src="assets/js/platform/icons.js?v=10894f1a61f3"></script>
     <script defer src="assets/js/platform/image-processing.js?v=c3632b3197bf"></script>
-    <script defer src="assets/js/core.js?v=fd7b68986259"></script>
+    <script defer src="assets/js/core.js?v=3595143d4f15"></script>
     <script defer src="assets/js/profile.js?v=94132f3ffcbb"></script>
     <script defer src="assets/js/messenger.js?v=0a09ef9a97c3"></script>
     <script defer src="assets/js/attachments.js?v=0c018e271851"></script>
     <script defer src="assets/js/room-settings.js?v=d602bb96b2da"></script>
-    <script defer src="assets/js/chat.js?v=0b115352101f"></script>
+    <script defer src="assets/js/chat.js?v=0e168564ac79"></script>
     <script defer src="assets/js/shorts.js?v=0b732c851324"></script>
     <script defer src="assets/js/action-bar.js?v=021a9bcbe046"></script>
-    <script defer src="assets/js/app.js?v=eb8c4ed27a7a"></script>
+    <script defer src="assets/js/app.js?v=66ce48813be2"></script>
     <script defer src="assets/js/auth.js?v=84a7ef3fc787"></script>
-    <script defer src="assets/js/bootstrap.js?v=23579666331e"></script>
+    <script defer src="assets/js/bootstrap.js?v=55559ebb0646"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -561,6 +561,7 @@
       .custom-palette-color.active { outline: 3px solid var(--black); outline-offset: 2px; }
       .palette-picker { border-top: 1px solid var(--black); margin-top: 12px; padding-top: 12px; }
       .header-status-button { align-items: center; display: inline-flex; font-size: 22px; justify-content: center; min-height: 44px; min-width: 44px; padding: 6px; }
+      .header-status-button:disabled { cursor: default; opacity: 1; }
       .status-emoji-picker { align-items: center; display: flex; flex-direction: column; height: min(46vh, 360px); margin: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: min(19vh, 140px) 0; scroll-snap-type: y mandatory; scrollbar-width: none; }
       .status-emoji-picker::-webkit-scrollbar { display: none; }
       .status-emoji-button, .status-emoji-add { align-items: center; background: transparent; border: 0; box-shadow: none; color: var(--black); display: flex; flex: 0 0 152px; font-size: 88px; justify-content: center; min-height: 152px; padding: 0; scroll-snap-align: center; width: 100%; }
@@ -831,7 +832,7 @@
         </div>
         <div class="app-actions">
           <button type="button" id="open-login-button">로그인</button>
-          <button type="button" class="header-status-button" id="open-status-emoji-button" aria-label="상태 이모티콘 변경">🙂</button>
+          <button type="button" class="header-status-button" id="open-status-emoji-button" aria-label="현재 상태">🙂</button>
           <button type="button" class="friend-add-button" id="open-profile-button" data-icon="user" data-icon-only aria-label="프로필">프로필</button>
           <button type="button" class="friend-add-button" id="open-new-chat-button" data-icon="message-plus" data-icon-only aria-label="새 채팅">새 채팅</button>
           <button type="button" class="friend-add-button" id="open-directory-button" data-icon="user-plus" data-icon-only aria-label="친구 추가">친구 추가</button>
@@ -1062,7 +1063,7 @@
       <div class="sheet-backdrop hidden" id="status-emoji-sheet" role="dialog" aria-modal="true" aria-labelledby="status-emoji-title" aria-describedby="status-emoji-description">
         <section class="user-sheet status-emoji-sheet">
           <header class="status-emoji-heading">
-            <h2 id="status-emoji-title">상태 이모티콘 변경</h2>
+            <h2 id="status-emoji-title">상태 이모티콘 선택</h2>
             <p id="status-emoji-description">친구에게 보일 현재 상태를 선택하세요. 지금 상태: <span class="status-emoji-current" id="status-emoji-current">없음</span></p>
           </header>
           <div class="status-emoji-picker" id="status-emoji-picker">

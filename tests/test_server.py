@@ -168,7 +168,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('chatRoom.addEventListener("paste", handlePastedChatAttachment)', bootstrap_script)
         self.assertNotIn('chatMessageInput.addEventListener("paste"', bootstrap_script)
 
-    def test_message_readers_are_shown_only_during_left_swipe(self) -> None:
+    def test_message_non_readers_are_shown_only_during_left_swipe(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
         messenger_script = (server.ASSETS_DIR / "js" / "messenger.js").read_text(encoding="utf-8")
@@ -178,7 +178,8 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("function beginMessageReadSwipe(event)", chat_script)
         self.assertIn("function updateMessageReadSwipe(event)", chat_script)
         self.assertIn("function finishMessageReadSwipe(event)", chat_script)
-        self.assertIn("const readNames = (message.read_by || [])", chat_script)
+        self.assertIn("const unreadNames = (message.unread_by || [])", chat_script)
+        self.assertIn("`안 읽은 사람 ${unreadNames.length}명`", chat_script)
         self.assertIn('applyMessageReaderToCurrentMessages(payload.username, "realtime.room-read")', messenger_script)
         self.assertIn("function applyMessageReaderToCurrentMessages", chat_script)
         self.assertIn('chatMessageList.addEventListener("pointerdown", beginMessageReadSwipe)', bootstrap_script)
@@ -342,8 +343,12 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("nextMessage.username !== message.username", chat_script)
         self.assertIn("nextTimestamp - timestamp > MESSAGE_TIME_CLUSTER_MS", chat_script)
         self.assertIn('sender.textContent = messageSenderDisplayName(room, message)', chat_script)
+        self.assertIn("if (!mine) {", chat_script)
         self.assertIn('row.querySelector(".message-sender")?.classList.toggle', chat_script)
         self.assertIn("syncMessageTimeVisibility(state.messages.length - 2)", chat_script)
+        self.assertIn("function shouldShowMessageReadReceipt(message, messageIndex)", chat_script)
+        self.assertIn("const nextIndex = nextOwnMessageIndex(messageIndex)", chat_script)
+        self.assertIn('`${readerCount}명 읽음`', chat_script)
 
     def test_supabase_requests_use_persistent_connection_pools(self) -> None:
         server_script = SERVER_PATH.read_text(encoding="utf-8")
@@ -389,7 +394,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
             self.assertIn("aria-label=", button.group(0))
         self.assertNotIn('shortShareSend.textContent = ">"', shorts_script)
 
-    def test_status_emoji_picker_is_explicit_and_dismissible(self) -> None:
+    def test_status_emoji_picker_opens_once_at_connection_and_cannot_be_reopened(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
         app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
@@ -397,13 +402,16 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
         start_app = re.search(r"async function startApp\(\) \{(.*?)\n\}", app_script, re.DOTALL)
         self.assertIsNotNone(start_app)
-        self.assertNotIn("openStatusEmojiPicker", start_app.group(1))
+        self.assertIn("if (!state.statusPromptShown)", start_app.group(1))
+        self.assertIn("openStatusEmojiPicker(null)", start_app.group(1))
         self.assertIn('id="open-status-emoji-button"', index_html)
         self.assertIn('aria-labelledby="status-emoji-title"', index_html)
         self.assertIn('aria-describedby="status-emoji-description"', index_html)
         self.assertIn('id="close-status-emoji-button"', index_html)
         self.assertIn('id="skip-status-emoji-button"', index_html)
         self.assertIn("state.selectedStatusEmoji = savedStatusEmoji()", core_script)
+        self.assertIn("openStatusEmojiButton.disabled = true", core_script)
+        self.assertNotIn('openStatusEmojiButton.addEventListener("click"', bootstrap_script)
         self.assertIn("state.statusPickerOpener", core_script)
         self.assertIn('event.key === "Escape"', bootstrap_script)
         self.assertIn('event.key !== "Tab"', bootstrap_script)
@@ -2139,7 +2147,7 @@ class StateStoreTestCase(unittest.TestCase):
             [reader["username"] for reader in received_messages[-1]["read_by"]],
             ["alice"],
         )
-        self.assertNotIn("unread_by", received_messages[-1])
+        self.assertEqual(received_messages[-1]["unread_by"], [])
 
     def test_group_room_requires_friends_and_enforces_membership(self) -> None:
         group, error = self.store.create_group_room(
@@ -2208,7 +2216,10 @@ class StateStoreTestCase(unittest.TestCase):
             [reader["username"] for reader in bob_messages[-1]["read_by"]],
             ["bob"],
         )
-        self.assertNotIn("unread_by", bob_messages[-1])
+        self.assertEqual(
+            [reader["username"] for reader in bob_messages[-1]["unread_by"]],
+            ["eve"],
+        )
 
         self.store.mark_room_read(group["id"], "eve")
         alice_messages = self.store.get_messages(group["id"], "alice") or []
