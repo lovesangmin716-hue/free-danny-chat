@@ -156,23 +156,41 @@ function createChatMessageRow(message, nextMessage = null, messageIndex = -1) {
   const room = currentRoom();
   if (message.attachment?.url) {
     const attachment = message.attachment;
-    const attachmentLink = document.createElement("a");
-    attachmentLink.className = "message-attachment";
-    attachmentLink.href = attachment.url;
-    attachmentLink.target = "_blank";
-    attachmentLink.rel = "noopener";
-    if (attachment.type?.startsWith("image/")) {
-      const image = document.createElement("img");
-      image.className = "message-image";
-      image.src = attachment.url;
-      image.alt = attachment.name || "Attached photo";
-      image.loading = "lazy";
-      attachmentLink.appendChild(image);
+    if (attachment.kind === "voice" && attachment.type?.startsWith("audio/")) {
+      bubble.classList.add("voice-message-bubble");
+      const voice = document.createElement("div");
+      voice.className = "message-voice";
+      const audio = document.createElement("audio");
+      audio.src = attachment.url;
+      audio.controls = true;
+      audio.preload = "metadata";
+      audio.setAttribute("controlslist", "nodownload noplaybackrate");
+      audio.disableRemotePlayback = true;
+      audio.setAttribute("aria-label", "음성 메시지 재생");
+      const duration = document.createElement("span");
+      duration.className = "message-voice-duration";
+      duration.textContent = formatVoiceDuration(attachment.duration_ms);
+      voice.append(audio, duration);
+      bubble.appendChild(voice);
     } else {
-      attachmentLink.classList.add("message-file");
-      attachmentLink.textContent = `PDF · ${attachment.name || "attachment.pdf"}`;
+      const attachmentLink = document.createElement("a");
+      attachmentLink.className = "message-attachment";
+      attachmentLink.href = attachment.url;
+      attachmentLink.target = "_blank";
+      attachmentLink.rel = "noopener";
+      if (attachment.type?.startsWith("image/")) {
+        const image = document.createElement("img");
+        image.className = "message-image";
+        image.src = attachment.url;
+        image.alt = attachment.name || "Attached photo";
+        image.loading = "lazy";
+        attachmentLink.appendChild(image);
+      } else {
+        attachmentLink.classList.add("message-file");
+        attachmentLink.textContent = `PDF · ${attachment.name || "attachment.pdf"}`;
+      }
+      bubble.appendChild(attachmentLink);
     }
-    bubble.appendChild(attachmentLink);
   }
   if (message.text) {
     const messageText = document.createElement("span");
@@ -236,6 +254,7 @@ function openMessageReadMenu(message, row) {
 
 function beginMessageReadSwipe(event) {
   if (event.button !== undefined && event.button !== 0) return;
+  if (event.target.closest?.("audio, button, a, input")) return;
   const row = event.target.closest?.(".message-row");
   if (!row || !currentRoom()) return;
   const message = state.messages[state.messageIndexes.get(row.dataset.messageId)];
@@ -693,6 +712,10 @@ async function postChatMessageWithRetry(payload) {
 
 function sendChatMessage(event) {
   event.preventDefault();
+  if (state.voiceRecording || state.voiceRecordingStarting) {
+    setAppStatus("녹음을 먼저 중지한 뒤 보내기 버튼을 눌러 주세요.");
+    return;
+  }
   if (state.chatAttachmentPreparing) {
     setAppStatus("이미지 크기를 줄이는 중이에요. 잠시만 기다려 주세요.");
     return;
@@ -706,7 +729,9 @@ function sendChatMessage(event) {
 
   const clientMessageId = createClientMessageId();
   const pendingId = `pending-${clientMessageId}`;
-  const previewUrl = attachmentFile && attachmentType.startsWith("image/") ? URL.createObjectURL(attachmentFile) : "";
+  const previewUrl = attachmentFile && (attachmentType.startsWith("image/") || attachmentType.startsWith("audio/"))
+    ? URL.createObjectURL(attachmentFile)
+    : "";
   const pendingMessage = {
     id: pendingId,
     username: state.messenger.user?.username,
@@ -714,6 +739,8 @@ function sendChatMessage(event) {
     attachment: attachmentFile ? {
       name: attachmentFile.name,
       type: attachmentType,
+      kind: state.chatAttachmentKind,
+      duration_ms: state.chatAttachmentDurationMs,
       url: previewUrl,
     } : null,
     timestamp: new Date().toISOString(),

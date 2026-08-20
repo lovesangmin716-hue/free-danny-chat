@@ -49,12 +49,17 @@ const initialState = {
   chatDrafts: {},
   chatAttachment: null,
   chatAttachmentType: "",
+  chatAttachmentKind: "",
+  chatAttachmentDurationMs: 0,
+  chatAttachmentPreviewUrl: "",
   chatAttachmentPreparing: false,
   chatAttachmentUpload: null,
   chatAttachmentSelectionId: 0,
   chatAttachmentTrayOpen: false,
   chatAttachmentDrag: { active: false, kind: "" },
   chatAttachmentGuideTimer: null,
+  voiceRecording: false,
+  voiceRecordingStarting: false,
   roomSettingsBusy: false,
   roomImageProcessing: false,
   roomImageSelectionId: 0,
@@ -629,7 +634,8 @@ function showAuth(mode = "login") {
   state.renderedMessageRoomId = "";
   state.messagesNextCursor = "";
   state.messagesLoadingOlder = false;
-  state.chatAttachmentUpload = null;
+  if (typeof clearChatAttachment === "function") clearChatAttachment();
+  else state.chatAttachmentUpload = null;
   state.profileImageSelectionId += 1;
   state.roomImageSelectionId += 1;
   ColorlessImageProcessing.cancel("chat-attachment");

@@ -68,6 +68,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
                 "assets/js/profile.js",
                 "assets/js/messenger.js",
                 "assets/js/attachments.js",
+                "assets/js/voice.js",
                 "assets/js/room-settings.js",
                 "assets/js/chat.js",
                 "assets/js/work-mode.js",
@@ -183,6 +184,23 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('"image/*,application/pdf"', attachment_script)
         self.assertIn('chatRoom.addEventListener("paste", handlePastedChatAttachment)', bootstrap_script)
         self.assertNotIn('chatMessageInput.addEventListener("paste"', bootstrap_script)
+
+    def test_voice_messages_are_recorded_in_app_and_rendered_without_download_links(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        voice_script = (server.ASSETS_DIR / "js" / "voice.js").read_text(encoding="utf-8")
+        attachment_script = (server.ASSETS_DIR / "js" / "attachments.js").read_text(encoding="utf-8")
+        chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
+        permissions_policy = dict(server.COMMON_SECURITY_HEADERS)["Permissions-Policy"]
+
+        self.assertIn("microphone=(self)", permissions_policy)
+        self.assertIn('accept="image/*,application/pdf"', index_html)
+        self.assertNotIn('accept="audio/', index_html)
+        self.assertIn("navigator.mediaDevices.getUserMedia", voice_script)
+        self.assertIn("new MediaRecorder", voice_script)
+        self.assertIn('{ source: "voice-recorder", durationMs }', voice_script)
+        self.assertIn('source: options.source || "file-picker"', attachment_script)
+        self.assertIn('attachment.kind === "voice"', chat_script)
+        self.assertIn('audio.setAttribute("controlslist", "nodownload noplaybackrate")', chat_script)
 
     def test_message_non_readers_are_shown_only_during_left_swipe(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -1669,6 +1687,66 @@ class AttachmentTransferIntegrationTestCase(unittest.TestCase):
             {"Content-Type": "application/json"},
         )
         self.assertEqual(status, 409)
+
+    def test_voice_upload_requires_in_app_recorder_metadata(self) -> None:
+        payload = b"\x1a\x45\xdf\xa3" + (b"recorded-opus" * 128)
+        base_grant = {
+            "name": "voice.webm",
+            "type": "audio/webm",
+            "size": len(payload),
+            "durationMs": 1400,
+        }
+        status, _, body = self.request(
+            "POST",
+            "/uploads/grant",
+            json.dumps(base_grant).encode("utf-8"),
+            {"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 400, body)
+
+        status, _, body = self.request(
+            "POST",
+            "/uploads/grant",
+            json.dumps({**base_grant, "source": "voice-recorder"}).encode("utf-8"),
+            {"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 201, body)
+        upload = json.loads(body.decode("utf-8"))["upload"]
+        self.assertTrue(upload["id"].endswith(".webm"))
+
+        status, _, body = self.request("PUT", upload["url"], payload, upload["headers"])
+        self.assertEqual(status, 200, body)
+        status, _, body = self.request(
+            "POST",
+            "/uploads/complete",
+            json.dumps({"id": upload["id"]}).encode("utf-8"),
+            {"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 201, body)
+        attachment = json.loads(body.decode("utf-8"))["attachment"]
+        self.assertEqual(attachment["kind"], "voice")
+        self.assertEqual(attachment["duration_ms"], 1400)
+
+        status, _, body = self.request(
+            "POST",
+            "/messages",
+            json.dumps({
+                "roomId": self.room["id"],
+                "text": "",
+                "attachment": attachment,
+                "clientMessageId": f"voice_{str(time.time_ns())[-18:]}",
+            }).encode("utf-8"),
+            {"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 201, body)
+        saved_attachment = json.loads(body.decode("utf-8"))["attachment"]
+        self.assertEqual(saved_attachment["kind"], "voice")
+        self.assertEqual(saved_attachment["duration_ms"], 1400)
+
+        status, headers, body = self.request("GET", attachment["url"])
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("Content-Type"), "audio/webm")
+        self.assertEqual(body, payload)
 
 
 class SupabaseRepositoryContractTestCase(unittest.TestCase):

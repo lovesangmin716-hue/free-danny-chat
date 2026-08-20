@@ -43,6 +43,7 @@ function workModeMessageText(message) {
   if (message?.text) return message.text;
   const attachment = message?.attachment;
   if (attachment?.type?.startsWith("image/")) return "사진을 보냈습니다.";
+  if (attachment?.kind === "voice") return `음성 메시지 · ${formatVoiceDuration(attachment.duration_ms)}`;
   if (attachment?.type === "application/pdf") return `PDF · ${attachment.name || "파일"}`;
   return attachment?.name || "새 메시지";
 }

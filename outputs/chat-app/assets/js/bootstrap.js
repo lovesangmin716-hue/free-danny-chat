@@ -121,6 +121,7 @@ chatAttachmentGuide.addEventListener("click", (event) => {
   setAppStatus("준비 중인 기능이에요.");
 });
 chatAttachmentRemove.addEventListener("click", clearChatAttachment);
+chatVoiceButton.addEventListener("click", toggleVoiceRecording);
 chatAttachmentInput.addEventListener("change", () => {
   const file = chatAttachmentInput.files?.[0];
   if (!file) return;

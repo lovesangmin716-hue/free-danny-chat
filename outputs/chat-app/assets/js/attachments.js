@@ -64,8 +64,19 @@ function renderChatAttachmentTray() {
 
 function renderChatAttachmentPreview() {
   const file = state.chatAttachment;
+  const isVoice = Boolean(file && state.chatAttachmentKind === "voice");
   chatAttachmentPreview.classList.toggle("hidden", !file);
-  chatAttachmentName.textContent = file ? `${state.chatAttachmentType === "application/pdf" ? "PDF" : "Photo"}: ${file.name}` : "";
+  chatAttachmentName.textContent = file
+    ? (isVoice ? `음성 메시지 · ${formatVoiceDuration(state.chatAttachmentDurationMs)}` : `${state.chatAttachmentType === "application/pdf" ? "PDF" : "Photo"}: ${file.name}`)
+    : "";
+  chatVoicePreview.classList.toggle("hidden", !isVoice);
+  if (isVoice && state.chatAttachmentPreviewUrl) {
+    if (chatVoicePreview.src !== state.chatAttachmentPreviewUrl) chatVoicePreview.src = state.chatAttachmentPreviewUrl;
+  } else {
+    chatVoicePreview.pause();
+    chatVoicePreview.removeAttribute("src");
+    chatVoicePreview.load();
+  }
 }
 
 function discardUploadedAttachment(attachment) {
@@ -88,11 +99,16 @@ function discardChatAttachmentUpload(job) {
 
 function clearChatAttachment(options = {}) {
   const preserveUpload = options?.preserveUpload === true;
+  if (typeof cancelVoiceRecording === "function") cancelVoiceRecording();
   if (!preserveUpload) discardChatAttachmentUpload(state.chatAttachmentUpload);
   ColorlessImageProcessing.cancel("chat-attachment");
   state.chatAttachmentSelectionId += 1;
   state.chatAttachment = null;
   state.chatAttachmentType = "";
+  state.chatAttachmentKind = "";
+  state.chatAttachmentDurationMs = 0;
+  if (state.chatAttachmentPreviewUrl) URL.revokeObjectURL(state.chatAttachmentPreviewUrl);
+  state.chatAttachmentPreviewUrl = "";
   state.chatAttachmentPreparing = false;
   state.chatAttachmentUpload = null;
   chatAttachmentInput.value = "";
@@ -324,6 +340,8 @@ async function selectChatAttachment(file) {
 
   state.chatAttachment = preparedFile;
   state.chatAttachmentType = attachmentContentType(preparedFile);
+  state.chatAttachmentKind = "file";
+  state.chatAttachmentDurationMs = 0;
   state.chatAttachmentUpload = startChatAttachmentUpload(
     selectionId,
     preparedFile,
@@ -364,10 +382,16 @@ function handlePastedChatAttachment(event) {
   return true;
 }
 
-async function uploadChatAttachment(file, contentType) {
+async function uploadChatAttachment(file, contentType, options = {}) {
   const grantResult = await requestAction("attachments.grant", "/uploads/grant", {
     method: "POST",
-    body: JSON.stringify({ name: file.name, type: contentType, size: file.size }),
+    body: JSON.stringify({
+      name: file.name,
+      type: contentType,
+      size: file.size,
+      source: options.source || "file-picker",
+      durationMs: options.durationMs || 0,
+    }),
   });
   const upload = grantResult.upload;
   try {
@@ -390,14 +414,14 @@ async function uploadChatAttachment(file, contentType) {
   }
 }
 
-function startChatAttachmentUpload(selectionId, file, contentType) {
+function startChatAttachmentUpload(selectionId, file, contentType, options = {}) {
   const job = {
     selectionId,
     discardRequested: false,
     discarded: false,
     promise: null,
   };
-  job.promise = uploadChatAttachment(file, contentType)
+  job.promise = uploadChatAttachment(file, contentType, options)
     .then((attachment) => ({ attachment, error: null }))
     .catch((error) => ({ attachment: null, error }));
   return job;

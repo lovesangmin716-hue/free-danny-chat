@@ -120,6 +120,7 @@ MAX_SYNC_EVENTS = 200
 MIN_GROUP_PARTICIPANTS = 3
 MAX_GROUP_PARTICIPANTS = 50
 MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
+MAX_VOICE_MESSAGE_DURATION_MS = 5 * 60 * 1000
 MAX_PROFILE_IMAGE_BYTES = 3 * 1024 * 1024
 MAX_PROFILE_THUMBNAIL_BYTES = 256 * 1024
 MAX_JSON_REQUEST_BYTES = 1024 * 1024
@@ -167,7 +168,7 @@ COMMON_SECURITY_HEADERS = (
     ("Referrer-Policy", "strict-origin-when-cross-origin"),
     (
         "Permissions-Policy",
-        'accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=(), '
+        'accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(self), payment=(), usb=(), '
         'autoplay=(self "https://www.youtube-nocookie.com"), fullscreen=(self "https://www.youtube-nocookie.com")',
     ),
     ("Cross-Origin-Opener-Policy", "same-origin-allow-popups"),
@@ -197,7 +198,11 @@ ATTACHMENT_TYPES = {
     "image/heif": ".heif",
     "image/avif": ".avif",
     "application/pdf": ".pdf",
+    "audio/webm": ".webm",
+    "audio/mp4": ".m4a",
+    "audio/ogg": ".ogg",
 }
+VOICE_ATTACHMENT_TYPES = {"audio/webm", "audio/mp4", "audio/ogg"}
 ATTACHMENT_IMAGE_PROBE_BYTES = 512 * 1024
 ATTACHMENT_IMAGE_PIXELS_MAX = 32 * 1000 * 1000
 ATTACHMENT_IMAGE_DIMENSION_MAX = 16384
@@ -213,7 +218,7 @@ PROFILE_ART_THUMBNAIL_PATH_PATTERN = re.compile(r"/profile-art/(user_[0-9a-f]{8}
 MESSAGE_ID_PATTERN = re.compile(r"msg_[0-9a-f]{8}")
 USER_ID_PATTERN = re.compile(r"user_[0-9a-f]{8}")
 CLIENT_MESSAGE_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{16,64}")
-UPLOAD_NAME_PATTERN = re.compile(r"upload_[0-9a-f]{32}\.(?:jpg|png|gif|webp|heic|heif|avif|pdf)")
+UPLOAD_NAME_PATTERN = re.compile(r"upload_[0-9a-f]{32}\.(?:jpg|png|gif|webp|heic|heif|avif|pdf|webm|m4a|ogg)")
 PROFILE_PALETTE = ("#ffffff", "#000000", "#777777", "#d9d9d9", "#e53935", "#fb8c00", "#fdd835", "#43a047", "#1e88e5", "#8e24aa", "#6d4c41", "#ec407a")
 SESSION_COOKIE_NAME = "codex_talk_session"
 OAUTH_STATE_COOKIE_NAME = "colorless_oauth_state"
@@ -1433,6 +1438,8 @@ class UploadGrantStore:
                 "name": filename,
                 "type": mimetypes.guess_type(filename)[0] or "application/octet-stream",
                 "size": 0,
+                "kind": "file",
+                "duration_ms": 0,
             }
 
     def create_pending(
@@ -1443,6 +1450,8 @@ class UploadGrantStore:
         name: str,
         content_type: str,
         size: int,
+        kind: str = "file",
+        duration_ms: int = 0,
     ) -> str | None:
         now = time.monotonic()
         token = secrets.token_urlsafe(32)
@@ -1463,6 +1472,8 @@ class UploadGrantStore:
                 "name": name,
                 "type": content_type,
                 "size": size,
+                "kind": kind,
+                "duration_ms": duration_ms,
             }
         return token
 
@@ -5179,9 +5190,9 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
             return
 
-        content_type = mimetypes.guess_type(filename)[0] or next(
+        content_type = next(
             (mime_type for mime_type, extension in ATTACHMENT_TYPES.items() if extension == Path(filename).suffix.lower()),
-            "application/octet-stream",
+            mimetypes.guess_type(filename)[0] or "application/octet-stream",
         )
 
         if SUPABASE_ENABLED:
@@ -6276,16 +6287,34 @@ class ChatHandler(BaseHTTPRequestHandler):
             return
         content_type = str(payload.get("type", "")).split(";", 1)[0].strip().lower()
         extension = ATTACHMENT_TYPES.get(content_type)
+        source = str(payload.get("source", "file-picker")).strip().lower()
         try:
             size = int(payload.get("size", 0))
         except (TypeError, ValueError):
             size = 0
+        try:
+            duration_ms = int(payload.get("durationMs", 0))
+        except (TypeError, ValueError):
+            duration_ms = 0
+        is_voice_message = content_type in VOICE_ATTACHMENT_TYPES
         original_name = Path(str(payload.get("name", "file"))).name.strip()[:120]
         if extension is None or not 1 <= size <= MAX_ATTACHMENT_BYTES:
             self.send_json(
-                {"error": "Unsupported or oversized file. Images and PDFs can be up to 8MB."},
+                {"error": "Unsupported or oversized attachment. Attachments can be up to 8MB."},
                 HTTPStatus.BAD_REQUEST,
             )
+            return
+        if is_voice_message and (
+            source != "voice-recorder"
+            or not 300 <= duration_ms <= MAX_VOICE_MESSAGE_DURATION_MS
+        ):
+            self.send_json(
+                {"error": "Voice messages must be recorded inside the app and can be up to 5 minutes."},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+        if not is_voice_message and source == "voice-recorder":
+            self.send_json({"error": "The recorded media type is not supported."}, HTTPStatus.BAD_REQUEST)
             return
         if not original_name:
             original_name = f"file{extension}"
@@ -6300,6 +6329,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             name=original_name,
             content_type=content_type,
             size=size,
+            kind="voice" if is_voice_message else "file",
+            duration_ms=duration_ms if is_voice_message else 0,
         )
         if upload_token is None:
             self.send_json(
@@ -6442,6 +6473,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             "name": completed["name"],
             "type": completed["type"],
             "size": completed["size"],
+            "kind": completed.get("kind", "file"),
+            "duration_ms": int(completed.get("duration_ms", 0)),
         }
         self.send_json({"attachment": attachment}, HTTPStatus.CREATED)
 
@@ -6482,6 +6515,9 @@ class ChatHandler(BaseHTTPRequestHandler):
             "image/heif": content[4:8] == b"ftyp" and content[8:12] in {b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"},
             "image/avif": content[4:8] == b"ftyp" and content[8:12] in {b"avif", b"avis"},
             "application/pdf": content.startswith(b"%PDF-"),
+            "audio/webm": content.startswith(b"\x1aE\xdf\xa3"),
+            "audio/mp4": content[4:8] == b"ftyp",
+            "audio/ogg": content.startswith(b"OggS"),
         }
         signature_matches = signatures.get(content_type, False)
         if not signature_matches or not content_type.startswith("image/"):
@@ -6520,11 +6556,17 @@ class ChatHandler(BaseHTTPRequestHandler):
             if not upload_path.is_file():
                 return None
             attachment_size = upload_path.stat().st_size
+        try:
+            duration_ms = int((grant or value).get("duration_ms", 0))
+        except (TypeError, ValueError):
+            duration_ms = 0
         return {
             "url": f"/uploads/{filename}",
             "name": name,
             "type": content_type,
             "size": attachment_size,
+            "kind": "voice" if content_type in VOICE_ATTACHMENT_TYPES else "file",
+            "duration_ms": min(MAX_VOICE_MESSAGE_DURATION_MS, max(0, duration_ms)),
         }
 
     def mark_room_read(self, user: dict) -> None:
