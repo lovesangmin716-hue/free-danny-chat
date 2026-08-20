@@ -12,17 +12,17 @@
     <script defer src="assets/js/platform/events.js?v=e67ecd100954"></script>
     <script defer src="assets/js/platform/icons.js?v=10894f1a61f3"></script>
     <script defer src="assets/js/platform/image-processing.js?v=c3632b3197bf"></script>
-    <script defer src="assets/js/core.js?v=2b6ebfc78ce7"></script>
-    <script defer src="assets/js/profile.js?v=94132f3ffcbb"></script>
-    <script defer src="assets/js/messenger.js?v=504e7417496b"></script>
+    <script defer src="assets/js/core.js?v=4bfbb50117d8"></script>
+    <script defer src="assets/js/profile.js?v=01b28035904d"></script>
+    <script defer src="assets/js/messenger.js?v=c565bc2c3e0f"></script>
     <script defer src="assets/js/attachments.js?v=0c018e271851"></script>
     <script defer src="assets/js/room-settings.js?v=d602bb96b2da"></script>
-    <script defer src="assets/js/chat.js?v=0a80e4b5a415"></script>
-    <script defer src="assets/js/shorts.js?v=72f924021560"></script>
-    <script defer src="assets/js/action-bar.js?v=021a9bcbe046"></script>
-    <script defer src="assets/js/app.js?v=c26bac9f6041"></script>
+    <script defer src="assets/js/chat.js?v=126558da08e4"></script>
+    <script defer src="assets/js/shorts.js?v=0b732c851324"></script>
+    <script defer src="assets/js/action-bar.js?v=f5c052bc212e"></script>
+    <script defer src="assets/js/app.js?v=989fe43f9645"></script>
     <script defer src="assets/js/auth.js?v=84a7ef3fc787"></script>
-    <script defer src="assets/js/bootstrap.js?v=e7acfcdbc14d"></script>
+    <script defer src="assets/js/bootstrap.js?v=b8511a9859cc"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -238,6 +238,7 @@
       }
 
       .app-header > div:first-child { flex: 1 1 auto; min-width: 0; }
+      .app-header-main { flex: 1 1 auto; min-width: 0; }
 
       .app-header h1 {
         font-size: 28px;
@@ -247,8 +248,11 @@
         white-space: nowrap;
       }
 
-      .app.shorts-mode .app-header,
-      .app.shorts-mode .app-status { display: none; }
+      .header-search { align-items: center; display: grid; gap: 6px; grid-template-columns: minmax(0, 1fr) 44px; }
+      .header-search input { min-height: 44px; min-width: 0; width: 100%; }
+      .header-search button { background: var(--white); color: var(--black); min-height: 44px; min-width: 44px; padding: 0; }
+
+      .app.shorts-mode .app-header { display: none; }
 
       .app-actions {
         display: flex;
@@ -272,7 +276,7 @@
         border-top: 1px solid var(--black);
         display: grid;
         flex: 0 0 auto;
-        grid-template-columns: repeat(3, 1fr) 48px;
+        grid-template-columns: repeat(4, 1fr) 48px;
       }
 
       .list-tabs button {
@@ -292,7 +296,7 @@
       .list-tabs button:last-child { border-right: 0; }
       .list-tabs button.active { background: var(--black); color: var(--white); }
       .shorts-sound-toggle { font-size: 16px; min-width: 48px; padding: 0; }
-      .app:not(.shorts-mode) .list-tabs { grid-template-columns: repeat(3, 1fr); }
+      .app:not(.shorts-mode) .list-tabs { grid-template-columns: repeat(4, 1fr); }
       .app.shorts-mode .shorts-sound-toggle { background: var(--black); color: var(--white); }
 
       .list-content {
@@ -304,6 +308,19 @@
 
       .chat-list, .friend-list { padding: 0; }
       .empty-list-action { display: block; margin: 12px auto 0; }
+
+      .my-view { min-height: 100%; padding: 18px; }
+      .my-card { border: 1px solid var(--black); display: grid; gap: 14px; padding: 20px; }
+      .my-profile-summary { align-items: center; display: grid; gap: 14px; grid-template-columns: 76px minmax(0, 1fr); }
+      .my-profile-avatar .avatar { height: 76px; width: 76px; }
+      .my-profile-copy { display: grid; gap: 4px; min-width: 0; }
+      .my-profile-copy strong { font-size: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .my-profile-copy span { color: var(--gray); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .my-status-row { align-items: center; border-block: 1px solid var(--light-gray); display: flex; justify-content: space-between; padding: 14px 0; }
+      .my-status-copy { display: grid; gap: 3px; }
+      .my-status-copy span { color: var(--gray); font-size: 12px; }
+      .my-actions { display: grid; gap: 8px; }
+      .my-actions button { width: 100%; }
 
       .shorts-view {
         height: 100%;
@@ -462,14 +479,34 @@
         text-align: center;
       }
 
-      .app-status {
-        border-top: 1px solid var(--black);
+      .tab-status {
         color: var(--gray);
         font-size: 13px;
+        font-weight: 700;
+        line-height: 1.45;
         margin: 0;
-        min-height: 43px;
-        padding: 13px 18px calc(13px + env(safe-area-inset-bottom));
+        padding: 9px 18px;
+        text-align: center;
       }
+
+      .tab-status.error { color: var(--black); }
+
+      .chat-room > .tab-status {
+        background: var(--black);
+        box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.2);
+        color: var(--white);
+        left: 50%;
+        max-width: calc(100% - 36px);
+        padding: 11px 14px;
+        pointer-events: none;
+        position: absolute;
+        top: calc(var(--chat-header-height) + 12px);
+        transform: translateX(-50%);
+        width: max-content;
+        z-index: 25;
+      }
+
+      .chat-room > .tab-status.error { background: var(--white); border: 1px solid var(--black); color: var(--black); }
 
       .sheet-backdrop {
         align-items: flex-end;
@@ -560,21 +597,22 @@
       .custom-palette-color { height: 34px; min-height: 34px; padding: 0; width: 34px; }
       .custom-palette-color.active { outline: 3px solid var(--black); outline-offset: 2px; }
       .palette-picker { border-top: 1px solid var(--black); margin-top: 12px; padding-top: 12px; }
-      .header-status-button { align-items: center; display: inline-flex; font-size: 22px; justify-content: center; min-height: 44px; min-width: 44px; padding: 6px; }
+      .header-status-button { align-items: center; background: transparent; border: 0; box-shadow: none; color: inherit; display: inline-flex; font-size: 38px; justify-content: center; min-height: 56px; min-width: 56px; padding: 0; }
+      .header-status-button:hover:not(:disabled) { box-shadow: none; transform: none; }
       .status-emoji-picker { align-items: center; display: flex; flex-direction: column; height: min(46vh, 360px); margin: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: min(19vh, 140px) 0; scroll-snap-type: y mandatory; scrollbar-width: none; }
       .status-emoji-picker::-webkit-scrollbar { display: none; }
       .status-emoji-button, .status-emoji-add { align-items: center; background: transparent; border: 0; box-shadow: none; color: var(--black); display: flex; flex: 0 0 152px; font-size: 88px; justify-content: center; min-height: 152px; padding: 0; scroll-snap-align: center; width: 100%; }
       .status-emoji-button:hover:not(:disabled), .status-emoji-add:hover:not(:disabled) { box-shadow: none; transform: none; }
       .status-emoji-button.active { transform: scale(1.12); }
       .status-emoji-add { font-size: 74px; font-weight: 300; }
-      .status-emoji-input { height: 1px; opacity: 0; pointer-events: none; position: absolute; width: 1px; }
+      .status-emoji-input { border: 1px solid var(--black); display: none; flex: 0 0 58px; font-size: 30px; margin: 8px 20px 40px; min-height: 58px; text-align: center; width: calc(100% - 40px); }
+      .status-emoji-input.customizing { display: block; }
       .status-emoji-sheet { background: var(--white); border: 1px solid var(--line); border-radius: 24px; box-shadow: 0 24px 80px rgba(0, 0, 0, .22); max-height: calc(100dvh - 32px); overflow: hidden; padding: 0; width: min(calc(100% - 24px), 380px); }
       .status-emoji-heading { padding: 20px 20px 8px; }
       .status-emoji-heading h2 { font-size: 20px; margin: 0; }
       .status-emoji-heading p { color: var(--muted); font-size: 14px; line-height: 1.45; margin: 6px 0 0; }
       .status-emoji-current { font-weight: 700; }
-      .status-emoji-actions { display: flex; gap: 8px; padding: 8px 20px 20px; }
-      .status-emoji-actions button { flex: 1; min-height: 44px; }
+      .status-emoji-required { color: var(--gray); font-size: 13px; line-height: 1.45; margin: 0; padding: 8px 20px 20px; text-align: center; }
       .pixel-editor-grid { aspect-ratio: 1; background: var(--white); border: 1px solid var(--black); cursor: crosshair; display: block; height: auto; image-rendering: pixelated; margin: 0 auto 16px; touch-action: none; width: min(100%, 320px); }
       .pixel-editor-grid:focus-visible { outline: 3px solid var(--black); outline-offset: 3px; }
       .profile-actions { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
@@ -601,14 +639,20 @@
       .room-leave-button { background: var(--white); color: #b00020; width: 100%; }
       .chat-message-list { bottom: 0; display: flex; flex-direction: column; gap: 9px; left: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 18px 18px calc(96px + var(--keyboard-inset, 0px)); position: absolute; right: 0; top: var(--chat-header-height); -webkit-overflow-scrolling: touch; }
       .chat-empty { color: var(--gray); margin: auto; text-align: center; }
-      .message-row { display: flex; flex-direction: column; gap: 3px; max-width: 82%; }
+      .message-row { display: flex; flex-direction: column; gap: 3px; max-width: 82%; touch-action: pan-y; }
       .message-row.mine { align-self: flex-end; align-items: flex-end; }
       .message-row.theirs { align-self: flex-start; }
       .message-row.pending .message-bubble { opacity: 0.72; }
       .message-row.failed .message-bubble { border-style: dashed; }
-      .message-sender { color: var(--gray); display: block; font-size: 11px; margin-bottom: 4px; }
-      .message-bubble { background: #f1f1f1; border: 1px solid var(--black); line-height: 1.45; padding: 10px 12px; white-space: pre-wrap; word-break: break-word; }
+      .message-sender { color: var(--gray); font-size: 11px; font-weight: 700; }
+      .message-bubble { background: #f1f1f1; border: 1px solid var(--black); line-height: 1.45; padding: 10px 12px; transition: transform 90ms ease-out; white-space: pre-wrap; word-break: break-word; }
       .message-row.mine .message-bubble { background: var(--black); color: var(--white); }
+      .message-row.showing-readers .message-bubble { transform: translateX(-8px); }
+      .message-row.search-target .message-bubble { animation: search-message-flash 1.8s ease-out; }
+      @keyframes search-message-flash {
+        0%, 35% { box-shadow: 0 0 0 4px #ffd900; }
+        100% { box-shadow: 0 0 0 0 transparent; }
+      }
       .message-attachment { display: grid; gap: 8px; }
       .message-image { display: block; height: auto; max-height: 300px; max-width: 100%; object-fit: contain; }
       .message-file { align-items: center; color: inherit; display: flex; font-weight: 700; gap: 8px; text-decoration: underline; }
@@ -633,9 +677,10 @@
       .chat-attachment-input { height: 1px; opacity: 0; pointer-events: none; position: absolute; width: 1px; }
       .chat-attachment-button.swiping { background: var(--black); color: var(--white); }
       .message-meta { color: var(--gray); display: flex; font-size: 11px; gap: 6px; }
+      .message-meta.message-meta-empty { display: none; }
       .message-read { color: var(--black); font-weight: 700; }
       .message-unread { color: var(--gray); font-weight: 700; }
-      .message-read-menu { background: var(--white); border: 1px solid var(--black); box-shadow: 0 12px 30px rgba(0, 0, 0, .16); max-width: min(320px, calc(100vw - 16px)); min-width: 210px; padding: 12px; position: fixed; z-index: 60; }
+      .message-read-menu { background: var(--white); border: 1px solid var(--black); box-shadow: 0 12px 30px rgba(0, 0, 0, .16); max-width: min(320px, calc(100vw - 16px)); min-width: 210px; padding: 12px; pointer-events: none; position: fixed; z-index: 60; }
       .message-read-menu strong { display: block; font-size: 13px; margin-bottom: 8px; }
       .message-read-menu p { color: var(--gray); font-size: 12px; line-height: 1.5; margin: 0; overflow-wrap: anywhere; }
       .chat-message-form { background: var(--white); border-top: 1px solid var(--black); bottom: var(--keyboard-inset, 0px); display: grid; gap: 8px; grid-template-columns: auto minmax(0, 1fr) auto; left: 0; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); position: absolute; right: 0; z-index: 10; }
@@ -658,6 +703,7 @@
         .auth-header p { color: var(--white); font-size: 17px; }
         .auth-scroll { justify-content: center; padding: 42px 48px; }
         .app {
+          --desktop-header-height: 88px;
           display: grid;
           grid-template-areas:
             "header chat"
@@ -666,17 +712,17 @@
             "actions chat"
             "tabs chat";
           grid-template-columns: minmax(340px, 430px) minmax(0, 1fr);
-          grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+          grid-template-rows: var(--desktop-header-height) minmax(0, 1fr) auto auto auto;
           height: min(900px, calc(100dvh - 48px));
           min-height: min(640px, calc(100dvh - 48px));
           width: min(100%, 1180px);
           border: 1px solid var(--black);
         }
-        .app-header { align-items: center; grid-area: header; padding: 20px 22px; }
+        .app-header { align-items: center; box-sizing: border-box; grid-area: header; height: var(--desktop-header-height); padding: 20px 22px; }
         .app-header h1 { font-size: 32px; }
         .list-content { grid-area: list; }
         .chat-list, .friend-list { border: 0; margin: 0; max-width: none; min-height: 100%; }
-        .app-status { grid-area: status; }
+        .app > .tab-status { grid-area: status; }
         .short-share-bar { grid-area: actions; }
         .list-tabs { grid-area: tabs; }
         .desktop-chat-empty {
@@ -696,6 +742,7 @@
         .desktop-chat-empty p { line-height: 1.55; margin: 0; }
         .app:has(.chat-room:not(.hidden)) .desktop-chat-empty { display: none; }
         .chat-room {
+          --chat-header-height: var(--desktop-header-height);
           border-left: 1px solid var(--black);
           grid-area: chat;
           inset: auto;
@@ -822,16 +869,18 @@
 
     <main class="app hidden" id="app-screen" aria-label="메신저">
       <header class="app-header">
-        <div>
+        <div class="app-header-main">
           <h1 id="app-title">채팅</h1>
+          <div class="header-search hidden" id="header-search">
+            <input id="header-search-input" type="search" autocomplete="off" aria-label="목록 검색" />
+            <button type="button" id="close-list-search-button" data-icon="x" data-icon-only aria-label="검색 닫기">검색 닫기</button>
+          </div>
         </div>
         <div class="app-actions">
           <button type="button" id="open-login-button">로그인</button>
-          <button type="button" class="header-status-button" id="open-status-emoji-button" aria-label="상태 이모티콘 변경">🙂</button>
-          <button type="button" class="friend-add-button" id="open-profile-button" data-icon="user" data-icon-only aria-label="프로필">프로필</button>
+          <button type="button" class="friend-add-button" id="open-list-search-button" data-icon="search" data-icon-only aria-label="검색">검색</button>
           <button type="button" class="friend-add-button" id="open-new-chat-button" data-icon="message-plus" data-icon-only aria-label="새 채팅">새 채팅</button>
           <button type="button" class="friend-add-button" id="open-directory-button" data-icon="user-plus" data-icon-only aria-label="친구 추가">친구 추가</button>
-          <button type="button" id="logout-button" data-icon="log-out" data-icon-only aria-label="로그아웃">로그아웃</button>
         </div>
       </header>
 
@@ -841,8 +890,30 @@
         <section class="shorts-view hidden" id="shorts-view" tabindex="0" aria-label="YouTube 쇼츠">
           <div class="shorts-feed" id="shorts-feed"></div>
         </section>
+        <section class="my-view hidden" id="my-view" aria-label="MY">
+          <div class="my-card">
+            <div class="my-profile-summary">
+              <div class="my-profile-avatar" id="my-profile-avatar"></div>
+              <div class="my-profile-copy">
+                <strong id="my-display-name"></strong>
+                <span id="my-friend-code"></span>
+              </div>
+            </div>
+            <div class="my-status-row">
+              <div class="my-status-copy">
+                <strong>활동 이모티콘</strong>
+                <span>누르면 현재 감정을 변경할 수 있어요.</span>
+              </div>
+              <button type="button" class="header-status-button" id="open-status-emoji-button" aria-label="현재 상태">🙂</button>
+            </div>
+            <div class="my-actions">
+              <button type="button" class="secondary-button" id="open-profile-button" data-icon="user" aria-label="개인정보 수정">개인정보 수정</button>
+              <button type="button" id="logout-button" data-icon="log-out" aria-label="로그아웃">로그아웃</button>
+            </div>
+          </div>
+        </section>
       </section>
-      <p class="app-status" id="app-status" role="status" aria-live="polite">채팅 목록을 불러오는 중이에요.</p>
+      <p class="tab-status hidden" id="app-status" role="status" aria-live="polite"></p>
       <aside class="short-share-bar" id="short-share-bar" aria-label="컨텍스트 작업">
         <span class="short-share-label">최근 대화</span>
         <div class="short-share-list" id="short-share-list"></div>
@@ -899,7 +970,7 @@
           <input id="chat-message-input" maxlength="300" autocomplete="off" placeholder="메시지 입력" />
           <button type="submit" data-icon="send" data-icon-only aria-label="메시지 보내기">보내기</button>
         </form>
-        <div class="message-read-menu hidden" id="message-read-menu" role="dialog" aria-label="읽음 상태">
+        <div class="message-read-menu hidden" id="message-read-menu" role="status" aria-live="polite" aria-hidden="true">
           <strong id="message-read-menu-title">읽음 상태</strong>
           <p id="message-read-menu-copy"></p>
         </div>
@@ -941,6 +1012,7 @@
         <button type="button" class="active" id="chats-tab" data-icon="message-circle" aria-label="채팅">채팅</button>
         <button type="button" id="friends-tab" data-icon="users" aria-label="친구">친구</button>
         <button type="button" id="shorts-tab" data-icon="play" aria-label="쇼츠">쇼츠</button>
+        <button type="button" id="my-tab" data-icon="user" aria-label="MY">MY</button>
         <button type="button" class="shorts-sound-toggle" id="shorts-sound-toggle" data-icon="volume-x" data-icon-only aria-label="쇼츠 소리 켜기">쇼츠 소리 켜기</button>
       </nav>
 
@@ -1003,11 +1075,11 @@
             <section class="profile-photo-editor" aria-labelledby="profile-photo-title">
               <div class="profile-photo-preview" id="profile-photo-preview"></div>
               <div>
-                <strong id="profile-photo-title">프로필 사진</strong>
-                <p class="profile-photo-copy">사진의 크기와 위치를 직접 맞춘 뒤 1024×1024 WebP로 저장합니다.</p>
+                <strong id="profile-photo-title">사진으로 픽셀 프로필 만들기</strong>
+                <p class="profile-photo-copy">사진의 크기와 위치를 맞추면 32×32 픽셀 편집기로 변환합니다. 변환 후 직접 수정할 수 있어요.</p>
                 <div class="profile-photo-actions">
                   <button type="button" class="secondary-button" id="select-profile-photo-button">사진 선택</button>
-                  <button type="button" class="secondary-button" id="remove-profile-photo-button">사진 제거</button>
+                  <button type="button" class="secondary-button" id="remove-profile-photo-button">픽셀 초기화</button>
                 </div>
                 <input type="file" id="profile-photo-input" accept="image/jpeg,image/png,image/webp,image/avif,image/heic,image/heif" hidden />
               </div>
@@ -1018,10 +1090,10 @@
                   <input type="range" id="profile-photo-zoom" min="50" max="300" value="100" step="1" />
                   <output id="profile-photo-zoom-value" for="profile-photo-zoom">100%</output>
                 </label>
-                <p class="profile-photo-crop-help">사진을 드래그해 위치를 맞추세요. 방향키로도 이동할 수 있습니다.</p>
+                <p class="profile-photo-crop-help">32×32로 만들 영역을 맞추세요. 사진을 드래그하거나 방향키로 이동할 수 있습니다.</p>
                 <div class="profile-photo-crop-actions">
                   <button type="button" class="secondary-button" id="cancel-profile-photo-button">취소</button>
-                  <button type="button" id="save-profile-photo-button">이대로 저장</button>
+                  <button type="button" id="save-profile-photo-button">32×32 픽셀로 변환</button>
                 </div>
               </div>
             </section>
@@ -1058,17 +1130,14 @@
       <div class="sheet-backdrop hidden" id="status-emoji-sheet" role="dialog" aria-modal="true" aria-labelledby="status-emoji-title" aria-describedby="status-emoji-description">
         <section class="user-sheet status-emoji-sheet">
           <header class="status-emoji-heading">
-            <h2 id="status-emoji-title">상태 이모티콘 변경</h2>
+            <h2 id="status-emoji-title">상태 이모티콘 선택</h2>
             <p id="status-emoji-description">친구에게 보일 현재 상태를 선택하세요. 지금 상태: <span class="status-emoji-current" id="status-emoji-current">없음</span></p>
           </header>
           <div class="status-emoji-picker" id="status-emoji-picker">
             <button class="status-emoji-add" id="status-emoji-add" type="button" aria-label="직접 이모티콘 선택"><span aria-hidden="true">+</span></button>
-            <input class="status-emoji-input" id="profile-status-emoji" maxlength="16" inputmode="text" autocomplete="off" autocapitalize="off" />
+            <input class="status-emoji-input" id="profile-status-emoji" maxlength="16" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="이모티콘 1개" aria-describedby="status-emoji-required" />
           </div>
-          <footer class="status-emoji-actions">
-            <button type="button" class="secondary-button" id="skip-status-emoji-button">변경 없이 닫기</button>
-            <button type="button" class="sheet-close" id="close-status-emoji-button" aria-label="상태 이모티콘 선택 닫기">닫기</button>
-          </footer>
+          <p class="status-emoji-required" id="status-emoji-required" role="status">감정을 선택해야 시작할 수 있어요.</p>
         </section>
       </div>
     </main>

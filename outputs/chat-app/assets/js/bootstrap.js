@@ -52,10 +52,16 @@ roomSettingsSheet.addEventListener("click", (event) => {
 });
 chatMessageForm.addEventListener("submit", sendChatMessage);
 chatMessageList.addEventListener("scroll", () => {
-  closeMessageReadMenu();
+  finishMessageReadSwipe();
   if (chatMessageList.scrollTop < 80) void loadOlderChatMessages();
 }, { passive: true });
-chatMessageList.addEventListener("contextmenu", showMessageReadMenuFromContext);
+chatMessageList.addEventListener("pointerdown", beginMessageReadSwipe);
+chatMessageList.addEventListener("pointermove", updateMessageReadSwipe);
+chatMessageList.addEventListener("pointerup", finishMessageReadSwipe);
+chatMessageList.addEventListener("pointercancel", finishMessageReadSwipe);
+chatMessageList.addEventListener("lostpointercapture", finishMessageReadSwipe);
+chatMessageList.addEventListener("contextmenu", suppressMessageReadContextMenu);
+chatMessageList.addEventListener("click", suppressClickAfterMessageSwipe, true);
 document.addEventListener("click", (event) => {
   if (!messageReadMenu.contains(event.target)) closeMessageReadMenu();
 });
@@ -145,6 +151,15 @@ document.addEventListener("visibilitychange", updatePresence);
 chatsTab.addEventListener("click", () => setActiveList("chats"));
 friendsTab.addEventListener("click", () => setActiveList("friends"));
 shortsTab.addEventListener("click", () => setActiveList("shorts"));
+myTab.addEventListener("click", () => setActiveList("my"));
+openListSearchButton.addEventListener("click", openListSearch);
+closeListSearchButton.addEventListener("click", closeListSearch);
+headerSearchInput.addEventListener("input", updateHeaderSearch);
+headerSearchInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  event.preventDefault();
+  closeListSearch();
+});
 chatList.addEventListener("scroll", () => {
   if (chatList.scrollTop + chatList.clientHeight >= chatList.scrollHeight - 160) {
     void loadRoomsPage({ render: true }).catch(() => {});
@@ -174,10 +189,15 @@ window.addEventListener("resize", () => {
   });
 }, { passive: true });
 document.addEventListener("visibilitychange", handleShortVisibilityChange);
-openDirectoryButton.addEventListener("click", openDirectory);
+window.addEventListener("message", handleShortPlayerMessage);
+openDirectoryButton.addEventListener("click", () => {
+  if (state.activeList === "friends") openDirectory();
+});
 closeDirectoryButton.addEventListener("click", closeDirectory);
 friendCodeAddButton.addEventListener("click", () => addFriend(friendCodeInput.value));
-openNewChatButton.addEventListener("click", openNewChat);
+openNewChatButton.addEventListener("click", () => {
+  if (state.activeList === "chats") openNewChat();
+});
 closeNewChatButton.addEventListener("click", closeNewChat);
 newChatGroupName.addEventListener("input", syncNewChatCreateButton);
 newChatSearch.addEventListener("input", renderNewChatMemberList);
@@ -194,15 +214,16 @@ friendCodeInput.addEventListener("keydown", (event) => {
 });
 openProfileButton.addEventListener("click", () => void openProfileEditor());
 openStatusEmojiButton.addEventListener("click", () => openStatusEmojiPicker(openStatusEmojiButton));
-closeStatusEmojiButton.addEventListener("click", () => closeStatusEmojiPicker());
-skipStatusEmojiButton.addEventListener("click", () => closeStatusEmojiPicker());
 statusEmojiSheet.addEventListener("click", (event) => {
-  if (event.target === statusEmojiSheet) closeStatusEmojiPicker();
+  if (event.target !== statusEmojiSheet) return;
+  showStatusEmojiRequirement();
+  statusEmojiPicker.querySelector(".status-emoji-button")?.focus({ preventScroll: true });
 });
 statusEmojiSheet.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
-    closeStatusEmojiPicker();
+    showStatusEmojiRequirement();
+    statusEmojiPicker.querySelector(".status-emoji-button")?.focus({ preventScroll: true });
     return;
   }
   if (event.key !== "Tab") return;
@@ -271,10 +292,11 @@ profilePhotoCropCanvas.addEventListener("keydown", (event) => {
   moveProfileCrop(offsetX, offsetY);
 });
 cancelProfilePhotoButton.addEventListener("click", cancelProfileImageCrop);
-saveProfilePhotoButton.addEventListener("click", () => void saveCroppedProfileImage());
-removeProfilePhotoButton.addEventListener("click", () => void removeProfileImage());
+saveProfilePhotoButton.addEventListener("click", convertCroppedProfileImageToPixels);
+removeProfilePhotoButton.addEventListener("click", clearProfilePixels);
 clearProfileButton.addEventListener("click", () => {
   state.profilePixels = blankProfilePixels();
+  state.profilePixelsDirty = true;
   state.lastPixelTapIndex = -1;
   buildProfileEditor();
   renderProfileImagePreview();
@@ -299,8 +321,7 @@ customProfileColor.addEventListener("input", () => {
   addCustomPaletteColor(color);
 });
 statusEmojiAdd.addEventListener("click", () => {
-  profileStatusEmoji.value = "";
-  profileStatusEmoji.focus({ preventScroll: true });
+  openCustomStatusEmojiInput();
 });
 statusEmojiPicker.addEventListener("pointerdown", () => {
   state.statusPickerTouched = true;
@@ -315,8 +336,12 @@ statusEmojiPicker.addEventListener("scroll", () => {
 }, { passive: true });
 profileStatusEmoji.addEventListener("input", () => {
   const emoji = normalizeStatusEmoji(profileStatusEmoji.value);
-  profileStatusEmoji.value = emoji;
-  if (emoji) chooseStatusEmoji(emoji);
+  if (emoji && emoji === profileStatusEmoji.value.trim()) {
+    chooseStatusEmoji(emoji);
+    return;
+  }
+  profileStatusEmoji.setAttribute("aria-invalid", "true");
+  showStatusEmojiRequirement("텍스트 없이 이모티콘 하나만 입력해 주세요.");
 });
 saveProfileButton.addEventListener("click", saveProfilePixels);
 window.addEventListener("pointerup", () => { state.profilePainting = false; });

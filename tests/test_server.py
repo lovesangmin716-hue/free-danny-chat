@@ -168,16 +168,28 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('chatRoom.addEventListener("paste", handlePastedChatAttachment)', bootstrap_script)
         self.assertNotIn('chatMessageInput.addEventListener("paste"', bootstrap_script)
 
-    def test_group_unread_names_are_only_shown_from_message_context_menu(self) -> None:
+    def test_message_non_readers_are_shown_only_during_left_swipe(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
+        messenger_script = (server.ASSETS_DIR / "js" / "messenger.js").read_text(encoding="utf-8")
         bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
 
         self.assertIn('id="message-read-menu"', index_html)
-        self.assertIn("function showMessageReadMenuFromContext(event)", chat_script)
-        self.assertIn('unreadNames.join(", ")', chat_script)
-        self.assertNotIn('`안 읽음: ${unreadNames.join', chat_script)
-        self.assertIn('chatMessageList.addEventListener("contextmenu", showMessageReadMenuFromContext)', bootstrap_script)
+        self.assertIn("function beginMessageReadSwipe(event)", chat_script)
+        self.assertIn("function updateMessageReadSwipe(event)", chat_script)
+        self.assertIn("function finishMessageReadSwipe(event)", chat_script)
+        self.assertIn("const unreadNames = (message.unread_by || [])", chat_script)
+        self.assertIn("`안 읽은 사람 ${unreadNames.length}명`", chat_script)
+        self.assertIn('applyMessageReaderToCurrentMessages(payload.username, "realtime.room-read")', messenger_script)
+        self.assertIn("function applyMessageReaderToCurrentMessages", chat_script)
+        self.assertIn('chatMessageList.addEventListener("pointerdown", beginMessageReadSwipe)', bootstrap_script)
+        self.assertIn('chatMessageList.addEventListener("pointermove", updateMessageReadSwipe)', bootstrap_script)
+        self.assertIn('chatMessageList.addEventListener("pointerup", finishMessageReadSwipe)', bootstrap_script)
+        self.assertNotIn("showMessageReadMenuFromContext", chat_script)
+        self.assertNotRegex(
+            messenger_script,
+            r'if \(currentRoom\(\)\?\.kind === "group"\) \{\s+void loadChatMessages',
+        )
 
     def test_signup_is_a_separate_responsive_document(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -247,6 +259,10 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("from public, anon, authenticated", schema.lower())
         self.assertIn("to service_role", schema.lower())
         self.assertIn("::timestamptz", schema.lower())
+        self.assertIn("updated_at double precision not null default extract(epoch from now())", schema.lower())
+        self.assertIn("alter column updated_at type double precision", schema.lower())
+        self.assertNotIn("current_time timestamptz", schema.lower())
+        self.assertGreaterEqual(schema.lower().count("now_value timestamptz"), 2)
         self.assertIn("BEGIN IMMEDIATE", persistence)
         self.assertIn("PRAGMA foreign_keys=ON", persistence)
         self.assertIn("ORDER BY rowid DESC", persistence)
@@ -321,6 +337,43 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("def stream_request_body_to_file", server_script)
         self.assertIn('self.send_header("Accept-Ranges", "bytes")', server_script)
 
+    def test_shorts_players_wait_for_readiness_and_preload_adjacent_cards(self) -> None:
+        shorts_script = (server.ASSETS_DIR / "js" / "shorts.js").read_text(encoding="utf-8")
+        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+        server_script = SERVER_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("?autoplay=0&mute=1&playsinline=1", shorts_script)
+        self.assertIn('payload?.event !== "onReady"', shorts_script)
+        self.assertIn("if (distance > 1)", shorts_script)
+        self.assertIn('window.addEventListener("message", handleShortPlayerMessage)', bootstrap_script)
+        self.assertIn("payload.cycled", shorts_script)
+        self.assertIn('"cycled": cycled', server_script)
+
+    def test_desktop_headers_share_one_height_and_message_times_cluster_for_five_minutes(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
+
+        self.assertIn("--desktop-header-height: 88px", index_html)
+        self.assertIn("--chat-header-height: var(--desktop-header-height)", index_html)
+        self.assertIn("const MESSAGE_TIME_CLUSTER_MS = 5 * 60 * 1000", chat_script)
+        self.assertIn("nextMessage.username !== message.username", chat_script)
+        self.assertIn("nextTimestamp - timestamp > MESSAGE_TIME_CLUSTER_MS", chat_script)
+        self.assertIn('sender.textContent = messageSenderDisplayName(room, message)', chat_script)
+        self.assertIn("if (!mine) {", chat_script)
+        self.assertIn('row.querySelector(".message-sender")?.classList.toggle', chat_script)
+        self.assertIn("syncMessageTimeVisibility(state.messages.length - 2)", chat_script)
+        self.assertIn("function shouldShowMessageReadReceipt(message, messageIndex)", chat_script)
+        self.assertIn("const nextIndex = nextOwnMessageIndex(messageIndex)", chat_script)
+        self.assertIn('`${readerCount}명 읽음`', chat_script)
+
+    def test_supabase_requests_use_persistent_connection_pools(self) -> None:
+        server_script = SERVER_PATH.read_text(encoding="utf-8")
+        persistence_script = (server.BASE_DIR / "persistence.py").read_text(encoding="utf-8")
+
+        self.assertIn("OUTBOUND_HTTP_CLIENT = httpx.Client", server_script)
+        self.assertIn("SUPABASE_HTTP_CLIENT = httpx.Client", persistence_script)
+        self.assertNotIn("urlopen(request", persistence_script)
+
     def test_shared_pipeline_modules_define_one_feature_contract(self) -> None:
         platform_dir = server.ASSETS_DIR / "js" / "platform"
         store_script = (platform_dir / "store.js").read_text(encoding="utf-8")
@@ -342,6 +395,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("function decorateIconButton", icons_script)
         self.assertIn('classList.add("ui-icon")', icons_script)
         for button_id in (
+            "open-list-search-button",
             "open-profile-button",
             "open-new-chat-button",
             "open-directory-button",
@@ -357,25 +411,49 @@ class StaticAppStructureTestCase(unittest.TestCase):
             self.assertIn("aria-label=", button.group(0))
         self.assertNotIn('shortShareSend.textContent = ">"', shorts_script)
 
-    def test_status_emoji_picker_is_explicit_and_dismissible(self) -> None:
+    def test_status_emoji_picker_is_mandatory_once_and_accepts_only_one_emoji(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
         app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
         bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+        chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
+        messenger_script = (server.ASSETS_DIR / "js" / "messenger.js").read_text(encoding="utf-8")
+        server_script = SERVER_PATH.read_text(encoding="utf-8")
 
         start_app = re.search(r"async function startApp\(\) \{(.*?)\n\}", app_script, re.DOTALL)
         self.assertIsNotNone(start_app)
-        self.assertNotIn("openStatusEmojiPicker", start_app.group(1))
+        self.assertIn("if (!state.statusPromptShown && !savedStatusEmoji())", start_app.group(1))
+        self.assertIn("openStatusEmojiPicker(null)", start_app.group(1))
         self.assertIn('id="open-status-emoji-button"', index_html)
         self.assertIn('aria-labelledby="status-emoji-title"', index_html)
         self.assertIn('aria-describedby="status-emoji-description"', index_html)
-        self.assertIn('id="close-status-emoji-button"', index_html)
-        self.assertIn('id="skip-status-emoji-button"', index_html)
+        self.assertNotIn('id="close-status-emoji-button"', index_html)
+        self.assertNotIn('id="skip-status-emoji-button"', index_html)
+        self.assertIn('id="status-emoji-required"', index_html)
+        self.assertIn('placeholder="이모티콘 1개"', index_html)
         self.assertIn("state.selectedStatusEmoji = savedStatusEmoji()", core_script)
+        self.assertIn("openStatusEmojiButton.disabled = false", core_script)
+        self.assertIn('openStatusEmojiButton.addEventListener("click"', bootstrap_script)
+        self.assertIn("if (segments.length !== 1) return", core_script)
+        self.assertIn("statusEmojiPicker.appendChild(profileStatusEmoji)", core_script)
+        self.assertIn("function openCustomStatusEmojiInput()", core_script)
+        self.assertIn("statusEmojiOnly: true", core_script)
+        self.assertIn("openCustomStatusEmojiInput()", bootstrap_script)
+        self.assertIn("saved_activity_emoji(status_message) != status_message.strip()", server_script)
         self.assertIn("state.statusPickerOpener", core_script)
         self.assertIn('event.key === "Escape"', bootstrap_script)
         self.assertIn('event.key !== "Tab"', bootstrap_script)
-        self.assertIn("closeStatusEmojiPicker()", bootstrap_script)
+        self.assertNotIn("closeStatusEmojiPicker()", bootstrap_script)
+        self.assertIn("normalizeStatusEmoji(presence.emoji)", core_script)
+        self.assertIn("body: JSON.stringify({ activeRoomId: document.hidden ? \"\" : state.selectedRoomId, emoji })", chat_script)
+        self.assertIn('realtimeEvents.register("presence_updated"', messenger_script)
+        self.assertIn("schedulePresencePatch(payload.username)", messenger_script)
+
+        self.assertEqual(server.saved_activity_emoji("😀"), "😀")
+        self.assertEqual(server.saved_activity_emoji("👨‍👩‍👧‍👦"), "👨‍👩‍👧‍👦")
+        self.assertEqual(server.saved_activity_emoji("🇰🇷"), "🇰🇷")
+        self.assertEqual(server.saved_activity_emoji("hello 😀"), "")
+        self.assertEqual(server.saved_activity_emoji("😀😃"), "")
 
     def test_mobile_header_keeps_title_on_one_line(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -406,6 +484,32 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("Promise.all(rooms.map", shorts_script)
         self.assertIn('shortShareBar.setAttribute("aria-label", "새 메시지 빠른 답장")', shorts_script)
 
+    def test_my_tab_owns_profile_status_and_logout_while_lists_own_search(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
+        action_bar_script = (server.ASSETS_DIR / "js" / "action-bar.js").read_text(encoding="utf-8")
+        messenger_script = (server.ASSETS_DIR / "js" / "messenger.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="my-tab"', index_html)
+        self.assertIn('id="my-view"', index_html)
+        my_view = re.search(r'<section class="my-view.*?</section>', index_html, re.DOTALL)
+        self.assertIsNotNone(my_view)
+        self.assertIn('id="open-status-emoji-button"', my_view.group(0))
+        self.assertIn('id="open-profile-button"', my_view.group(0))
+        self.assertIn('id="logout-button"', my_view.group(0))
+        header = re.search(r'<header class="app-header">.*?</header>', index_html, re.DOTALL)
+        self.assertIsNotNone(header)
+        self.assertNotIn('id="logout-button"', header.group(0))
+        self.assertIn('openDirectoryButton.classList.toggle("hidden", state.activeList !== "friends")', app_script)
+        self.assertIn('id="open-list-search-button"', header.group(0))
+        self.assertLess(header.group(0).index('id="open-list-search-button"'), header.group(0).index('id="open-new-chat-button"'))
+        self.assertLess(header.group(0).index('id="open-list-search-button"'), header.group(0).index('id="open-directory-button"'))
+        self.assertIn('? "사람 또는 주고받은 대화 검색"', action_bar_script)
+        self.assertIn(': "친구 이름 또는 ID 검색"', action_bar_script)
+        self.assertIn("scheduleChatSearch(headerSearchInput.value)", action_bar_script)
+        self.assertIn("function renderChatSearchResults", messenger_script)
+        self.assertIn("openChatRoomAtMessage", messenger_script)
+
     def test_desktop_sheets_stay_in_the_left_content_pane_and_actions_are_not_duplicated(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         action_bar_script = (server.ASSETS_DIR / "js" / "action-bar.js").read_text(encoding="utf-8")
@@ -415,7 +519,25 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("grid-row: 2 / 5", index_html)
         self.assertNotIn('createContextAction("새 채팅", "message-plus", openNewChat)', action_bar_script)
         self.assertNotIn('createContextAction("친구 추가", "user-plus", openDirectory)', action_bar_script)
-        self.assertIn('createContextAction("검색", "search"', action_bar_script)
+        self.assertNotIn('createContextAction("검색", "search"', action_bar_script)
+        self.assertIn('id="header-search-input"', index_html)
+
+    def test_system_feedback_uses_list_slot_and_chat_popup_without_a_permanent_bar(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
+        app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertRegex(
+            index_html,
+            r'class="tab-status hidden" id="app-status".*?</p>\s*<aside class="short-share-bar"',
+        )
+        self.assertNotIn('class="app-status"', index_html)
+        self.assertNotIn("친구를 추가하거나 새 대화를 시작해 보세요.", app_script)
+        self.assertIn("appStatus.dataset.tab = state.activeList", core_script)
+        self.assertIn("function syncAppStatusForActiveTab", core_script)
+        self.assertIn("chatRoom.appendChild(appStatus)", core_script)
+        self.assertIn("appScreen.insertBefore(appStatus, shortShareBar)", core_script)
+        self.assertIn(".chat-room > .tab-status", index_html)
 
     def test_two_hundred_shorts_use_a_fixed_virtual_dom_window(self) -> None:
         core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
@@ -437,8 +559,8 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("function scheduleShortScrollSnap", shorts_script)
         self.assertIn("frame.tabIndex = -1", shorts_script)
         self.assertIn("overflow-anchor: none", index_html)
-        self.assertIn("const shouldLoad = cardIndex === state.youtube.activeIndex", shorts_script)
-        self.assertNotIn("cardIndex === state.youtube.activeIndex + 1", shorts_script)
+        self.assertIn("const distance = Math.abs(cardIndex - state.youtube.activeIndex)", shorts_script)
+        self.assertIn("if (distance > 1)", shorts_script)
         self.assertIn("releaseAllShortFrames", shorts_script)
         self.assertIn('document.addEventListener("visibilitychange", handleShortVisibilityChange)', bootstrap_script)
         self.assertIn('state.activeList === "shorts" && listName !== "shorts"', app_script)
@@ -522,6 +644,24 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertNotIn('"/profile/pixels"', app_script)
         self.assertIn("() => void openProfileEditor()", bootstrap_script)
         self.assertNotIn("pixels.join", (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8"))
+
+    def test_profile_photo_import_converts_into_the_single_pixel_profile_system(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        profile_script = (server.ASSETS_DIR / "js" / "profile.js").read_text(encoding="utf-8")
+        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+
+        self.assertIn("사진으로 픽셀 프로필 만들기", index_html)
+        self.assertIn("32×32 픽셀로 변환", index_html)
+        self.assertIn("function convertCroppedProfileImageToPixels", profile_script)
+        self.assertIn("createImageCanvas(PIXEL_SIDE, PIXEL_SIDE)", profile_script)
+        self.assertIn("context.getImageData(0, 0, PIXEL_SIDE, PIXEL_SIDE)", profile_script)
+        self.assertIn("state.profilePixels = normalizeProfilePixels(pixels)", profile_script)
+        self.assertIn("state.profilePixelsDirty = true", profile_script)
+        self.assertIn("Array.isArray(state.profilePixels)", profile_script)
+        self.assertNotIn('requestAction("profile.upload-image"', profile_script)
+        self.assertNotIn("application/x-colorless-profile-bundle", profile_script)
+        self.assertIn('requestAction("profile.remove-legacy-image"', profile_script)
+        self.assertIn("convertCroppedProfileImageToPixels", bootstrap_script)
 
     def test_presence_events_patch_indexed_rows_on_one_animation_frame(self) -> None:
         messenger_script = (server.ASSETS_DIR / "js" / "messenger.js").read_text(encoding="utf-8")
@@ -1540,6 +1680,7 @@ class SupabaseRepositoryContractTestCase(unittest.TestCase):
         self.assertNotIn("profile_pixels", sync_request["payload"]["user_data"])
         art_request = next((path, kwargs) for path, kwargs in requests if "profile_art?on_conflict=" in path)
         self.assertEqual(len(bytes.fromhex(art_request[1]["payload"][0]["pixels_rgb"][2:])), 3072)
+        self.assertIsInstance(art_request[1]["payload"][0]["updated_at"], float)
 
     def test_shorts_catalog_uses_shared_rows_and_atomic_collector_rpcs(self) -> None:
         requests = []
@@ -1890,10 +2031,14 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertTrue(all(event["type"] == "room_created" for event, _ in group_outcome.events))
 
         with mock.patch.object(
-            self.store.repository,
-            "list_messages",
-            wraps=self.store.repository.list_messages,
-        ) as list_messages:
+self.store.repository,
+"list_messages",
+wraps=self.store.repository.list_messages,
+) as list_messages, mock.patch.object(
+    self.store,
+    "get_messages",
+    side_effect=AssertionError("new messages must not be reloaded_from storage"),
+):
             message_outcome = services.create_message(
                 self.alice,
                 {
@@ -1903,11 +2048,38 @@ class StateStoreTestCase(unittest.TestCase):
                 },
                 lambda _value, _username: None,
             )
-        self.assertEqual(list_messages.call_count, 0)
+self.assertEqual(list_messages.call_count, 0)
         self.assertEqual(
             {reader["username"] for reader in message_outcome.data["unread_by"]},
             {"bob", "eve"},
         )
+
+        presence_outcome = services.update_presence(
+            "activity-token",
+            self.alice,
+            {"activeRoomId": group_outcome.data["room"]["id"], "emoji": "🧑‍💻"},
+        )
+        self.assertEqual(presence_outcome.data["presence"]["emoji"], "🧑‍💻")
+        self.assertEqual(presence_outcome.events[0][0]["type"], "presence_updated")
+        self.assertEqual(presence_outcome.events[0][0]["presence"]["emoji"], "🧑‍💻")
+
+    def test_message_page_uses_one_repository_read_for_items_and_read_state(self) -> None:
+        for index in range(5):
+            self.store.add_message(self.room_id, "alice", f"message {index}")
+
+        list_messages = self.store.repository.list_messages
+        with mock.patch.object(
+            self.store.repository,
+            "list_messages",
+            wraps=list_messages,
+        ) as list_messages_spy:
+            page = self.store.get_messages_page(self.room_id, "alice", limit=2)
+
+        self.assertIsNotNone(page)
+        assert page is not None
+        self.assertEqual(len(page["items"]), 2)
+        self.assertTrue(page["next_cursor"])
+        self.assertEqual(list_messages_spy.call_count, 1)
 
     def test_profile_art_round_trip_is_lossless_and_not_in_user_rows(self) -> None:
         pixels = [f"#{(index * 2654435761 & 0xFFFFFF):06x}" for index in range(1024)]
@@ -2133,6 +2305,13 @@ class StateStoreTestCase(unittest.TestCase):
         _, changed_again = self.store.mark_room_read(self.room_id, "alice")
         self.assertFalse(changed_again)
 
+        received_messages = self.store.get_messages(self.room_id, "alice") or []
+        self.assertEqual(
+            [reader["username"] for reader in received_messages[-1]["read_by"]],
+            ["alice"],
+        )
+        self.assertEqual(received_messages[-1]["unread_by"], [])
+
     def test_group_room_requires_friends_and_enforces_membership(self) -> None:
         group, error = self.store.create_group_room(
             "alice",
@@ -2188,13 +2367,30 @@ class StateStoreTestCase(unittest.TestCase):
         alice_messages = self.store.get_messages(group["id"], "alice") or []
         self.assertFalse(alice_messages[-1]["read"])
         self.assertEqual(
+            [reader["username"] for reader in alice_messages[-1]["read_by"]],
+            ["bob"],
+        )
+        self.assertEqual(
             [reader["username"] for reader in alice_messages[-1]["unread_by"]],
+            ["eve"],
+        )
+        bob_messages = self.store.get_messages(group["id"], "bob") or []
+        self.assertEqual(
+            [reader["username"] for reader in bob_messages[-1]["read_by"]],
+            ["bob"],
+        )
+        self.assertEqual(
+            [reader["username"] for reader in bob_messages[-1]["unread_by"]],
             ["eve"],
         )
 
         self.store.mark_room_read(group["id"], "eve")
         alice_messages = self.store.get_messages(group["id"], "alice") or []
         self.assertTrue(alice_messages[-1]["read"])
+        self.assertEqual(
+            {reader["username"] for reader in alice_messages[-1]["read_by"]},
+            {"bob", "eve"},
+        )
         self.assertEqual(alice_messages[-1]["unread_by"], [])
 
     def test_group_settings_and_leave_revoke_access_and_transfer_owner(self) -> None:
@@ -2530,43 +2726,81 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertEqual(older["next_cursor"], "")
         self.assertEqual(self.store.state["messages"].get(self.room_id, []), [])
 
-    def test_message_pages_compute_read_state_without_loading_full_history(self) -> None:
-        for index in range(80):
-            self.store.add_message(self.room_id, "alice", f"message-{index}")
-        self.store.mark_room_read(self.room_id, "bob")
-        for index in range(80, 120):
-            self.store.add_message(self.room_id, "alice", f"message-{index}")
+def test_message_pages_compute_read_state_without_loading_full_history(self) -> None:
+    for index in range(80):
+        self.store.add_message(self.room_id, "alice", f"message-{index}")
+    self.store.mark_room_read(self.room_id, "bob")
+    for index in range(80, 120):
+        self.store.add_message(self.room_id, "alice", f"message-{index}")
 
-        with (
-            mock.patch.object(
-                self.store.repository,
-                "list_messages_with_sequences",
-                wraps=self.store.repository.list_messages_with_sequences,
-            ) as list_message_pages,
-            mock.patch.object(
-                self.store.repository,
-                "message_sequences",
-                wraps=self.store.repository.message_sequences,
-            ) as message_sequences,
-        ):
-            latest = self.store.get_messages_page(self.room_id, "alice", limit=30)
-            assert latest is not None
-            older = self.store.get_messages_page(
-                self.room_id,
-                "alice",
-                limit=30,
-                before=latest["next_cursor"],
-            )
+    with (
+        mock.patch.object(
+            self.store.repository,
+            "list_messages_with_sequences",
+            wraps=self.store.repository.list_messages_with_sequences,
+        ) as list_message_pages,
+        mock.patch.object(
+            self.store.repository,
+            "message_sequences",
+            wraps=self.store.repository.message_sequences,
+        ) as message_sequences,
+    ):
+        latest = self.store.get_messages_page(self.room_id, "alice", limit=30)
+        assert latest is not None
+        older = self.store.get_messages_page(
+            self.room_id,
+            "alice",
+            limit=30,
+            before=latest["next_cursor"],
+        )
 
-        self.assertIsNotNone(older)
-        assert older is not None
-        by_text = {message["text"]: message for message in older["items"]}
-        self.assertTrue(by_text["message-79"]["read"])
-        self.assertFalse(by_text["message-80"]["read"])
-        self.assertNotIn("_sequence", by_text["message-79"])
-        self.assertEqual(list_message_pages.call_count, 2)
-        self.assertTrue(all(call.kwargs["limit"] == 31 for call in list_message_pages.call_args_list))
-        self.assertEqual(message_sequences.call_count, 2)
+    self.assertIsNotNone(older)
+    assert older is not None
+    by_text = {message["text"]: message for message in older["items"]}
+    self.assertTrue(by_text["message-79"]["read"])
+    self.assertFalse(by_text["message-80"]["read"])
+    self.assertNotIn("_sequence", by_text["message-79"])
+    self.assertEqual(list_message_pages.call_count, 2)
+    self.assertTrue(all(call.kwargs["limit"] == 31 for call in list_message_pages.call_args_list))
+    self.assertEqual(message_sequences.call_count, 2)
+
+
+def test_message_search_finds_room_people_content_and_returns_target_window(self) -> None:
+    self.store.update_profile("bob", "Robert", "😀", self.bob["friend_code"], None)
+    messages = []
+    for index in range(40):
+        result = self.store.add_message(
+            self.room_id,
+            "alice" if index % 2 == 0 else "bob",
+            "needle in history" if index == 7 else f"ordinary-{index}",
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        messages.append(result[0])
+
+    content_results = self.store.search_messages("alice", "needle", limit=10)
+    self.assertIsNotNone(content_results)
+    assert content_results is not None
+    content_item = next(item for item in content_results["items"] if item["kind"] == "message")
+    self.assertEqual(content_item["room"]["id"], self.room_id)
+    self.assertEqual(content_item["message"]["id"], messages[7]["id"])
+
+    person_results = self.store.search_messages("alice", "Robert", limit=10)
+    self.assertIsNotNone(person_results)
+    assert person_results is not None
+    self.assertTrue(any(item["kind"] == "room" and item["room"]["id"] == self.room_id for item in person_results["items"]))
+    self.assertEqual(self.store.search_messages("eve", "needle", limit=10), {"items": []})
+
+    around = self.store.get_messages_page(
+        self.room_id,
+        "alice",
+        limit=10,
+        around=messages[7]["id"],
+    )
+    self.assertIsNotNone(around)
+    assert around is not None
+    self.assertIn(messages[7]["id"], {message["id"] for message in around["items"]})
+    self.assertEqual(around["around"], messages[7]["id"])
 
     def test_shorts_history_is_bounded_and_persisted(self) -> None:
         seen_ids = [f"video-{index}" for index in range(600)]
@@ -2592,6 +2826,19 @@ class StateStoreTestCase(unittest.TestCase):
         self.store = server.StateStore(state_path)
         restored_sessions = server.SessionStore(state_store=self.store)
         self.assertEqual(restored_sessions.get_username(token), "alice")
+
+    def test_session_validation_is_reused_for_bursty_authenticated_requests(self) -> None:
+        sessions = server.SessionStore(state_store=self.store)
+        token = sessions.create("alice")
+        token_hash = server.hashlib.sha256(token.encode("utf-8")).hexdigest()
+        self.store._session_validation_cache.clear()
+
+        original = self.store.repository.session_username
+        with mock.patch.object(self.store.repository, "session_username", wraps=original) as lookup:
+            self.assertEqual(self.store.get_session_username(token_hash, server.SESSION_TTL_SECONDS), "alice")
+            self.assertEqual(self.store.get_session_username(token_hash, server.SESSION_TTL_SECONDS), "alice")
+
+        self.assertEqual(lookup.call_count, 1)
 
     def test_mutation_does_not_wait_for_slow_persistence(self) -> None:
         original_write = self.store._write_state

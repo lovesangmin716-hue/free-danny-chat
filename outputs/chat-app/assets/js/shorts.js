@@ -16,7 +16,9 @@ function createShortFrame(video) {
   frame.tabIndex = -1;
   frame.dataset.videoId = video.id;
   frame.dataset.src = shortEmbedSource(video.id);
+  frame.dataset.playerReady = "false";
   frame.dataset.soundEnabled = "false";
+  frame.addEventListener("load", () => beginShortPlayerHandshake(frame), { once: true });
   frame.title = video.title || "YouTube 쇼츠";
   return frame;
 }
@@ -329,6 +331,49 @@ function sendShortPlayerCommand(frame, command, args = []) {
   }), "*");
 }
 
+function beginShortPlayerHandshake(frame) {
+  [0, 120, 500].forEach((delay) => {
+    window.setTimeout(() => {
+      if (!frame.isConnected || frame.dataset.playerReady === "true") return;
+      frame.contentWindow?.postMessage(JSON.stringify({ event: "listening", id: frame.dataset.videoId }), "*");
+    }, delay);
+  });
+}
+
+function applyShortPlayerState(frame) {
+  if (frame.dataset.playerReady !== "true") return;
+  const shouldPlay = frame.dataset.playbackState === "playing";
+  const playbackToken = frame.dataset.playbackToken || "0";
+  sendShortPlayerCommand(frame, "mute");
+  sendShortPlayerCommand(frame, shouldPlay ? "playVideo" : "pauseVideo");
+  if (!shouldPlay || frame.dataset.soundEnabled !== "true") return;
+  window.setTimeout(() => {
+    if (
+      !frame.isConnected
+      || frame.dataset.playerReady !== "true"
+      || frame.dataset.playbackToken !== playbackToken
+      || frame.dataset.playbackState !== "playing"
+      || !state.youtube.soundEnabled
+    ) return;
+    sendShortPlayerCommand(frame, "unMute");
+    sendShortPlayerCommand(frame, "setVolume", [100]);
+  }, 250);
+}
+
+function handleShortPlayerMessage(event) {
+  if (!["https://www.youtube-nocookie.com", "https://www.youtube.com"].includes(event.origin)) return;
+  let payload = event.data;
+  if (typeof payload === "string") {
+    try { payload = JSON.parse(payload); } catch { return; }
+  }
+  if (payload?.event !== "onReady") return;
+  const frame = Array.from(shortsFeed.querySelectorAll("iframe"))
+    .find((candidate) => candidate.contentWindow === event.source);
+  if (!frame) return;
+  frame.dataset.playerReady = "true";
+  applyShortPlayerState(frame);
+}
+
 function loadShortFrame(frame) {
   if (!frame.hasAttribute("src") && frame.dataset.src) {
     frame.src = frame.dataset.src;
@@ -340,27 +385,11 @@ function playShortFrame(frame, soundEnabled) {
   loadShortFrame(frame);
   if (!frame.hasAttribute("src")) return;
 
-  const playbackToken = String((Number(frame.dataset.playbackToken) || 0) + 1);
-  const startPlayback = () => {
-    sendShortPlayerCommand(frame, "mute");
-    sendShortPlayerCommand(frame, "playVideo");
-    if (!soundEnabled) return;
-
-    window.setTimeout(() => {
-      if (
-        frame.dataset.playbackToken !== playbackToken
-        || frame.dataset.playbackState !== "playing"
-        || !state.youtube.soundEnabled
-      ) return;
-      sendShortPlayerCommand(frame, "unMute");
-      sendShortPlayerCommand(frame, "setVolume", [100]);
-    }, 250);
-  };
-  frame.dataset.playbackToken = playbackToken;
+  frame.dataset.playbackToken = String((Number(frame.dataset.playbackToken) || 0) + 1);
   frame.dataset.soundEnabled = String(soundEnabled);
   frame.dataset.playbackState = "playing";
-  startPlayback();
-  frame.addEventListener("load", startPlayback, { once: true });
+  beginShortPlayerHandshake(frame);
+  applyShortPlayerState(frame);
 }
 
 function pauseShortFrame(frame) {
@@ -368,8 +397,7 @@ function pauseShortFrame(frame) {
   frame.dataset.playbackToken = String((Number(frame.dataset.playbackToken) || 0) + 1);
   frame.dataset.playbackState = "paused";
   frame.dataset.soundEnabled = "false";
-  sendShortPlayerCommand(frame, "mute");
-  sendShortPlayerCommand(frame, "pauseVideo");
+  applyShortPlayerState(frame);
 }
 
 function removeShortFrame(card) {
@@ -405,8 +433,8 @@ function syncActiveShortAudio() {
   const cards = Array.from(shortsFeed.querySelectorAll(".short-card:not(.short-empty-card)"));
   cards.forEach((card) => {
     const cardIndex = Number(card.dataset.videoIndex);
-    const shouldLoad = cardIndex === state.youtube.activeIndex;
-    if (!shouldLoad) {
+    const distance = Math.abs(cardIndex - state.youtube.activeIndex);
+    if (distance > 1) {
       removeShortFrame(card);
       return;
     }
@@ -632,7 +660,12 @@ async function loadGuestShorts(refresh = false) {
     const payload = await requestAction("shorts.load", `/youtube/shorts${requestQuery}`);
     if (feedVersion !== state.youtube.feedVersion) return;
     const existingIds = new Set(state.youtube.guestVideos.map((video) => video.id));
-    const newVideos = (payload.items || []).filter((video) => video?.id && !existingIds.has(video.id));
+    const batchIds = new Set();
+    const newVideos = (payload.items || []).filter((video) => {
+      if (!video?.id || batchIds.has(video.id)) return false;
+      batchIds.add(video.id);
+      return payload.cycled || !existingIds.has(video.id);
+    });
     const remainingCapacity = MAX_SHORTS_FEED_ITEMS - state.youtube.guestVideos.length;
     state.youtube.guestVideos.push(...newVideos.slice(0, Math.max(0, remainingCapacity)));
     state.youtube.guestCursor = remainingCapacity > newVideos.length ? (payload.next_cursor || "") : "";
@@ -642,7 +675,7 @@ async function loadGuestShorts(refresh = false) {
         if (state.activeList === "shorts" && !state.youtube.guestLoading) {
           loadGuestShorts(!state.youtube.guestCursor);
         }
-      }, retryAfter > 0 ? retryAfter * 1000 : 120);
+      }, retryAfter > 0 ? retryAfter * 1000 : 500);
     }
   } catch (error) {
     if (feedVersion !== state.youtube.feedVersion) return;

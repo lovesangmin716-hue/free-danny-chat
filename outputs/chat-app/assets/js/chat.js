@@ -1,7 +1,148 @@
 "use strict";
 
 // Message state, incremental rendering, pagination, retries, and sending.
-function createChatMessageRow(message) {
+const MESSAGE_TIME_CLUSTER_MS = 5 * 60 * 1000;
+const MESSAGE_READ_SWIPE_THRESHOLD = 34;
+let messageReadSwipe = null;
+let suppressMessageClick = false;
+
+function shouldShowMessageTime(message, nextMessage) {
+  if (!nextMessage || nextMessage.username !== message.username) return true;
+  const timestamp = Date.parse(message.timestamp);
+  const nextTimestamp = Date.parse(nextMessage.timestamp);
+  if (!Number.isFinite(timestamp) || !Number.isFinite(nextTimestamp) || nextTimestamp < timestamp) return true;
+  return nextTimestamp - timestamp > MESSAGE_TIME_CLUSTER_MS;
+}
+
+function messageSenderDisplayName(room, message) {
+  if (message.username === state.messenger.user?.username) {
+    return state.messenger.user?.display_name || state.messenger.user?.username || message.username;
+  }
+  if (room?.peer?.username === message.username) {
+    return room.peer.display_name || room.peer.username;
+  }
+  return roomParticipantDisplayName(room, message.username);
+}
+
+function roomReadParticipants(room) {
+  const participants = [
+    state.messenger.user,
+    room?.peer,
+    ...(room?.participants || []),
+  ];
+  const unique = new Map();
+  for (const participant of participants) {
+    if (participant?.username && !unique.has(participant.username)) {
+      unique.set(participant.username, {
+        id: participant.id || "",
+        username: participant.username,
+        display_name: participant.display_name || participant.username,
+      });
+    }
+  }
+  return [...unique.values()];
+}
+
+function addMessageReader(message, username, room = currentRoom()) {
+  if (!message || !username || username === message.username) return message;
+  const existingReaders = Array.isArray(message.read_by) ? message.read_by : [];
+  if (existingReaders.some((reader) => reader.username === username)) return message;
+  const reader = roomReadParticipants(room).find((candidate) => candidate.username === username) || {
+    id: "",
+    username,
+    display_name: username,
+  };
+  const readBy = [...existingReaders, reader];
+  const eligibleReaders = roomReadParticipants(room).filter(
+    (candidate) => candidate.username !== message.username,
+  );
+  const unreadSource = Array.isArray(message.unread_by) ? message.unread_by : eligibleReaders;
+  const unreadBy = unreadSource.filter((candidate) => candidate.username !== username);
+  return {
+    ...message,
+    read_by: readBy,
+    unread_by: unreadBy,
+    read: message.username === state.messenger.user?.username ? unreadBy.length === 0 : Boolean(message.read),
+  };
+}
+
+function applyMessageReaderToCurrentMessages(username, transactionName = "messages.reader") {
+  const changedMessages = [];
+  appStore.transact(transactionName, () => {
+    for (let index = 0; index < state.messages.length; index += 1) {
+      const message = state.messages[index];
+      if (message.username === username) continue;
+      const readMessage = addMessageReader(message, username);
+      if (readMessage === message) continue;
+      state.messages[index] = readMessage;
+      changedMessages.push([message.id, readMessage]);
+    }
+    if (changedMessages.length) state.messageRevision += 1;
+  });
+  for (const [messageId, message] of changedMessages) replaceChatMessageNode(messageId, message);
+}
+
+function nextOwnMessageIndex(messageIndex) {
+  const username = state.messenger.user?.username;
+  for (let index = messageIndex + 1; index < state.messages.length; index += 1) {
+    if (state.messages[index].username === username) return index;
+  }
+  return -1;
+}
+
+function previousOwnMessageIndex(messageIndex) {
+  const username = state.messenger.user?.username;
+  for (let index = messageIndex - 1; index >= 0; index -= 1) {
+    if (state.messages[index].username === username) return index;
+  }
+  return -1;
+}
+
+function shouldShowMessageReadReceipt(message, messageIndex) {
+  if (message.username !== state.messenger.user?.username) return false;
+  if (message.pending || message.failed) return true;
+  const nextIndex = nextOwnMessageIndex(messageIndex);
+  if (nextIndex < 0) return true;
+  const nextReaders = new Set((state.messages[nextIndex].read_by || []).map((reader) => reader.username));
+  return (message.read_by || []).some((reader) => !nextReaders.has(reader.username));
+}
+
+function messageReadReceiptLabel(message, room = currentRoom()) {
+  if (message.pending) return "보내는 중";
+  if (message.failed) return "전송 실패";
+  const readerCount = Array.isArray(message.read_by) ? message.read_by.length : 0;
+  return room?.kind === "group" ? `${readerCount}명 읽음` : (readerCount ? "읽음" : "안 읽음");
+}
+
+function syncMessageMetaEmpty(row) {
+  const meta = row.querySelector(".message-meta");
+  if (!meta) return;
+  meta.classList.toggle("message-meta-empty", ![...meta.children].some(
+    (child) => !child.classList.contains("hidden"),
+  ));
+}
+
+function setMessageGroupMetaVisibility(row, message, nextMessage) {
+  const showGroupMeta = shouldShowMessageTime(message, nextMessage);
+  row.querySelector("time")?.classList.toggle("hidden", !showGroupMeta);
+  row.querySelector(".message-sender")?.classList.toggle("hidden", !showGroupMeta);
+  syncMessageMetaEmpty(row);
+}
+
+function syncMessageReadReceiptVisibility(messageIndex) {
+  if (!Number.isInteger(messageIndex) || messageIndex < 0 || messageIndex >= state.messages.length) return;
+  const message = state.messages[messageIndex];
+  const row = state.messageNodes.get(message.id);
+  const receipt = row?.querySelector(".message-read, .message-unread");
+  if (!row || !receipt) return;
+  receipt.textContent = messageReadReceiptLabel(message);
+  const hasReaders = Array.isArray(message.read_by) && message.read_by.length > 0;
+  receipt.className = message.failed || !hasReaders ? "message-unread" : "message-read";
+  receipt.classList.toggle("hidden", !shouldShowMessageReadReceipt(message, messageIndex));
+  syncMessageMetaEmpty(row);
+}
+
+function createChatMessageRow(message, nextMessage = null, messageIndex = -1) {
   const mine = message.username === state.messenger.user?.username;
   const row = document.createElement("article");
   row.className = `message-row ${mine ? "mine" : "theirs"}${message.pending ? " pending" : ""}${message.failed ? " failed" : ""}`;
@@ -9,12 +150,6 @@ function createChatMessageRow(message) {
   const bubble = document.createElement("div");
   bubble.className = "message-bubble";
   const room = currentRoom();
-  if (!mine && room?.kind === "group") {
-    const sender = document.createElement("strong");
-    sender.className = "message-sender";
-    sender.textContent = roomParticipantDisplayName(room, message.username);
-    bubble.appendChild(sender);
-  }
   if (message.attachment?.url) {
     const attachment = message.attachment;
     const attachmentLink = document.createElement("a");
@@ -44,52 +179,108 @@ function createChatMessageRow(message) {
   meta.className = "message-meta";
   if (mine) {
     const read = document.createElement("span");
-    read.className = message.failed ? "message-unread" : (message.read ? "message-read" : "message-unread");
-    if (message.pending) {
-      read.textContent = "보내는 중";
-    } else if (message.failed) {
-      read.textContent = "전송 실패";
-    } else if (room?.kind === "group") {
-      read.textContent = message.read ? "모두 읽음" : "안 읽음";
-    } else {
-      read.textContent = message.read ? "읽음" : "안 읽음";
-    }
+    const hasReaders = Array.isArray(message.read_by) && message.read_by.length > 0;
+    read.className = message.failed || !hasReaders ? "message-unread" : "message-read";
+    read.textContent = messageReadReceiptLabel(message, room);
+    read.classList.toggle("hidden", !shouldShowMessageReadReceipt(message, messageIndex));
     meta.appendChild(read);
+  }
+  if (!mine) {
+    const sender = document.createElement("strong");
+    sender.className = "message-sender";
+    sender.textContent = messageSenderDisplayName(room, message);
+    meta.appendChild(sender);
   }
   const time = document.createElement("time");
   time.textContent = formatTime(message.timestamp);
   meta.appendChild(time);
   row.append(bubble, meta);
+  setMessageGroupMetaVisibility(row, message, nextMessage);
   return row;
+}
+
+function syncMessageTimeVisibility(messageIndex) {
+  if (!Number.isInteger(messageIndex) || messageIndex < 0 || messageIndex >= state.messages.length) return;
+  const message = state.messages[messageIndex];
+  const row = state.messageNodes.get(message.id);
+  if (!row) return;
+  setMessageGroupMetaVisibility(row, message, state.messages[messageIndex + 1]);
 }
 
 function closeMessageReadMenu() {
   messageReadMenu.classList.add("hidden");
+  messageReadMenu.setAttribute("aria-hidden", "true");
 }
 
-function openMessageReadMenu(message, clientX, clientY) {
+function openMessageReadMenu(message, row) {
   const unreadNames = (message.unread_by || [])
     .map((reader) => reader.display_name || reader.username)
     .filter(Boolean);
-  messageReadMenuTitle.textContent = message.read ? "모두 읽음" : "아직 읽지 않음";
+  messageReadMenuTitle.textContent = `안 읽은 사람 ${unreadNames.length}명`;
   messageReadMenuCopy.textContent = unreadNames.length
     ? unreadNames.join(", ")
-    : (message.read ? "모든 참여자가 이 메시지를 읽었어요." : "읽음 정보를 불러오는 중이에요.");
+    : "모두 읽었어요.";
   messageReadMenu.classList.remove("hidden");
+  messageReadMenu.setAttribute("aria-hidden", "false");
   const width = messageReadMenu.offsetWidth;
   const height = messageReadMenu.offsetHeight;
-  messageReadMenu.style.left = `${Math.max(8, Math.min(clientX, window.innerWidth - width - 8))}px`;
-  messageReadMenu.style.top = `${Math.max(8, Math.min(clientY, window.innerHeight - height - 8))}px`;
+  const rect = row.getBoundingClientRect();
+  const preferredLeft = row.classList.contains("mine") ? rect.left - width - 10 : rect.right + 10;
+  messageReadMenu.style.left = `${Math.max(8, Math.min(preferredLeft, window.innerWidth - width - 8))}px`;
+  messageReadMenu.style.top = `${Math.max(8, Math.min(rect.top + ((rect.height - height) / 2), window.innerHeight - height - 8))}px`;
 }
 
-function showMessageReadMenuFromContext(event) {
-  const row = event.target.closest?.(".message-row.mine");
-  const room = currentRoom();
-  if (!row || room?.kind !== "group") return;
+function beginMessageReadSwipe(event) {
+  if (event.button !== undefined && event.button !== 0) return;
+  const row = event.target.closest?.(".message-row");
+  if (!row || !currentRoom()) return;
   const message = state.messages[state.messageIndexes.get(row.dataset.messageId)];
   if (!message || message.pending || message.failed) return;
+  closeMessageReadMenu();
+  messageReadSwipe = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    message,
+    row,
+    revealed: false,
+  };
+  row.setPointerCapture?.(event.pointerId);
+}
+
+function updateMessageReadSwipe(event) {
+  const swipe = messageReadSwipe;
+  if (!swipe || swipe.pointerId !== event.pointerId || swipe.revealed) return;
+  const deltaX = event.clientX - swipe.startX;
+  const deltaY = event.clientY - swipe.startY;
+  if (deltaX > -MESSAGE_READ_SWIPE_THRESHOLD || Math.abs(deltaX) <= Math.abs(deltaY) * 1.15) return;
   event.preventDefault();
-  openMessageReadMenu(message, event.clientX, event.clientY);
+  swipe.revealed = true;
+  swipe.row.classList.add("showing-readers");
+  openMessageReadMenu(swipe.message, swipe.row);
+}
+
+function finishMessageReadSwipe(event) {
+  const swipe = messageReadSwipe;
+  if (!swipe || (event?.pointerId !== undefined && swipe.pointerId !== event.pointerId)) return;
+  if (swipe.revealed) {
+    suppressMessageClick = true;
+    window.setTimeout(() => { suppressMessageClick = false; }, 0);
+  }
+  messageReadSwipe = null;
+  swipe.row.classList.remove("showing-readers");
+  if (swipe.row.hasPointerCapture?.(swipe.pointerId)) swipe.row.releasePointerCapture(swipe.pointerId);
+  closeMessageReadMenu();
+}
+
+function suppressMessageReadContextMenu(event) {
+  if (event.target.closest?.(".message-row")) event.preventDefault();
+}
+
+function suppressClickAfterMessageSwipe(event) {
+  if (!suppressMessageClick) return;
+  event.preventDefault();
+  event.stopPropagation();
 }
 
 function rebuildMessageIndexes() {
@@ -136,8 +327,9 @@ function renderAllChatMessages({ scrollToBottom = false, preserveScrollHeight = 
     chatMessageList.appendChild(empty);
   } else {
     const fragment = document.createDocumentFragment();
-    for (const message of state.messages) {
-      const row = createChatMessageRow(message);
+    for (let index = 0; index < state.messages.length; index += 1) {
+      const message = state.messages[index];
+      const row = createChatMessageRow(message, state.messages[index + 1], index);
       state.messageNodes.set(message.id, row);
       fragment.appendChild(row);
     }
@@ -162,9 +354,12 @@ function renderAllChatMessages({ scrollToBottom = false, preserveScrollHeight = 
 
 function appendChatMessageNode(message, scrollToBottom = false) {
   chatMessageList.querySelector(".chat-empty")?.remove();
-  const row = createChatMessageRow(message);
+  const messageIndex = state.messages.length - 1;
+  const row = createChatMessageRow(message, null, messageIndex);
   state.messageNodes.set(message.id, row);
   chatMessageList.appendChild(row);
+  syncMessageTimeVisibility(state.messages.length - 2);
+  syncMessageReadReceiptVisibility(previousOwnMessageIndex(messageIndex));
   state.renderedMessageRevision = state.messageRevision;
   state.renderedMessageRoomId = state.selectedRoomId;
   if (scrollToBottom) chatMessageList.scrollTop = chatMessageList.scrollHeight;
@@ -176,10 +371,18 @@ function replaceChatMessageNode(messageId, message) {
     renderAllChatMessages();
     return;
   }
-  const nextRow = createChatMessageRow(message);
+  const messageIndex = state.messageIndexes.get(message.id);
+  const nextRow = createChatMessageRow(
+    message,
+    Number.isInteger(messageIndex) ? state.messages[messageIndex + 1] : null,
+    messageIndex,
+  );
   currentRow.replaceWith(nextRow);
   state.messageNodes.delete(messageId);
   state.messageNodes.set(message.id, nextRow);
+  syncMessageTimeVisibility(messageIndex - 1);
+  syncMessageReadReceiptVisibility(messageIndex);
+  syncMessageReadReceiptVisibility(previousOwnMessageIndex(messageIndex));
   state.renderedMessageRevision = state.messageRevision;
 }
 
@@ -187,6 +390,7 @@ function renderChatRoom({ scrollToBottom = false, preserveScrollHeight = 0 } = {
   const room = currentRoom();
   if (!room) {
     chatRoom.classList.add("hidden");
+    syncAppStatusForActiveTab();
     openRoomSettingsButton.classList.add("hidden");
     roomSettingsSheet.classList.add("hidden");
     return;
@@ -195,6 +399,7 @@ function renderChatRoom({ scrollToBottom = false, preserveScrollHeight = 0 } = {
   const isGroupRoom = room.kind === "group";
   const isInThisRoom = Boolean(presence?.online && presence.active_room_ids?.includes(room.id));
   chatRoom.classList.remove("hidden");
+  syncAppStatusForActiveTab();
   openRoomSettingsButton.classList.toggle("hidden", !isGroupRoom);
   renderChatAttachmentTray();
   renderChatAttachmentPreview();
@@ -229,7 +434,7 @@ async function updatePresence() {
   }
 }
 
-async function loadChatMessages({ markRead = true, scrollToBottom = false } = {}) {
+async function loadChatMessages({ markRead = true, scrollToBottom = false, aroundMessageId = "" } = {}) {
   if (!state.selectedRoomId) return;
   const roomId = state.selectedRoomId;
   state.messagesLoadController?.abort();
@@ -240,10 +445,11 @@ async function loadChatMessages({ markRead = true, scrollToBottom = false } = {}
   state.messagesInitialLoading = true;
   renderChatRoom();
   try {
+    const aroundQuery = aroundMessageId ? `&around=${encodeURIComponent(aroundMessageId)}` : "";
     const payload = await requestAction(
       "messages.load",
-      `/messages?room_id=${encodeURIComponent(roomId)}&limit=${CHAT_MESSAGE_PAGE_SIZE}`,
-      { signal: controller.signal },
+/messages?room_id=${encodeURIComponent(roomId)}&limit=${CHAT_MESSAGE_PAGE_SIZE}${aroundQuery},
+{ signal: controller.signal },
     );
     if (state.selectedRoomId !== roomId || state.messagesLoadEpoch !== loadEpoch) return;
     const messages = Array.isArray(payload) ? payload : (payload.items || []);
@@ -260,10 +466,23 @@ async function loadChatMessages({ markRead = true, scrollToBottom = false } = {}
     setChatMessages(messages);
     state.messagesNextCursor = Array.isArray(payload) ? "" : (payload.next_cursor || "");
     renderChatRoom({ scrollToBottom });
+    if (aroundMessageId) {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const target = state.messageNodes.get(aroundMessageId);
+        if (!target) return;
+        target.scrollIntoView({ block: "center", behavior: "smooth" });
+        target.classList.add("search-target");
+        window.setTimeout(() => target.classList.remove("search-target"), 1900);
+      }));
+    }
     if (markRead && state.selectedRoomId === roomId) {
       void api("/rooms/read", {
         method: "POST",
         body: JSON.stringify({ roomId }),
+      }).then(() => {
+        if (state.selectedRoomId === roomId) {
+          applyMessageReaderToCurrentMessages(state.messenger.user?.username, "messages.mark-read");
+        }
       }).catch(() => {});
     }
   } catch (error) {
@@ -322,8 +541,7 @@ async function loadRoomMembers(roomId, { reset = true } = {}) {
   }
 }
 
-async function openChatRoom(roomId) {
-  unloadChatMessages();
+async function openChatRoom(roomId, { aroundMessageId = "", focusInput = true } = {}) {
   state.selectedRoomId = roomId;
   state.messagesInitialLoading = true;
   state.renderedMessageRoomId = "";
@@ -332,9 +550,14 @@ async function openChatRoom(roomId) {
   await Promise.all([
     updatePresence(),
     loadRoomMembers(roomId),
-    loadChatMessages({ scrollToBottom: true }),
+    loadChatMessages({ scrollToBottom: !aroundMessageId, aroundMessageId }),
   ]);
-  chatMessageInput.focus({ preventScroll: true });
+  if (focusInput) chatMessageInput.focus({ preventScroll: true });
+}
+
+async function openChatRoomAtMessage(room, messageId) {
+  if (!state.roomById.has(room.id)) upsertMessengerRoom(room);
+  await openChatRoom(room.id, { aroundMessageId: messageId, focusInput: false });
 }
 
 function closeChatRoom() {
@@ -350,6 +573,7 @@ function closeChatRoom() {
     ColorlessImageProcessing.cancel("room-image");
   }
   chatRoom.classList.add("hidden");
+  syncAppStatusForActiveTab();
   roomSettingsSheet.classList.add("hidden");
   updatePresence();
   if (wasReplyingToShortNotice) resumeShortMessageNotice();

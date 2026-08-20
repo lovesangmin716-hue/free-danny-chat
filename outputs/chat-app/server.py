@@ -25,9 +25,9 @@ from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
-from urllib.request import Request, urlopen
+
+import httpx
 
 try:
     import brotli
@@ -181,6 +181,10 @@ SSE_HEARTBEAT_SECONDS = max(5, min(60, int(os.getenv("SSE_HEARTBEAT_SECONDS", "1
 SESSION_CLEANUP_INTERVAL_SECONDS = 60
 SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 SESSION_REFRESH_THRESHOLD_SECONDS = 24 * 60 * 60
+SESSION_VALIDATION_CACHE_SECONDS = max(
+    0.0,
+    min(60.0, float(os.getenv("SESSION_VALIDATION_CACHE_SECONDS", "5"))),
+)
 MAX_SESSIONS = 10_000
 STRUCTURED_LOGS_ENABLED = os.getenv("STRUCTURED_LOGS_ENABLED", "true").lower() not in {"0", "false", "off"}
 REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9._:-]{8,128}")
@@ -247,6 +251,11 @@ SUBSCRIBERS_BY_USERNAME: dict[str, set[queue.Queue]] = {}
 SUBSCRIBERS_LOCK = threading.Lock()
 SSE_CONNECTION_SLOTS = threading.BoundedSemaphore(MAX_SSE_CONNECTIONS)
 SHORTS_FEED_LOCK = threading.Lock()
+OUTBOUND_HTTP_CLIENT = httpx.Client(
+    timeout=httpx.Timeout(30.0, connect=10.0),
+    limits=httpx.Limits(max_connections=64, max_keepalive_connections=24, keepalive_expiry=30.0),
+    follow_redirects=True,
+)
 APP_NAME = "Colorless"
 AGE_GROUPS = {"10대", "20대", "30대", "40대", "50대 이상"}
 GENDERS = {"여성", "남성"}
@@ -793,8 +802,41 @@ def normalize_phone(phone: str) -> str:
 
 
 def saved_activity_emoji(value: object) -> str:
-    normalized = str(value or "").strip()[:16]
-    return normalized if any(ord(character) >= 0x1F000 for character in normalized) else ""
+    normalized = str(value or "").strip()
+    if not normalized or len(normalized) > 16:
+        return ""
+    if re.fullmatch(r"[0-9#*]\ufe0f?\u20e3", normalized):
+        return normalized
+
+    base_codepoints: list[int] = []
+    regional_count = 0
+    has_joiner = "\u200d" in normalized
+    for character in normalized:
+        codepoint = ord(character)
+        if 0x1F3FB <= codepoint <= 0x1F3FF:
+            continue
+        is_regional = 0x1F1E6 <= codepoint <= 0x1F1FF
+        is_emoji_base = (
+            0x1F000 <= codepoint <= 0x1FAFF
+            or 0x2300 <= codepoint <= 0x23FF
+            or 0x2600 <= codepoint <= 0x27BF
+            or 0x2B00 <= codepoint <= 0x2BFF
+            or codepoint in {0x00A9, 0x00AE, 0x203C, 0x2049, 0x2122, 0x2139, 0x3030, 0x303D, 0x3297, 0x3299}
+        )
+        if is_emoji_base:
+            base_codepoints.append(codepoint)
+            regional_count += int(is_regional)
+            continue
+        if codepoint in {0x200D, 0x20E3, 0xFE0E, 0xFE0F} or 0xE0020 <= codepoint <= 0xE007F:
+            continue
+        return ""
+    if not base_codepoints:
+        return ""
+    if len(base_codepoints) == 1 or has_joiner:
+        return normalized
+    if len(base_codepoints) == 2 and regional_count == 2:
+        return normalized
+    return ""
 
 
 def mask_phone(phone: str) -> str:
@@ -885,19 +927,13 @@ def fetch_json(
     headers: dict[str, str] | None = None,
     data: bytes | None = None,
 ) -> object:
-    request = Request(url, data=data, method=method)
-    for key, value in (headers or {}).items():
-        request.add_header(key, value)
-
     try:
-        with urlopen(request, timeout=15) as response:
-            content = response.read().decode("utf-8")
-            return json.loads(content) if content else {}
-    except HTTPError as error:
-        body = error.read().decode("utf-8", errors="ignore")
-        raise ValueError(body or f"HTTP {error.code}") from error
-    except URLError as error:
-        raise ConnectionError(str(error.reason)) from error
+        response = OUTBOUND_HTTP_CLIENT.request(method, url, headers=headers, content=data, timeout=15.0)
+        if response.is_error:
+            raise ValueError(response.text or f"HTTP {response.status_code}")
+        return response.json() if response.content else {}
+    except httpx.RequestError as error:
+        raise ConnectionError(str(error)) from error
 
 
 def fetch_bytes(
@@ -907,18 +943,13 @@ def fetch_bytes(
     headers: dict[str, str] | None = None,
     data: bytes | None = None,
 ) -> bytes:
-    request = Request(url, data=data, method=method)
-    for key, value in (headers or {}).items():
-        request.add_header(key, value)
-
     try:
-        with urlopen(request, timeout=30) as response:
-            return response.read()
-    except HTTPError as error:
-        body = error.read().decode("utf-8", errors="ignore")
-        raise ValueError(body or f"HTTP {error.code}") from error
-    except URLError as error:
-        raise ConnectionError(str(error.reason)) from error
+        response = OUTBOUND_HTTP_CLIENT.request(method, url, headers=headers, content=data)
+        if response.is_error:
+            raise ValueError(response.text or f"HTTP {response.status_code}")
+        return response.content
+    except httpx.RequestError as error:
+        raise ConnectionError(str(error)) from error
 
 
 class BoundedTTLCache:
@@ -979,17 +1010,20 @@ class YoutubeCatalogError(RuntimeError):
 
 def fetch_youtube_catalog_json(url: str, *, attempts: int = 3) -> dict:
     for attempt in range(attempts):
-        request = Request(url, method="GET")
         try:
-            with urlopen(request, timeout=15) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+            response = OUTBOUND_HTTP_CLIENT.get(url, timeout=15.0)
+            if response.is_error:
+                code = f"http-{response.status_code}"
+                if (
+                    response.status_code in {403, 429}
+                    or response.status_code < 500
+                    or attempt + 1 >= attempts
+                ):
+                    raise YoutubeCatalogError(code)
+            else:
+                payload = response.json()
                 return payload if isinstance(payload, dict) else {}
-        except HTTPError as error:
-            error.read(1024)
-            code = f"http-{error.code}"
-            if error.code == 429 or error.code == 403 or error.code < 500 or attempt + 1 >= attempts:
-                raise YoutubeCatalogError(code) from error
-        except (URLError, TimeoutError, socket.timeout) as error:
+        except httpx.RequestError as error:
             code = "network"
             if attempt + 1 >= attempts:
                 raise YoutubeCatalogError(code) from error
@@ -1259,22 +1293,31 @@ def supabase_signed_download_url(filename: str, expires_in: int = DOWNLOAD_URL_T
 
 
 def probe_supabase_upload(filename: str) -> tuple[int, str, bytes]:
-    request = Request(supabase_object_url(filename), method="GET")
-    for key, value in supabase_headers().items():
-        request.add_header(key, value)
-    request.add_header("Range", f"bytes=0-{ATTACHMENT_IMAGE_PROBE_BYTES - 1}")
+    headers = supabase_headers()
+    headers["Range"] = f"bytes=0-{ATTACHMENT_IMAGE_PROBE_BYTES - 1}"
     try:
-        with urlopen(request, timeout=15) as response:
-            prefix = response.read(ATTACHMENT_IMAGE_PROBE_BYTES)
+        with OUTBOUND_HTTP_CLIENT.stream(
+            "GET",
+            supabase_object_url(filename),
+            headers=headers,
+            timeout=15.0,
+        ) as response:
+            if response.is_error:
+                response.read()
+                raise ValueError(f"Storage verification failed with HTTP {response.status_code}")
+            prefix = b""
+            for chunk in response.iter_bytes():
+                prefix += chunk
+                if len(prefix) >= ATTACHMENT_IMAGE_PROBE_BYTES:
+                    prefix = prefix[:ATTACHMENT_IMAGE_PROBE_BYTES]
+                    break
             content_range = response.headers.get("Content-Range", "")
             match = re.fullmatch(r"bytes \d+-\d+/(\d+)", content_range)
             size = int(match.group(1)) if match else int(response.headers.get("Content-Length", "0"))
-            return size, response.headers.get_content_type().lower(), prefix
-    except HTTPError as error:
-        error.read(1024)
-        raise ValueError(f"Storage verification failed with HTTP {error.code}") from error
-    except URLError as error:
-        raise ConnectionError(str(error.reason)) from error
+            content_type = response.headers.get("Content-Type", "application/octet-stream").split(";", 1)[0].lower()
+            return size, content_type, prefix
+    except httpx.RequestError as error:
+        raise ConnectionError(str(error)) from error
 
 
 def delete_upload_object(filename: str) -> None:
@@ -1781,6 +1824,8 @@ class StateStore:
         self._persist_error: Exception | None = None
         self._pending_parts: set[str] = set()
         self._session_cleanup_deadline = 0.0
+        self._session_validation_cache: dict[str, tuple[str, float]] = {}
+        self._session_validation_versions: dict[str, int] = {}
         self._supabase_legacy_mode = False
         self.state = self._load_state()
         self._rebuild_indexes_locked()
@@ -2361,12 +2406,14 @@ class StateStore:
         ]
         for token_hash in expired:
             sessions.pop(token_hash, None)
+            self._session_validation_cache.pop(token_hash, None)
 
         overflow = len(sessions) - max_sessions
         if overflow > 0:
             oldest = sorted(sessions, key=lambda token_hash: float(sessions[token_hash].get("created_at", 0)))[:overflow]
             for token_hash in oldest:
                 sessions.pop(token_hash, None)
+                self._session_validation_cache.pop(token_hash, None)
         self._session_cleanup_deadline = now + SESSION_CLEANUP_INTERVAL_SECONDS
         return bool(expired or overflow > 0)
 
@@ -2379,6 +2426,8 @@ class StateStore:
                 "created_at": now,
                 "expires_at": now + ttl_seconds,
             }
+            self._session_validation_versions[token_hash] = self._session_validation_versions.get(token_hash, 0) + 1
+            self._session_validation_cache[token_hash] = (username, now + SESSION_VALIDATION_CACHE_SECONDS)
             if len(self.state["sessions"]) > max_sessions:
                 changed = self._cleanup_sessions_locked(now, max_sessions) or changed
             user = self._users_by_username.get(username)
@@ -2388,20 +2437,40 @@ class StateStore:
 
     def get_session_username(self, token_hash: str, ttl_seconds: int) -> str | None:
         now = time.time()
+        repository = self.repository
         with self.lock:
-            if self.repository is not None:
-                username = self.repository.session_username(token_hash, now)
+            if repository is not None:
+                cached = self._session_validation_cache.get(token_hash)
+                if cached is not None and cached[1] > now:
+                    return cached[0]
+                validation_version = self._session_validation_versions.get(token_hash, 0)
+            else:
+                validation_version = 0
+
+        if repository is not None:
+            username = repository.session_username(token_hash, now)
+            with self.lock:
+                if self._session_validation_versions.get(token_hash, 0) != validation_version:
+                    cached = self._session_validation_cache.get(token_hash)
+                    return cached[0] if cached is not None and cached[1] > now else None
                 if username is None:
                     self.state["sessions"].pop(token_hash, None)
+                    self._session_validation_cache.pop(token_hash, None)
                     return None
+                self._session_validation_cache[token_hash] = (
+                    username,
+                    now + SESSION_VALIDATION_CACHE_SECONDS,
+                )
                 session = self.state["sessions"].get(token_hash)
                 if session is None:
                     return username
                 refresh_threshold = min(SESSION_REFRESH_THRESHOLD_SECONDS, max(1, ttl_seconds // 2))
                 if float(session["expires_at"]) - now <= refresh_threshold:
                     session["expires_at"] = now + ttl_seconds
-                    self.repository.refresh_session(token_hash, session["expires_at"])
+                    repository.refresh_session(token_hash, session["expires_at"])
                 return username
+
+        with self.lock:
             changed = self._cleanup_sessions_locked(now, MAX_SESSIONS) if now >= self._session_cleanup_deadline else False
             session = self.state["sessions"].get(token_hash)
             if session is None or float(session.get("expires_at", 0)) <= now:
@@ -2426,6 +2495,8 @@ class StateStore:
 
     def destroy_session(self, token_hash: str) -> None:
         with self.lock:
+            self._session_validation_versions[token_hash] = self._session_validation_versions.get(token_hash, 0) + 1
+            self._session_validation_cache.pop(token_hash, None)
             if self.repository is not None:
                 self.repository.destroy_session(token_hash)
             if self.state["sessions"].pop(token_hash, None) is not None:
@@ -2949,73 +3020,57 @@ class StateStore:
         *,
         all_messages: list[dict] | None = None,
     ) -> list[dict]:
-        reader_ids: list[str] = []
-        if room.get("kind") == "direct":
-            reader_id = next(
-                (user_id for user_id in room.get("participant_ids", []) if user_id != user["id"]),
-                "",
-            )
-            if reader_id:
-                reader_ids.append(reader_id)
-        elif room.get("kind") == "group":
-            reader_ids = [
-                user_id
-                for user_id in room.get("participant_ids", [])
-                if user_id != user["id"]
-            ]
-
-        last_read_by = room.get("last_read_by", {})
-        if all_messages is not None or self.repository is None:
-            if all_messages is None:
-                all_messages = self._room_messages_locked(room["id"])
-            message_positions = {
-                str(message["id"]): index
-                for index, message in enumerate(all_messages)
-            }
-            reader_positions = {
-                reader_id: message_positions.get(str(last_read_by.get(reader_id, "")), -1)
-                for reader_id in reader_ids
-            }
-
-            def reader_has_read(reader_id: str, message: dict) -> bool:
-                message_position = message_positions.get(str(message.get("id", "")), -1)
-                return message_position >= 0 and reader_positions.get(reader_id, -1) >= message_position
-        else:
-            reader_cursor_ids = {
-                reader_id: str(last_read_by.get(reader_id, ""))
-                for reader_id in reader_ids
-            }
-            cursor_sequences = self.repository.message_sequences(
-                room["id"],
-                list(reader_cursor_ids.values()),
-            )
-            reader_sequences = {
-                reader_id: cursor_sequences.get(cursor_id, -1)
-                for reader_id, cursor_id in reader_cursor_ids.items()
-            }
-
-            def reader_has_read(reader_id: str, message: dict) -> bool:
-                message_sequence = int(message.get("_sequence", -1))
-                return message_sequence >= 0 and reader_sequences.get(reader_id, -1) >= message_sequence
-
+if all_messages is None:
+    all_messages = self._room_messages_locked(room["id"])
+message_positions = {
+    message["id"]: index
+    for index, message in enumerate(all_messages)
+}
+participant_ids = list(room.get("participant_ids", []))
+reader_positions: dict[str, int] = {}
+last_read_by = room.get("last_read_by", {})
+for reader_id in participant_ids:
+    reader_positions[reader_id] = message_positions.get(
+        str(last_read_by.get(reader_id, "")),
+        -1,
+    )
         response_messages: list[dict] = []
         for message in messages:
             mine = message.get("username") == user["username"]
+            sender = self._users_by_username.get(str(message.get("username", "")))
+            sender_id = str(sender.get("id", "")) if sender is not None else ""
+            message_position = message_positions.get(str(message.get("id")), -1)
+            eligible_reader_ids = [
+                reader_id
+                for reader_id in participant_ids
+                if reader_id != sender_id
+            ]
+            read_by = [
+                {
+                    "id": reader["id"],
+                    "username": reader["username"],
+                    "display_name": reader.get("display_name") or reader["username"],
+                }
+                for reader_id in eligible_reader_ids
+                if reader_positions.get(reader_id, -1) >= message_position >= 0
+                if (reader := self._users_by_id.get(reader_id)) is not None
+            ]
+            unread_by = [
+                {
+                    "id": reader["id"],
+                    "username": reader["username"],
+                    "display_name": reader.get("display_name") or reader["username"],
+                }
+                for reader_id in eligible_reader_ids
+                if reader_positions.get(reader_id, -1) < message_position or message_position < 0
+                if (reader := self._users_by_id.get(reader_id)) is not None
+            ]
             response_message = {
-                **{key: value for key, value in message.items() if key != "_sequence"},
-                "read": mine and (not reader_ids or all(reader_has_read(reader_id, message) for reader_id in reader_ids)),
-            }
-            if room.get("kind") == "group" and mine:
-                response_message["unread_by"] = [
-                    {
-                        "id": reader["id"],
-                        "username": reader["username"],
-                        "display_name": reader.get("display_name") or reader["username"],
-                    }
-                    for reader_id in reader_ids
-                    if not reader_has_read(reader_id, message)
-                    if (reader := self._users_by_id.get(reader_id)) is not None
-                ]
+**message,
+"read": mine and not unread_by,
+"read_by": read_by,
+"unread_by": unread_by,
+}
             response_messages.append(response_message)
         return response_messages
 
@@ -3026,45 +3081,43 @@ class StateStore:
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None
             messages = self._room_messages_locked(room_id)
-            return self._messages_with_read_state_locked(room, user, messages, all_messages=messages)
+async def sent_message_with_read_state(
+    self,
+    room_id: str,
+    username: str,
+    message: dict,
+    *,
+    created: bool,
+) -> dict:
+    """Build the sender response without reloading the room after a new insert."""
+    if not created:
+        messages = self.get_messages(room_id, username) or []
+        return next(
+            (candidate for candidate in reversed(messages) if candidate.get("id") == message.get("id")),
+            message,
+        )
 
-    def sent_message_with_read_state(
-        self,
-        room_id: str,
-        username: str,
-        message: dict,
-        *,
-        created: bool,
-    ) -> dict:
-        """Build the sender response without reloading the room after a new insert."""
-        if not created:
-            messages = self.get_messages(room_id, username) or []
-            return next(
-                (candidate for candidate in reversed(messages) if candidate.get("id") == message.get("id")),
-                message,
-            )
+    with self.lock:
+        user = self._users_by_username.get(username)
+        room = self._rooms_by_id.get(room_id)
+        if user is None or room is None or not self._can_access_room_locked(room, user):
+            return message
 
-        with self.lock:
-            user = self._users_by_username.get(username)
-            room = self._rooms_by_id.get(room_id)
-            if user is None or room is None or not self._can_access_room_locked(room, user):
-                return message
-
-            response_message = {**message, "read": False}
-            if room.get("kind") == "group":
-                unread_by = [
-                    {
-                        "id": reader["id"],
-                        "username": reader["username"],
-                        "display_name": reader.get("display_name") or reader["username"],
-                    }
-                    for reader_id in room.get("participant_ids", [])
-                    if reader_id != user["id"]
-                    if (reader := self._users_by_id.get(reader_id)) is not None
-                ]
-                response_message["unread_by"] = unread_by
-                response_message["read"] = not unread_by
-            return response_message
+        response_message = {**message, "read": False}
+        if room.get("kind") == "group":
+            unread_by = [
+                {
+                    "id": reader["id"],
+                    "username": reader["username"],
+                    "display_name": reader.get("display_name") or reader["username"],
+                }
+                for reader_id in room.get("participant_ids", [])
+                if reader_id != user["id"]
+                if (reader := self._users_by_id.get(reader_id)) is not None
+            ]
+            response_message["unread_by"] = unread_by
+            response_message["read"] = not unread_by
+        return response_message
 
     def get_messages_page(
         self,
@@ -3073,25 +3126,166 @@ class StateStore:
         *,
         limit: int,
         before: str = "",
+        around: str = "",
     ) -> dict | None:
         with self.lock:
             user = self._users_by_username.get(username)
             room = self._rooms_by_id.get(room_id)
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None
-            messages = (
-                self.repository.list_messages_with_sequences(room_id, limit=limit + 1, before=before)
-                if self.repository is not None
-                else self._room_messages_locked(room_id, limit=limit + 1, before=before)
-            )
-            has_more = len(messages) > limit
+messages = (
+    self.repository.list_messages_with_sequences(room_id, limit=limit + 1, before=before)
+    if self.repository is not None
+    else self._room_messages_locked(room_id, limit=limit + 1, before=before)
+)
+has_more = len(messages) > limit
+if around:
+    all_messages = self._room_messages_locked(room_id)
+    target_index = next(
+        (index for index, message in enumerate(all_messages) if message.get("id") == around),
+        -1,
+    )
+    if target_index >= 0:
+        page_start = max(0, target_index - (limit // 2))
+        page_end = min(len(all_messages), page_start + limit)
+        page_start = max(0, page_end - limit)
+        messages = all_messages[page_start:page_end]
+        page_messages = self._messages_with_read_state_locked(
+            room,
+            user,
+            messages,
+            all_messages=all_messages,
+        )
+        return {
+            "items": page_messages,
+            "next_cursor": messages[0]["id"] if page_start > 0 and page_messages else "",
+            "around": around,
+        }
             if has_more:
                 messages = messages[-limit:]
-            page_messages = self._messages_with_read_state_locked(room, user, messages)
+            page_messages = self._messages_with_read_state_locked(
+                room,
+                user,
+                messages,
+                all_messages=all_messages,
+            )
             return {
                 "items": page_messages,
                 "next_cursor": messages[0]["id"] if has_more and page_messages else "",
             }
+
+    def search_messages(self, username: str, query: str, *, limit: int = 50) -> dict | None:
+        normalized_query = query.strip().casefold()
+        if not normalized_query:
+            return {"items": []}
+        with self.lock:
+            user = self._users_by_username.get(username)
+            if user is None:
+                return None
+            rooms = [
+                room
+                for room_id in self._room_ids_by_user.get(user["id"], set())
+                if (room := self._rooms_by_id.get(room_id)) is not None
+                and room.get("kind") in {"direct", "group"}
+                and self._can_access_room_locked(room, user)
+            ]
+            rooms_by_id = {room["id"]: room for room in rooms}
+
+            def searchable_room_copy(room: dict) -> str:
+                values = [room.get("name", "")]
+                for participant_id in room.get("participant_ids", []):
+                    participant = self._users_by_id.get(participant_id)
+                    if participant is None:
+                        continue
+                    values.extend((
+                        participant.get("display_name", ""),
+                        participant.get("username", ""),
+                        participant.get("friend_code", ""),
+                    ))
+                return " ".join(str(value) for value in values if value).casefold()
+
+            matching_room_ids = [
+                room["id"] for room in rooms if normalized_query in searchable_room_copy(room)
+            ][:limit]
+            accessible_room_ids = list(rooms_by_id)
+        message_limit = max(0, limit - len(matching_room_ids))
+        matching_messages = self.repository.search_messages(
+            accessible_room_ids,
+            query.strip(),
+            limit=message_limit,
+        ) if message_limit else []
+        result_room_ids = list(dict.fromkeys(
+            matching_room_ids + [str(message.get("room_id", "")) for message in matching_messages]
+        ))
+        latest_messages = self.repository.latest_messages_for_rooms(result_room_ids)
+        with self.lock:
+            user = self._users_by_username.get(username)
+            if user is None:
+                return None
+            rooms_by_id = {
+                room_id: room
+                for room_id in result_room_ids
+                if (room := self._rooms_by_id.get(room_id)) is not None
+                and self._can_access_room_locked(room, user)
+            }
+            room_summaries = {
+                room_id: self._room_summary(
+                    rooms_by_id[room_id],
+                    user,
+                    latest_message=latest_messages.get(room_id),
+                    latest_message_loaded=True,
+                )
+                for room_id in result_room_ids
+                if room_id in rooms_by_id
+            }
+        items = [
+            {"kind": "room", "room": room_summaries[room_id]}
+            for room_id in matching_room_ids
+            if room_id in room_summaries
+        ]
+        items.extend(
+            {"kind": "message", "room": room_summaries[room_id], "message": message}
+            for message in matching_messages
+            if (room_id := str(message.get("room_id", ""))) in room_summaries
+        )
+        return {"items": items[:limit]}
+
+    def initial_message_read_state(self, room_id: str, username: str, message: dict) -> dict:
+        with self.lock:
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
+            if user is None or room is None or message.get("username") != username:
+                return message
+
+            response_message = {**message, "read": False}
+            reader_ids = [
+                user_id
+                for user_id in room.get("participant_ids", [])
+                if user_id != user["id"]
+            ]
+            last_read_by = room.get("last_read_by", {})
+            response_message["read_by"] = [
+                {
+                    "id": reader["id"],
+                    "username": reader["username"],
+                    "display_name": reader.get("display_name") or reader["username"],
+                }
+                for reader_id in reader_ids
+                if str(last_read_by.get(reader_id, "")) == str(message.get("id", ""))
+                if (reader := self._users_by_id.get(reader_id)) is not None
+            ]
+            response_message["unread_by"] = [
+                {
+                    "id": reader["id"],
+                    "username": reader["username"],
+                    "display_name": reader.get("display_name") or reader["username"],
+                }
+                for reader_id in reader_ids
+                if str(last_read_by.get(reader_id, "")) != str(message.get("id", ""))
+                if (reader := self._users_by_id.get(reader_id)) is not None
+            ]
+            response_message["read"] = not response_message["unread_by"]
+            return response_message
 
     def mark_room_read(self, room_id: str, username: str) -> tuple[dict | None, bool]:
         with self.lock:
@@ -4033,12 +4227,12 @@ class ApplicationServices:
         if result is None:
             raise CommandFailure("채팅방을 찾을 수 없습니다.", HTTPStatus.NOT_FOUND)
         message, room, created = result
-        visible_message = self.store.sent_message_with_read_state(
-            room_id,
-            user["username"],
-            message,
-            created=created,
-        )
+visible_message = self.store.sent_message_with_read_state(
+    room_id,
+    user["username"],
+    message,
+    created=created,
+)
         if attachment is not None and created:
             UPLOAD_GRANTS.consume(Path(attachment["url"]).name, user["username"])
         if not created:
@@ -4068,7 +4262,7 @@ class ApplicationServices:
 
     def update_presence(self, session_token: str | None, user: dict, payload: dict) -> CommandOutcome:
         active_room_id = str(payload.get("activeRoomId", "")).strip()[:80]
-        emoji = str(payload.get("emoji", "")).strip()[:16]
+        emoji = saved_activity_emoji(payload.get("emoji"))
         changed = self.presence.update(session_token, user["username"], active_room_id, emoji)
         current = self.presence.for_user(user["username"])
         events = []
@@ -4248,6 +4442,7 @@ class ChatHandler(BaseHTTPRequestHandler):
     def complete_command(self, outcome: CommandOutcome) -> None:
         try:
             self.send_json(outcome.data, outcome.status)
+            self.wfile.flush()
         finally:
             for event, recipients in outcome.events:
                 EVENT_BROKER.publish(event, recipients)
@@ -4458,6 +4653,12 @@ class ChatHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": "올바른 동기화 범위를 입력해 주세요."}, HTTPStatus.BAD_REQUEST)
                 return
             self.send_conditional_json(STORE.get_sync_page(user["username"], after_revision=after_revision, limit=limit))
+            return
+        if path == "/messages/search":
+            user = self.require_auth()
+            if user is None:
+                return
+            self.serve_message_search(query, user)
             return
         if path == "/messages":
             user = self.require_auth()
@@ -4951,13 +5152,19 @@ class ChatHandler(BaseHTTPRequestHandler):
         user = self.current_user()
         limit_value = query.get("limit", [""])[0].strip()
         before = query.get("before", [""])[0].strip()
-        if limit_value or before:
+        around = query.get("around", [""])[0].strip()
+        if limit_value or before or around:
             try:
                 limit = int(limit_value or DEFAULT_MESSAGES_PAGE_SIZE)
             except ValueError:
                 self.send_json({"error": "올바른 메시지 개수를 입력해 주세요."}, HTTPStatus.BAD_REQUEST)
                 return
-            if not 1 <= limit <= MAX_MESSAGES_PAGE_SIZE or (before and not MESSAGE_ID_PATTERN.fullmatch(before)):
+            if (
+                not 1 <= limit <= MAX_MESSAGES_PAGE_SIZE
+                or (before and not MESSAGE_ID_PATTERN.fullmatch(before))
+                or (around and not MESSAGE_ID_PATTERN.fullmatch(around))
+                or (before and around)
+            ):
                 self.send_json({"error": "올바른 메시지 커서를 입력해 주세요."}, HTTPStatus.BAD_REQUEST)
                 return
             messages = STORE.get_messages_page(
@@ -4965,6 +5172,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                 user["username"],
                 limit=limit,
                 before=before,
+                around=around,
             ) if user else None
         else:
             messages = STORE.get_messages(room_id, user["username"]) if user else None
@@ -4972,6 +5180,22 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "채팅방을 찾을 수 없습니다."}, HTTPStatus.NOT_FOUND)
             return
         self.send_json(messages, HTTPStatus.OK)
+
+    def serve_message_search(self, query: dict[str, list[str]], user: dict) -> None:
+        search_query = query.get("q", [""])[0].strip()
+        try:
+            limit = int(query.get("limit", ["50"])[0])
+        except (TypeError, ValueError):
+            self.send_json({"error": "올바른 검색 개수를 입력해 주세요."}, HTTPStatus.BAD_REQUEST)
+            return
+        if not search_query or len(search_query) > 100 or not 1 <= limit <= 50:
+            self.send_json({"error": "검색어는 1~100자로 입력해 주세요."}, HTTPStatus.BAD_REQUEST)
+            return
+        results = STORE.search_messages(user["username"], search_query, limit=limit)
+        if results is None:
+            self.send_json({"error": "사용자를 찾을 수 없습니다."}, HTTPStatus.NOT_FOUND)
+            return
+        self.send_json(results, HTTPStatus.OK)
 
     def serve_events(self, user: dict, query: dict[str, list[str]] | None = None) -> None:
         if not SSE_CONNECTION_SLOTS.acquire(blocking=False):
@@ -5380,7 +5604,10 @@ class ChatHandler(BaseHTTPRequestHandler):
 
         with SHORTS_FEED_LOCK:
             seen_ids, saved_cursor = STORE.get_shorts_feed(user["username"])
-        cursor = saved_cursor if refresh and not requested_cursor else requested_cursor
+        if refresh and not requested_cursor:
+            seen_ids = []
+            saved_cursor = ""
+        cursor = requested_cursor or (saved_cursor if not refresh else "")
         if cursor and not re.fullmatch(r"catalog:\d{1,9}", cursor):
             cursor = ""
         offset = int(cursor.removeprefix("catalog:")) if cursor else 0
@@ -5392,6 +5619,7 @@ class ChatHandler(BaseHTTPRequestHandler):
         next_offset = offset
 
         # Scan bounded catalog pages to skip this user's seen rows without copying the catalog.
+        reached_catalog_end = False
         for _ in range(5):
             candidates = STORE.repository.list_shorts_catalog(
                 limit=SHORTS_CATALOG_SCAN_SIZE,
@@ -5399,12 +5627,15 @@ class ChatHandler(BaseHTTPRequestHandler):
             )
             if not candidates:
                 next_offset = 0
+                reached_catalog_end = True
                 break
             newest_catalog_at = max(
                 newest_catalog_at,
                 max(float(candidate.get("last_seen_at", 0)) for candidate in candidates),
             )
+            consumed = 0
             for candidate in candidates:
+                consumed += 1
                 if candidate["id"] in recent_set:
                     continue
                 items.append({
@@ -5415,22 +5646,41 @@ class ChatHandler(BaseHTTPRequestHandler):
                 stale_hit = stale_hit or float(candidate.get("expires_at", 0)) <= now
                 if len(items) >= SHORTS_CATALOG_PAGE_SIZE:
                     break
-            next_offset += len(candidates)
-            if len(items) >= SHORTS_CATALOG_PAGE_SIZE or len(candidates) < SHORTS_CATALOG_SCAN_SIZE:
-                if len(candidates) < SHORTS_CATALOG_SCAN_SIZE:
+            next_offset += consumed
+            if len(items) >= SHORTS_CATALOG_PAGE_SIZE:
+                break
+            if len(candidates) < SHORTS_CATALOG_SCAN_SIZE:
+                if consumed >= len(candidates):
                     next_offset = 0
+                    reached_catalog_end = True
                 break
 
         catalog_hit = bool(items)
         emergency_hit = False
+        cycled = False
+        if not items and reached_catalog_end:
+            candidates = STORE.repository.list_shorts_catalog(limit=SHORTS_CATALOG_PAGE_SIZE, offset=0)
+            if candidates:
+                items = [
+                    {
+                        "id": candidate["id"],
+                        "title": candidate.get("title", "YouTube 쇼츠"),
+                        "channel_title": candidate.get("channel_title", "YouTube"),
+                    }
+                    for candidate in candidates
+                ]
+                newest_catalog_at = max(float(candidate.get("last_seen_at", 0)) for candidate in candidates)
+                stale_hit = any(float(candidate.get("expires_at", 0)) <= now for candidate in candidates)
+                next_offset = len(candidates) if len(candidates) >= SHORTS_CATALOG_PAGE_SIZE else 0
+                seen_ids = []
+                catalog_hit = True
+                cycled = True
         if not items:
             items = [item for item in EMERGENCY_SHORTS if item["id"] not in recent_set]
-            # A deployment without a YouTube API key only has the emergency
-            # catalog. Once those videos have been seen, start a new cycle
-            # instead of returning an empty feed forever.
-            if not items:
-                items = list(EMERGENCY_SHORTS)
-                seen_ids = []
+if not items:
+    items = list(EMERGENCY_SHORTS)
+    seen_ids = []
+    cycled = bool(items)
             emergency_hit = bool(items)
         next_cursor = f"catalog:{next_offset}"
         with SHORTS_FEED_LOCK:
@@ -5447,6 +5697,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                 "items": items,
                 "next_cursor": next_cursor,
                 "retry_after": 3 if not items else 0,
+                "cycled": cycled,
                 "catalog": {
                     "stale": stale_hit,
                     "age_seconds": round(max(0.0, now - newest_catalog_at), 3) if newest_catalog_at else None,
@@ -5577,6 +5828,9 @@ class ChatHandler(BaseHTTPRequestHandler):
         display_name = str(payload.get("displayName", ""))
         status_message = str(payload.get("statusMessage", ""))
         friend_code = str(payload.get("friendCode", ""))
+        if payload.get("statusEmojiOnly") and saved_activity_emoji(status_message) != status_message.strip():
+            self.send_json({"error": "텍스트 없이 이모티콘 하나만 선택해 주세요."}, HTTPStatus.BAD_REQUEST)
+            return
         profile, error = STORE.update_profile(user["username"], display_name, status_message, friend_code, payload.get("pixels"))
         if error:
             self.send_json({"error": error}, HTTPStatus.BAD_REQUEST)

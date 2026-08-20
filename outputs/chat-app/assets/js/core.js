@@ -11,7 +11,12 @@ const initialState = {
     chats: { mode: "idle", query: "", filter: "all", selection: [] },
     friends: { mode: "idle", query: "", filter: "all", selection: [] },
     shorts: { mode: "idle", query: "", filter: "all", selection: [] },
+    my: { mode: "idle", query: "", filter: "all", selection: [] },
   },
+  chatSearchResults: [],
+  chatSearchLoading: false,
+  chatSearchRequestId: 0,
+  chatSearchTimer: null,
   newChatOriginTab: "",
   shortMessageNotice: null,
   shortMessageTimer: null,
@@ -70,12 +75,11 @@ const initialState = {
   roomMembersLoading: new Set(),
   lastSeenRoomMessageIds: {},
   profilePixels: "",
-  profileImageUrl: "",
-  profileImagePreviewUrl: "",
+  profilePixelsDirty: false,
+  profileEditorLoadId: 0,
   profileImagePreparing: false,
   profileImageSelectionId: 0,
   profileCropImage: null,
-  profileCropSourceBlob: null,
   profileCropOpen: false,
   profileCropZoomPercent: 100,
   profileCropOffsetX: 0,
@@ -86,6 +90,7 @@ selectedProfileColor: "#000000",
 selectedProfilePalette: "default",
   customPalette: [],
   selectedStatusEmoji: "",
+  statusPromptShown: false,
   statusPickerTouched: false,
   statusPickerTimer: null,
   statusPickerOpener: null,
@@ -212,12 +217,22 @@ const providerStatus = document.getElementById("provider-status");
 const logoutButton = document.getElementById("logout-button");
 const openLoginButton = document.getElementById("open-login-button");
 const appTitle = document.getElementById("app-title");
+const appHeader = document.querySelector(".app-header");
+const headerSearch = document.getElementById("header-search");
+const headerSearchInput = document.getElementById("header-search-input");
+const openListSearchButton = document.getElementById("open-list-search-button");
+const closeListSearchButton = document.getElementById("close-list-search-button");
 const chatsTab = document.getElementById("chats-tab");
 const friendsTab = document.getElementById("friends-tab");
 const shortsTab = document.getElementById("shorts-tab");
+const myTab = document.getElementById("my-tab");
 const shortsSoundToggle = document.getElementById("shorts-sound-toggle");
 const chatList = document.getElementById("chat-list");
 const friendList = document.getElementById("friend-list");
+const myView = document.getElementById("my-view");
+const myProfileAvatar = document.getElementById("my-profile-avatar");
+const myDisplayName = document.getElementById("my-display-name");
+const myFriendCode = document.getElementById("my-friend-code");
 const chatRoom = document.getElementById("chat-room");
 const closeChatRoomButton = document.getElementById("close-chat-room");
 const chatRoomAvatar = document.getElementById("chat-room-avatar");
@@ -303,9 +318,8 @@ const profileStatusEmoji = document.getElementById("profile-status-emoji");
 const statusEmojiAdd = document.getElementById("status-emoji-add");
 const statusEmojiSheet = document.getElementById("status-emoji-sheet");
 const openStatusEmojiButton = document.getElementById("open-status-emoji-button");
-const closeStatusEmojiButton = document.getElementById("close-status-emoji-button");
-const skipStatusEmojiButton = document.getElementById("skip-status-emoji-button");
 const statusEmojiCurrent = document.getElementById("status-emoji-current");
+const statusEmojiRequired = document.getElementById("status-emoji-required");
 const clearProfileButton = document.getElementById("clear-profile-button");
 const saveProfileButton = document.getElementById("save-profile-button");
 const loginForm = document.getElementById("login-form");
@@ -319,10 +333,16 @@ const loginPassword = document.getElementById("login-password");
 
 function normalizeStatusEmoji(value) {
   const trimmed = (value || "").trim();
-  const emoji = emojiSegmenter
-    ? [...emojiSegmenter.segment(trimmed)][0]?.segment || ""
-    : Array.from(trimmed)[0] || "";
+  const segments = emojiSegmenter
+    ? [...emojiSegmenter.segment(trimmed)].map((part) => part.segment)
+    : Array.from(trimmed);
+  if (segments.length !== 1) return "";
+  const emoji = segments[0] || "";
   return /[\p{Extended_Pictographic}\p{Regional_Indicator}]/u.test(emoji) ? emoji : "";
+}
+
+function showStatusEmojiRequirement(message = "감정을 선택해야 시작할 수 있어요.") {
+  statusEmojiRequired.textContent = message;
 }
 
 function renderStatusEmojiPicker() {
@@ -338,6 +358,7 @@ function renderStatusEmojiPicker() {
     statusEmojiPicker.appendChild(button);
   });
   statusEmojiPicker.appendChild(statusEmojiAdd);
+  statusEmojiPicker.appendChild(profileStatusEmoji);
 }
 
 function savedStatusEmoji() {
@@ -347,9 +368,8 @@ function savedStatusEmoji() {
 function renderStatusEmojiControl() {
   const emoji = savedStatusEmoji();
   openStatusEmojiButton.textContent = emoji || "🙂";
-  openStatusEmojiButton.setAttribute("aria-label", emoji
-    ? `현재 상태 ${emoji}. 상태 이모티콘 변경`
-    : "상태 이모티콘 변경");
+  openStatusEmojiButton.disabled = false;
+  openStatusEmojiButton.setAttribute("aria-label", emoji ? `현재 상태 ${emoji}. 변경하기` : "상태 이모티콘 선택하기");
 }
 
 function openStatusEmojiPicker(opener = openStatusEmojiButton) {
@@ -357,12 +377,16 @@ function openStatusEmojiPicker(opener = openStatusEmojiButton) {
   state.statusPickerTouched = false;
   state.statusPickerOpener = opener;
   profileStatusEmoji.value = state.selectedStatusEmoji;
+  profileStatusEmoji.classList.remove("customizing");
+  profileStatusEmoji.removeAttribute("aria-invalid");
   statusEmojiCurrent.textContent = state.selectedStatusEmoji || "없음";
+  showStatusEmojiRequirement();
   renderStatusEmojiPicker();
   statusEmojiSheet.classList.remove("hidden");
   requestAnimationFrame(() => {
     const selected = statusEmojiPicker.querySelector(".status-emoji-button.active");
-    (selected || closeStatusEmojiButton).focus({ preventScroll: true });
+    (selected || statusEmojiPicker.querySelector(".status-emoji-button") || statusEmojiAdd)
+      .focus({ preventScroll: true });
     selected?.scrollIntoView({ block: "center" });
   });
 }
@@ -370,10 +394,20 @@ function openStatusEmojiPicker(opener = openStatusEmojiButton) {
 function closeStatusEmojiPicker({ restoreFocus = true } = {}) {
   window.clearTimeout(state.statusPickerTimer);
   state.statusPickerTimer = null;
+  profileStatusEmoji.classList.remove("customizing");
   statusEmojiSheet.classList.add("hidden");
   const opener = state.statusPickerOpener;
   state.statusPickerOpener = null;
   if (restoreFocus && opener?.isConnected) opener.focus({ preventScroll: true });
+}
+
+function openCustomStatusEmojiInput() {
+  profileStatusEmoji.value = "";
+  profileStatusEmoji.classList.add("customizing");
+  profileStatusEmoji.removeAttribute("aria-invalid");
+  showStatusEmojiRequirement("원하는 이모티콘 하나만 입력하세요.");
+  profileStatusEmoji.focus({ preventScroll: true });
+  profileStatusEmoji.scrollIntoView({ block: "center" });
 }
 
 function selectCenteredStatusEmoji() {
@@ -390,8 +424,7 @@ function selectCenteredStatusEmoji() {
 
   if (!centeredChoice) return;
   if (centeredChoice === statusEmojiAdd) {
-    profileStatusEmoji.value = "";
-    profileStatusEmoji.focus({ preventScroll: true });
+    openCustomStatusEmojiInput();
     return;
   }
   chooseStatusEmoji(centeredChoice.dataset.emoji);
@@ -399,10 +432,17 @@ function selectCenteredStatusEmoji() {
 
 async function chooseStatusEmoji(emoji) {
   const user = state.messenger.user || state.session?.user;
-  if (!user || !emoji) return;
+  const normalizedEmoji = normalizeStatusEmoji(emoji);
+  if (!user || !normalizedEmoji || normalizedEmoji !== emoji.trim()) {
+    profileStatusEmoji.setAttribute("aria-invalid", "true");
+    showStatusEmojiRequirement("텍스트 없이 이모티콘 하나만 입력해 주세요.");
+    return;
+  }
 
-  state.selectedStatusEmoji = emoji;
-  profileStatusEmoji.value = emoji;
+  state.selectedStatusEmoji = normalizedEmoji;
+  profileStatusEmoji.value = normalizedEmoji;
+  profileStatusEmoji.removeAttribute("aria-invalid");
+  showStatusEmojiRequirement("감정을 저장하는 중이에요.");
   renderStatusEmojiPicker();
 
   try {
@@ -410,7 +450,8 @@ async function chooseStatusEmoji(emoji) {
       method: "POST",
       body: JSON.stringify({
         displayName: getDisplayName(user),
-        statusMessage: emoji,
+        statusMessage: normalizedEmoji,
+        statusEmojiOnly: true,
         friendCode: user.friend_code,
       }),
     });
@@ -421,6 +462,7 @@ async function chooseStatusEmoji(emoji) {
     renderMessenger();
     updatePresence();
   } catch (error) {
+    showStatusEmojiRequirement(error.message);
     setAppStatus(error.message, "error");
   }
 }
@@ -435,9 +477,31 @@ function setProviderStatus(message, tone = "default") {
   providerStatus.className = `provider-status${tone === "default" ? "" : ` ${tone}`}`;
 }
 
+let appStatusTimer = null;
+
+function syncAppStatusForActiveTab() {
+  const showAsChatPopup = Boolean(state.selectedRoomId && !chatRoom.classList.contains("hidden"));
+  if (showAsChatPopup && appStatus.parentElement !== chatRoom) {
+    chatRoom.appendChild(appStatus);
+  } else if (!showAsChatPopup && appStatus.parentElement !== appScreen) {
+    appScreen.insertBefore(appStatus, shortShareBar);
+  }
+  const belongsToActiveTab = appStatus.dataset.tab === state.activeList;
+  appStatus.classList.toggle("hidden", !appStatus.textContent || !belongsToActiveTab);
+}
+
 function setAppStatus(message, tone = "default") {
-  appStatus.textContent = message;
-  appStatus.className = `app-status${tone === "default" ? "" : ` ${tone}`}`;
+  window.clearTimeout(appStatusTimer);
+  const normalizedMessage = String(message || "").trim();
+  appStatus.textContent = normalizedMessage;
+  appStatus.dataset.tab = state.activeList;
+  appStatus.className = `tab-status${tone === "default" ? "" : ` ${tone}`}`;
+  syncAppStatusForActiveTab();
+  if (!normalizedMessage) return;
+  appStatusTimer = window.setTimeout(() => {
+    appStatus.textContent = "";
+    appStatus.classList.add("hidden");
+  }, tone === "error" ? 5000 : 3500);
 }
 
 let layoutViewportHeight = Math.max(window.innerHeight, document.documentElement.clientHeight);
@@ -570,9 +634,9 @@ function showAuth(mode = "login") {
   ColorlessImageProcessing.cancel("room-image");
   state.roomImageProcessing = false;
   state.profileImagePreparing = false;
-  state.profileImageUrl = "";
+  state.statusPromptShown = false;
+  closeStatusEmojiPicker({ restoreFocus: false });
   setAuthRequestBusy(false);
-  revokeProfileImagePreview();
   resetProfileImageCrop();
   state.session = null;
   state.isGuest = false;

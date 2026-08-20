@@ -23,8 +23,28 @@ create table if not exists public.profile_art (
   user_id text primary key references public.users(id) on delete cascade,
   version bigint not null,
   pixels_rgb bytea not null check (octet_length(pixels_rgb) = 3072),
-  updated_at timestamptz not null default timezone('utc', now())
+  updated_at double precision not null default extract(epoch from now())
 );
+
+-- Older revisions declared this epoch value as timestamptz. Upgrade those
+-- databases without changing the instant represented by existing rows.
+do $$
+declare profile_art_updated_at_type text;
+begin
+  select data_type into profile_art_updated_at_type
+  from information_schema.columns
+  where table_schema='public' and table_name='profile_art' and column_name='updated_at';
+
+  if profile_art_updated_at_type in ('timestamp with time zone', 'timestamp without time zone') then
+    execute 'alter table public.profile_art alter column updated_at drop default';
+    execute 'alter table public.profile_art alter column updated_at type double precision using extract(epoch from updated_at)';
+  elsif profile_art_updated_at_type <> 'double precision' then
+    raise exception 'Unsupported public.profile_art.updated_at type: %', profile_art_updated_at_type;
+  end if;
+
+  execute 'alter table public.profile_art alter column updated_at set default extract(epoch from now())';
+end;
+$$;
 
 create table if not exists public.app_migrations (
   key text primary key,
@@ -462,16 +482,16 @@ create or replace function public.colorless_touch_presence(
   presence_lease_id text, source_instance_id text, presence_username text,
   room_id_value text, emoji_value text, ttl_seconds integer
 ) returns jsonb language plpgsql security definer set search_path = public as $$
-declare before_presence jsonb; current_presence jsonb; current_time timestamptz := timezone('utc', now());
+declare before_presence jsonb; current_presence jsonb; now_value timestamptz := timezone('utc', now());
 begin
   before_presence := colorless_presence_for_user(presence_username);
-  delete from presence_leases where expires_at<=current_time;
+  delete from presence_leases where expires_at<=now_value;
   insert into presence_leases(
     lease_id, instance_id, username, active_room_id, emoji, updated_at, expires_at
   ) values (
     presence_lease_id, source_instance_id, presence_username,
-    room_id_value, emoji_value, current_time,
-    current_time + make_interval(secs => greatest(1, ttl_seconds))
+    room_id_value, emoji_value, now_value,
+    now_value + make_interval(secs => greatest(1, ttl_seconds))
   ) on conflict(lease_id) do update set
     instance_id=excluded.instance_id, username=excluded.username,
     active_room_id=excluded.active_room_id, emoji=excluded.emoji,
@@ -495,11 +515,11 @@ $$;
 
 create or replace function public.colorless_cleanup_presence()
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare expired_usernames text[]; current_time timestamptz := timezone('utc', now());
+declare expired_usernames text[]; now_value timestamptz := timezone('utc', now());
 begin
   select coalesce(array_agg(distinct username), '{}'::text[]) into expired_usernames
-  from presence_leases where expires_at<=current_time;
-  delete from presence_leases where expires_at<=current_time;
+  from presence_leases where expires_at<=now_value;
+  delete from presence_leases where expires_at<=now_value;
   return coalesce((
     select jsonb_agg(jsonb_build_object(
       'username', username,

@@ -148,13 +148,17 @@ async function removeCustomPaletteColor(color) {
 function paintProfilePixel(index) {
   if (state.profilePixels[index] === state.selectedProfileColor) return;
   state.profilePixels[index] = state.selectedProfileColor;
+  state.profilePixelsDirty = true;
   drawProfilePixel(index);
+  renderProfileImagePreview();
 }
 
 function eraseProfilePixel(index) {
   if (state.profilePixels[index] === "#ffffff") return;
   state.profilePixels[index] = "#ffffff";
+  state.profilePixelsDirty = true;
   drawProfilePixel(index);
+  renderProfileImagePreview();
 }
 
 function profilePixelCoordinates(index = state.profilePixelCursor) {
@@ -308,31 +312,28 @@ function buildProfileEditor() {
   renderProfileEditor();
 }
 
-function revokeProfileImagePreview() {
-  if (!state.profileImagePreviewUrl) return;
-  URL.revokeObjectURL(state.profileImagePreviewUrl);
-  state.profileImagePreviewUrl = "";
-}
-
 function renderProfileImagePreview() {
   const user = state.messenger.user || state.session?.user;
-  const imageUrl = state.profileImagePreviewUrl || state.profileImageUrl;
   profilePhotoPreview.replaceChildren(createAvatar(
     getDisplayName(user),
     state.profilePixels,
     null,
     "",
-    imageUrl,
+    "",
   ));
   syncProfileImageControls();
 }
 
 function syncProfileImageControls() {
   const isBusy = state.profileImagePreparing;
+  const hasProfilePixels = Array.isArray(state.profilePixels)
+    && state.profilePixels.some((color) => color !== "#ffffff");
   selectProfilePhotoButton.disabled = false;
   profilePhotoInput.disabled = false;
   saveProfileButton.disabled = isBusy || state.profileCropOpen;
-  removeProfilePhotoButton.disabled = isBusy || state.profileCropOpen || !state.profileImageUrl;
+  removeProfilePhotoButton.disabled = isBusy
+    || state.profileCropOpen
+    || !hasProfilePixels;
   profilePhotoZoom.disabled = isBusy;
   cancelProfilePhotoButton.disabled = isBusy;
   saveProfilePhotoButton.disabled = isBusy;
@@ -424,7 +425,6 @@ function resetProfileImageCrop() {
   state.profileCropFrame = null;
   state.profileCropImage?.close?.();
   state.profileCropImage = null;
-  state.profileCropSourceBlob = null;
   state.profileCropOpen = false;
   state.profileCropPointer = null;
   state.profileCropZoomPercent = 100;
@@ -436,81 +436,6 @@ function resetProfileImageCrop() {
   profilePhotoCropCanvas.classList.remove("dragging");
   profilePhotoCrop.classList.add("hidden");
   syncProfileImageControls();
-}
-
-async function createProfileImageFileOnMain() {
-  const image = state.profileCropImage;
-  const { width, height } = decodedImageSize(image);
-  if (!image || !width || !height) throw new Error("image-decode-failed");
-  clampProfileCropOffsets();
-  const geometry = profileCropGeometry(width, height, state.profileCropZoomPercent);
-  const canvas = createImageCanvas(PROFILE_IMAGE_SIDE, PROFILE_IMAGE_SIDE);
-  const context = canvas.getContext("2d", { alpha: false });
-  if (!context) throw new Error("image-canvas-unavailable");
-  context.fillStyle = "#ffffff";
-  context.fillRect(0, 0, PROFILE_IMAGE_SIDE, PROFILE_IMAGE_SIDE);
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = "high";
-  context.drawImage(
-    image,
-    PROFILE_IMAGE_SIDE / 2 + state.profileCropOffsetX - geometry.drawWidth / 2,
-    PROFILE_IMAGE_SIDE / 2 + state.profileCropOffsetY - geometry.drawHeight / 2,
-    geometry.drawWidth,
-    geometry.drawHeight,
-  );
-
-  let imageFile = null;
-  for (const quality of PROFILE_IMAGE_WEBP_QUALITIES) {
-    const blob = await canvasToWebpBlob(canvas, quality);
-    if (blob.type === "image/webp" && blob.size > 0 && blob.size <= PROFILE_IMAGE_UPLOAD_BYTES_MAX) {
-      imageFile = new File([blob], "profile.webp", { type: "image/webp", lastModified: Date.now() });
-      break;
-    }
-  }
-  if (!imageFile) throw new Error("profile-image-too-large");
-
-  const thumbnailCanvas = createImageCanvas(PROFILE_THUMBNAIL_SIDE, PROFILE_THUMBNAIL_SIDE);
-  const thumbnailContext = thumbnailCanvas.getContext("2d", { alpha: false });
-  if (!thumbnailContext) throw new Error("image-canvas-unavailable");
-  thumbnailContext.imageSmoothingEnabled = true;
-  thumbnailContext.imageSmoothingQuality = "high";
-  thumbnailContext.drawImage(canvas, 0, 0, PROFILE_THUMBNAIL_SIDE, PROFILE_THUMBNAIL_SIDE);
-  const thumbnailBlob = await canvasToWebpBlob(thumbnailCanvas, 0.8);
-  const thumbnailFile = new File([thumbnailBlob], "profile-thumb.webp", {
-    type: "image/webp",
-    lastModified: Date.now(),
-  });
-  return { imageFile, thumbnailFile };
-}
-
-async function createProfileImageFile() {
-  if (!ColorlessImageProcessing.supported() || !state.profileCropSourceBlob) {
-    return createProfileImageFileOnMain();
-  }
-  const image = state.profileCropImage;
-  const { width, height } = decodedImageSize(image);
-  if (!image || !width || !height) throw new Error("image-decode-failed");
-  clampProfileCropOffsets();
-  const geometry = profileCropGeometry(width, height, state.profileCropZoomPercent);
-  const result = await ColorlessImageProcessing.run("profile-image", state.profileCropSourceBlob, "crop", {
-    maxPixels: IMAGE_FALLBACK_TOTAL_PIXELS_MAX,
-    maxDimension: IMAGE_DIMENSION_MAX,
-    side: PROFILE_IMAGE_SIDE,
-    thumbSide: PROFILE_THUMBNAIL_SIDE,
-    maxBytes: PROFILE_IMAGE_UPLOAD_BYTES_MAX,
-    qualities: PROFILE_IMAGE_WEBP_QUALITIES,
-    x: PROFILE_IMAGE_SIDE / 2 + state.profileCropOffsetX - geometry.drawWidth / 2,
-    y: PROFILE_IMAGE_SIDE / 2 + state.profileCropOffsetY - geometry.drawHeight / 2,
-    drawWidth: geometry.drawWidth,
-    drawHeight: geometry.drawHeight,
-  }, {
-    timeoutMs: 15000,
-    onProgress: (stage) => setAppStatus(imageProgressMessage(stage, "프로필 사진")),
-  });
-  return {
-    imageFile: new File([result.imageBlob], "profile.webp", { type: "image/webp", lastModified: Date.now() }),
-    thumbnailFile: new File([result.thumbnailBlob], "profile-thumb.webp", { type: "image/webp", lastModified: Date.now() }),
-  };
 }
 
 async function uploadSelectedProfileImage(file) {
@@ -557,7 +482,6 @@ async function uploadSelectedProfileImage(file) {
       return;
     }
     state.profileCropImage = decodedImage;
-    state.profileCropSourceBlob = cropSource;
     decodedImage = null;
     state.profileCropOpen = true;
     state.profileCropZoomPercent = 100;
@@ -570,7 +494,7 @@ async function uploadSelectedProfileImage(file) {
     scheduleProfileCropPreview();
     profilePhotoCropCanvas.focus({ preventScroll: true });
     profilePhotoCrop.scrollIntoView({ block: "nearest" });
-    setAppStatus("크기와 위치를 맞춘 뒤 저장해 주세요.");
+    setAppStatus("크기와 위치를 맞춘 뒤 32×32 픽셀로 변환해 주세요.");
   } catch (error) {
     if (state.profileImageSelectionId !== selectionId) return;
     decodedImage?.close?.();
@@ -585,41 +509,52 @@ async function uploadSelectedProfileImage(file) {
   }
 }
 
-async function saveCroppedProfileImage() {
+function profilePixelColor(red, green, blue) {
+  return `#${[red, green, blue].map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function convertCroppedProfileImageToPixels() {
   if (state.profileImagePreparing || !state.profileCropImage) return;
-  const selectionId = state.profileImageSelectionId;
   setProfileImagePreparing(true);
-  setAppStatus("프로필 사진을 1024×1024로 저장하는 중이에요.");
+  setAppStatus("사진을 32×32 픽셀로 변환하는 중이에요.");
   try {
-    const { imageFile, thumbnailFile } = await createProfileImageFile();
-    if (state.profileImageSelectionId !== selectionId) return;
-    const sizeHeader = new ArrayBuffer(4);
-    new DataView(sizeHeader).setUint32(0, imageFile.size, false);
-    const profileBundle = new Blob([sizeHeader, imageFile, thumbnailFile], {
-      type: "application/x-colorless-profile-bundle",
-    });
-    const data = await requestAction("profile.upload-image", "/profile/image", {
-      method: "POST",
-      headers: { "Content-Type": profileBundle.type },
-      body: profileBundle,
-    });
-    if (state.profileImageSelectionId !== selectionId) return;
-    state.messenger.user = data.user;
-    if (state.session?.user) state.session.user = data.user;
-    state.profileImageUrl = data.user.profile_image_url || "";
+    const image = state.profileCropImage;
+    const { width, height } = decodedImageSize(image);
+    if (!width || !height) throw new Error("image-decode-failed");
+    clampProfileCropOffsets();
+    const geometry = profileCropGeometry(width, height, state.profileCropZoomPercent);
+    const scale = PIXEL_SIDE / PROFILE_IMAGE_SIDE;
+    const canvas = createImageCanvas(PIXEL_SIDE, PIXEL_SIDE);
+    const context = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
+    if (!context) throw new Error("image-canvas-unavailable");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, PIXEL_SIDE, PIXEL_SIDE);
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(
+      image,
+      (PROFILE_IMAGE_SIDE / 2 + state.profileCropOffsetX - geometry.drawWidth / 2) * scale,
+      (PROFILE_IMAGE_SIDE / 2 + state.profileCropOffsetY - geometry.drawHeight / 2) * scale,
+      geometry.drawWidth * scale,
+      geometry.drawHeight * scale,
+    );
+    const rgba = context.getImageData(0, 0, PIXEL_SIDE, PIXEL_SIDE).data;
+    const pixels = [];
+    for (let index = 0; index < rgba.length; index += 4) {
+      pixels.push(profilePixelColor(rgba[index], rgba[index + 1], rgba[index + 2]));
+    }
+    state.profilePixels = normalizeProfilePixels(pixels);
+    state.profilePixelsDirty = true;
     resetProfileImageCrop();
+    buildProfileEditor();
     renderProfileImagePreview();
-    renderMessenger();
-    selectProfilePhotoButton.focus({ preventScroll: true });
-    setAppStatus("프로필 사진을 1024×1024로 저장했어요.", "success");
+    pixelEditorGrid.focus({ preventScroll: true });
+    pixelEditorGrid.scrollIntoView({ block: "nearest" });
+    setAppStatus("32×32 픽셀로 변환했어요. 필요하면 수정한 뒤 프로필을 저장하세요.", "success");
   } catch (error) {
-    if (state.profileImageSelectionId !== selectionId) return;
-    const message = error?.message === "profile-image-too-large"
-      ? "변환된 프로필 사진이 3MB를 넘어 저장할 수 없어요."
-      : "프로필 사진을 저장하지 못했어요. 다시 시도해 주세요.";
-    setAppStatus(message, "error");
+    setAppStatus("사진을 픽셀 프로필로 변환하지 못했어요. 다시 시도해 주세요.", "error");
   } finally {
-    if (state.profileImageSelectionId === selectionId) setProfileImagePreparing(false);
+    setProfileImagePreparing(false);
   }
 }
 
@@ -661,32 +596,23 @@ function finishProfileCropPointer(event) {
   profilePhotoCropCanvas.classList.remove("dragging");
 }
 
-async function removeProfileImage() {
-  if (state.profileImagePreparing || state.profileCropOpen || !state.profileImageUrl) return;
-  state.profileImageSelectionId += 1;
-  setProfileImagePreparing(true);
-  try {
-    const data = await requestAction("profile.remove-image", "/profile/image/remove", { method: "POST" });
-    state.messenger.user = data.user;
-    if (state.session?.user) state.session.user = data.user;
-    state.profileImageUrl = "";
-    revokeProfileImagePreview();
-    renderProfileImagePreview();
-    renderMessenger();
-    setAppStatus("프로필 사진을 제거했어요.", "success");
-  } catch (error) {
-    setAppStatus(error.message, "error");
-  } finally {
-    setProfileImagePreparing(false);
-  }
+function clearProfilePixels() {
+  if (state.profileImagePreparing || state.profileCropOpen) return;
+  state.profilePixels = blankProfilePixels();
+  state.profilePixelsDirty = true;
+  state.lastPixelTapIndex = -1;
+  buildProfileEditor();
+  renderProfileImagePreview();
+  setAppStatus("픽셀 프로필을 초기화했어요. 저장하기 전까지는 적용되지 않아요.");
 }
 
 async function openProfileEditor() {
   const user = state.messenger.user || state.session?.user;
-  resetProfileImageCrop();
+  const loadId = state.profileEditorLoadId + 1;
+  state.profileEditorLoadId = loadId;
   state.profilePixels = blankProfilePixels();
-  revokeProfileImagePreview();
-  state.profileImageUrl = user?.profile_image_url || "";
+  state.profilePixelsDirty = false;
+  resetProfileImageCrop();
   state.customPalette = Array.isArray(user?.custom_palette) ? user.custom_palette : [];
   profileDisplayName.value = getDisplayName(user);
   profileFriendCode.value = user?.friend_code || "";
@@ -710,7 +636,9 @@ async function openProfileEditor() {
       key: "profile.pixels",
       policy: "join",
     });
+    if (state.profileEditorLoadId !== loadId || state.profilePixelsDirty) return;
     state.profilePixels = normalizeProfilePixels(profileArt.pixels);
+    state.profilePixelsDirty = false;
     buildProfileEditor();
     renderProfileImagePreview();
   } catch (error) {
@@ -721,6 +649,7 @@ async function openProfileEditor() {
 function closeProfileEditor() {
   if (state.profileImagePreparing) setAppStatus("프로필 사진 처리를 취소했어요.");
   state.profileImageSelectionId += 1;
+  state.profileEditorLoadId += 1;
   ColorlessImageProcessing.cancel("profile-image");
   setProfileImagePreparing(false);
   resetProfileImageCrop();
@@ -736,7 +665,7 @@ async function saveProfilePixels() {
   saveProfileButton.disabled = true;
   const user = state.messenger.user || state.session?.user;
   try {
-    const data = await requestAction("profile.save", "/profile", {
+    let data = await requestAction("profile.save", "/profile", {
       method: "POST",
       body: JSON.stringify({
         displayName: profileDisplayName.value.trim(),
@@ -745,8 +674,12 @@ async function saveProfilePixels() {
         pixels: state.profilePixels,
       }),
     });
+    if (state.profilePixelsDirty && data.user?.profile_image_url) {
+      data = await requestAction("profile.remove-legacy-image", "/profile/image/remove", { method: "POST" });
+    }
     state.messenger.user = data.user;
     if (state.session?.user) state.session.user = data.user;
+    state.profilePixelsDirty = false;
     closeProfileEditor();
     renderMessenger();
     setAppStatus("프로필을 저장했어요.", "success");

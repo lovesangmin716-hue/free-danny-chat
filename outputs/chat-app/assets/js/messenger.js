@@ -15,11 +15,13 @@ function renderChats() {
   state.roomNodes.clear();
   const context = state.actionBarByTab.chats;
   const query = context.query.trim().toLocaleLowerCase();
+  if (query) {
+    renderChatSearchResults(query);
+    return;
+  }
   const rooms = recentChatRooms().filter((room) => {
     if (context.filter === "unread" && !(room.unread_count > 0)) return false;
-    if (!query) return true;
-    const message = room.last_message?.text || "";
-    return `${room.name} ${message}`.toLocaleLowerCase().includes(query);
+    return true;
   });
   if (!state.messenger.rooms.length) {
     const empty = document.createElement("p");
@@ -86,6 +88,93 @@ function renderChats() {
     chatList.appendChild(item);
     state.roomNodes.set(room.id, item);
   });
+}
+
+function resetChatSearch() {
+  window.clearTimeout(state.chatSearchTimer);
+  state.chatSearchTimer = null;
+  state.chatSearchRequestId += 1;
+  state.chatSearchLoading = false;
+  state.chatSearchResults = [];
+}
+
+function scheduleChatSearch(value) {
+  window.clearTimeout(state.chatSearchTimer);
+  state.chatSearchTimer = null;
+  const query = value.trim();
+  state.chatSearchRequestId += 1;
+  const requestId = state.chatSearchRequestId;
+  state.chatSearchResults = [];
+  state.chatSearchLoading = Boolean(query);
+  renderChats();
+  if (!query) return;
+  state.chatSearchTimer = window.setTimeout(async () => {
+    try {
+      const payload = await requestAction(
+        "messages.search",
+        `/messages/search?q=${encodeURIComponent(query)}&limit=50`,
+        {},
+        { key: `messages.search:${query}`, policy: "replace" },
+      );
+      if (requestId !== state.chatSearchRequestId || state.actionBarByTab.chats.query.trim() !== query) return;
+      state.chatSearchResults = payload.items || [];
+    } catch (error) {
+      if (requestId !== state.chatSearchRequestId) return;
+      state.chatSearchResults = [];
+      setAppStatus(error.message, "error");
+    } finally {
+      if (requestId === state.chatSearchRequestId) {
+        state.chatSearchLoading = false;
+        renderChats();
+      }
+    }
+  }, 220);
+}
+
+function renderChatSearchResults(query) {
+  if (state.chatSearchLoading && !state.chatSearchResults.length) {
+    const loading = document.createElement("p");
+    loading.className = "empty-list";
+    loading.textContent = "대화를 검색하는 중이에요.";
+    chatList.appendChild(loading);
+    return;
+  }
+  if (!state.chatSearchResults.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-list";
+    empty.textContent = `“${query}” 검색 결과가 없어요.`;
+    chatList.appendChild(empty);
+    return;
+  }
+  for (const result of state.chatSearchResults) {
+    const room = result.room;
+    if (!room?.id) continue;
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "list-item chat-search-result";
+    item.dataset.roomId = room.id;
+    const copy = document.createElement("div");
+    copy.className = "item-copy";
+    const title = document.createElement("strong");
+    title.className = "item-title";
+    title.textContent = room.name;
+    const preview = document.createElement("span");
+    preview.className = "item-preview";
+    if (result.kind === "message" && result.message) {
+      const sender = roomParticipantDisplayName(room, result.message.username);
+      preview.textContent = `${sender}: ${result.message.text || "첨부 파일"}`;
+      item.addEventListener("click", () => openChatRoomAtMessage(room, result.message.id));
+    } else {
+      preview.textContent = "대화방 열기";
+      item.addEventListener("click", () => openChatRoomAtMessage(room, ""));
+    }
+    const time = document.createElement("time");
+    time.className = "item-time";
+    time.textContent = result.message ? formatTime(result.message.timestamp) : "";
+    item.append(createRoomAvatar(room), copy, time);
+    copy.append(title, preview);
+    chatList.appendChild(item);
+  }
 }
 
 function currentRoom() {
@@ -258,13 +347,22 @@ function registerRealtimeHandlers() {
       room = upsertMessengerRoom(payload.room);
       state.lastSeenRoomMessageIds[payload.roomId] = payload.message?.id || "";
       if (payload.roomId === state.selectedRoomId && payload.message?.id) {
-        if (appendChatMessageState(payload.message)) appendChatMessageNode(payload.message, true);
+        const visibleMessage = addMessageReader(
+          payload.message,
+          state.messenger.user?.username,
+          room,
+        );
+        if (appendChatMessageState(visibleMessage)) appendChatMessageNode(visibleMessage, true);
       }
     }, { event: payload.type });
     if (payload.roomId === state.selectedRoomId && payload.message?.id) {
       void requestAction("rooms.mark-read", "/rooms/read", {
         method: "POST",
         body: JSON.stringify({ roomId: payload.roomId }),
+      }).then(() => {
+        if (state.selectedRoomId === payload.roomId) {
+          applyMessageReaderToCurrentMessages(state.messenger.user?.username, "messages.mark-read");
+        }
       }).catch(() => {});
     } else if (!isShortsView) {
       renderChats();
@@ -274,23 +372,8 @@ function registerRealtimeHandlers() {
   });
   realtimeEvents.register("room_read", (payload) => {
     recordSyncRevision(payload.revision);
-    if (payload.username === state.messenger.user?.username || payload.roomId !== state.selectedRoomId) return;
-    if (currentRoom()?.kind === "group") {
-      void loadChatMessages({ markRead: false });
-      return;
-    }
-    const changedMessages = [];
-    appStore.transact("realtime.room-read", () => {
-      for (let index = 0; index < state.messages.length; index += 1) {
-        const message = state.messages[index];
-        if (message.username !== state.messenger.user?.username || message.read) continue;
-        const readMessage = { ...message, read: true };
-        state.messages[index] = readMessage;
-        changedMessages.push([message.id, readMessage]);
-      }
-      if (changedMessages.length) state.messageRevision += 1;
-    }, { event: payload.type });
-    for (const [messageId, message] of changedMessages) replaceChatMessageNode(messageId, message);
+    if (payload.roomId !== state.selectedRoomId) return;
+    applyMessageReaderToCurrentMessages(payload.username, "realtime.room-read");
   });
   realtimeEvents.register("room_updated", (payload, { isShortsView }) => {
     recordSyncRevision(payload.revision);
@@ -386,7 +469,21 @@ function renderFriends() {
     return;
   }
 
-  state.messenger.friends.forEach((friend) => {
+  const query = state.actionBarByTab.friends.query.trim().toLocaleLowerCase();
+  const matchingFriends = state.messenger.friends.filter((friend) => !query || [
+    getDisplayName(friend),
+    friend.username,
+    friend.friend_code,
+  ].some((value) => String(value || "").toLocaleLowerCase().includes(query)));
+  if (!matchingFriends.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-list";
+    empty.textContent = "검색한 친구가 없어요.";
+    friendList.appendChild(empty);
+    return;
+  }
+
+  matchingFriends.forEach((friend) => {
     const item = document.createElement("button");
     item.type = "button";
     item.className = "list-item";
