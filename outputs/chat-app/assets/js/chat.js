@@ -7,6 +7,8 @@ const MESSAGE_ERASE_TURN_DISTANCE = 18;
 const MESSAGE_ERASE_REQUIRED_TURNS = 4;
 const MESSAGE_ERASE_REQUIRED_TRAVEL = 150;
 const MESSAGE_ERASE_MAX_DURATION_MS = 3000;
+const CHAT_HISTORY_PAGE_SIZE = typeof CHAT_MESSAGE_PAGE_SIZE === "number" ? CHAT_MESSAGE_PAGE_SIZE : 30;
+const CHAT_MEMORY_LIMIT = typeof CHAT_MESSAGE_MEMORY_LIMIT === "number" ? CHAT_MESSAGE_MEMORY_LIMIT : 300;
 let messageReadSwipe = null;
 let suppressMessageClick = false;
 
@@ -388,8 +390,8 @@ function rebuildMessageIndexes() {
 }
 
 function setChatMessages(messages) {
-  state.messages = messages.length > CHAT_MESSAGE_MEMORY_LIMIT
-    ? messages.slice(-CHAT_MESSAGE_MEMORY_LIMIT)
+  state.messages = messages.length > CHAT_MEMORY_LIMIT
+    ? messages.slice(-CHAT_MEMORY_LIMIT)
     : messages;
   rebuildMessageIndexes();
   const messageIds = new Set(state.messages.map((message) => message.id));
@@ -402,7 +404,7 @@ function setChatMessages(messages) {
 }
 
 function trimChatMessageHistory() {
-  const overflow = state.messages.length - CHAT_MESSAGE_MEMORY_LIMIT;
+  const overflow = state.messages.length - CHAT_MEMORY_LIMIT;
   if (overflow <= 0) return 0;
   const removedMessages = state.messages.splice(0, overflow);
   for (const message of removedMessages) {
@@ -653,7 +655,7 @@ async function loadChatMessages({ markRead = true, scrollToBottom = false, aroun
     const aroundQuery = aroundMessageId ? `&around=${encodeURIComponent(aroundMessageId)}` : "";
     const payload = await requestAction(
       "messages.load",
-      `/messages?room_id=${encodeURIComponent(roomId)}&limit=${CHAT_MESSAGE_PAGE_SIZE}${aroundQuery}`,
+      `/messages?room_id=${encodeURIComponent(roomId)}&limit=${CHAT_HISTORY_PAGE_SIZE}${aroundQuery}`,
       { signal: controller.signal },
     );
     if (state.selectedRoomId !== roomId || state.messagesLoadEpoch !== loadEpoch) return;

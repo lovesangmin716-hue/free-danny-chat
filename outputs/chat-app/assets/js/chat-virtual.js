@@ -1,6 +1,10 @@
 "use strict";
 
 // Variable-height message measurements and virtual scroll range calculations.
+const CHAT_VIRTUAL_OVERSCAN = typeof CHAT_MESSAGE_VIRTUAL_OVERSCAN_PX === "number" ? CHAT_MESSAGE_VIRTUAL_OVERSCAN_PX : 640;
+const CHAT_VIRTUAL_ESTIMATE = typeof CHAT_MESSAGE_ESTIMATED_HEIGHT === "number" ? CHAT_MESSAGE_ESTIMATED_HEIGHT : 72;
+const CHAT_VIRTUAL_GAP = typeof CHAT_MESSAGE_ROW_GAP === "number" ? CHAT_MESSAGE_ROW_GAP : 9;
+
 function estimatedChatMessageHeight(message) {
   const text = String(message?.text || "");
   const visualLines = text.split("\n").reduce(
@@ -10,8 +14,8 @@ function estimatedChatMessageHeight(message) {
   const textHeight = Math.min(8, Math.max(1, visualLines)) * 20;
   const attachmentHeight = message?.attachment?.type?.startsWith("image/") ? 190 : (message?.attachment ? 48 : 0);
   return Math.max(
-    CHAT_MESSAGE_ESTIMATED_HEIGHT,
-    42 + textHeight + attachmentHeight + CHAT_MESSAGE_ROW_GAP,
+    CHAT_VIRTUAL_ESTIMATE,
+    42 + textHeight + attachmentHeight + CHAT_VIRTUAL_GAP,
   );
 }
 
@@ -46,8 +50,8 @@ function chatVirtualRange({ scrollToBottom = false } = {}) {
   const scrollTop = scrollToBottom
     ? Math.max(0, totalHeight - viewportHeight)
     : chatMessageList.scrollTop;
-  const startOffset = Math.max(0, scrollTop - CHAT_MESSAGE_VIRTUAL_OVERSCAN_PX);
-  const endOffset = Math.min(totalHeight, scrollTop + viewportHeight + CHAT_MESSAGE_VIRTUAL_OVERSCAN_PX);
+  const startOffset = Math.max(0, scrollTop - CHAT_VIRTUAL_OVERSCAN);
+  const endOffset = Math.min(totalHeight, scrollTop + viewportHeight + CHAT_VIRTUAL_OVERSCAN);
   const start = chatVirtualIndexAtOffset(offsets, startOffset);
   const end = Math.min(
     state.messages.length,
@@ -84,8 +88,8 @@ function measureRenderedChatMessages() {
   let changed = false;
   for (const [messageId, row] of state.messageNodes) {
     if (!row.isConnected) continue;
-    const height = Math.ceil(row.getBoundingClientRect().height) + CHAT_MESSAGE_ROW_GAP;
-    if (height <= CHAT_MESSAGE_ROW_GAP || state.messageHeights.get(messageId) === height) continue;
+    const height = Math.ceil(row.getBoundingClientRect().height) + CHAT_VIRTUAL_GAP;
+    if (height <= CHAT_VIRTUAL_GAP || state.messageHeights.get(messageId) === height) continue;
     state.messageHeights.set(messageId, height);
     changed = true;
   }

@@ -1,6 +1,8 @@
 "use strict";
 
 // Application orchestration and feature-level state transitions.
+const APP_CHAT_PAGE_SIZE = typeof CHAT_MESSAGE_PAGE_SIZE === "number" ? CHAT_MESSAGE_PAGE_SIZE : 30;
+
 function renderMessenger() {
   const user = state.messenger.user || state.session?.user;
   appScreen.classList.remove("guest-mode");
@@ -244,7 +246,7 @@ async function loadOlderChatMessages() {
   try {
     const payload = await requestAction(
       "messages.load-older",
-      `/messages?room_id=${encodeURIComponent(roomId)}&limit=${CHAT_MESSAGE_PAGE_SIZE}&before=${encodeURIComponent(cursor)}`,
+      `/messages?room_id=${encodeURIComponent(roomId)}&limit=${APP_CHAT_PAGE_SIZE}&before=${encodeURIComponent(cursor)}`,
       { signal: controller.signal },
     );
     if (state.selectedRoomId !== roomId || state.messagesNextCursor !== cursor) return;
