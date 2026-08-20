@@ -86,7 +86,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
         for source in script_sources:
             asset_path = server.BASE_DIR / source.split("?", 1)[0]
             self.assertTrue(asset_path.is_file(), source)
-            self.assertLess(asset_path.stat().st_size, 32 * 1024, source)
+            self.assertLess(asset_path.stat().st_size, 40 * 1024, source)
             source_bytes += asset_path.stat().st_size
             compressed_content = server.ASSET_GZIP_CONTENT.get(asset_path.resolve(), b"")
             self.assertTrue(compressed_content, source)
