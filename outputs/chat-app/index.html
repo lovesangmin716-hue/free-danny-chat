@@ -14,15 +14,15 @@
     <script defer src="assets/js/platform/image-processing.js?v=c3632b3197bf"></script>
     <script defer src="assets/js/core.js?v=fd7b68986259"></script>
     <script defer src="assets/js/profile.js?v=94132f3ffcbb"></script>
-    <script defer src="assets/js/messenger.js?v=dd91338428e7"></script>
+    <script defer src="assets/js/messenger.js?v=0a09ef9a97c3"></script>
     <script defer src="assets/js/attachments.js?v=0c018e271851"></script>
     <script defer src="assets/js/room-settings.js?v=d602bb96b2da"></script>
-    <script defer src="assets/js/chat.js?v=f943674aacd5"></script>
+    <script defer src="assets/js/chat.js?v=0b115352101f"></script>
     <script defer src="assets/js/shorts.js?v=0b732c851324"></script>
     <script defer src="assets/js/action-bar.js?v=021a9bcbe046"></script>
     <script defer src="assets/js/app.js?v=eb8c4ed27a7a"></script>
     <script defer src="assets/js/auth.js?v=84a7ef3fc787"></script>
-    <script defer src="assets/js/bootstrap.js?v=bc26af70b9a1"></script>
+    <script defer src="assets/js/bootstrap.js?v=23579666331e"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -601,14 +601,15 @@
       .room-leave-button { background: var(--white); color: #b00020; width: 100%; }
       .chat-message-list { bottom: 0; display: flex; flex-direction: column; gap: 9px; left: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 18px 18px calc(96px + var(--keyboard-inset, 0px)); position: absolute; right: 0; top: var(--chat-header-height); -webkit-overflow-scrolling: touch; }
       .chat-empty { color: var(--gray); margin: auto; text-align: center; }
-      .message-row { display: flex; flex-direction: column; gap: 3px; max-width: 82%; }
+      .message-row { display: flex; flex-direction: column; gap: 3px; max-width: 82%; touch-action: pan-y; }
       .message-row.mine { align-self: flex-end; align-items: flex-end; }
       .message-row.theirs { align-self: flex-start; }
       .message-row.pending .message-bubble { opacity: 0.72; }
       .message-row.failed .message-bubble { border-style: dashed; }
-      .message-sender { color: var(--gray); display: block; font-size: 11px; margin-bottom: 4px; }
-      .message-bubble { background: #f1f1f1; border: 1px solid var(--black); line-height: 1.45; padding: 10px 12px; white-space: pre-wrap; word-break: break-word; }
+      .message-sender { color: var(--gray); font-size: 11px; font-weight: 700; }
+      .message-bubble { background: #f1f1f1; border: 1px solid var(--black); line-height: 1.45; padding: 10px 12px; transition: transform 90ms ease-out; white-space: pre-wrap; word-break: break-word; }
       .message-row.mine .message-bubble { background: var(--black); color: var(--white); }
+      .message-row.showing-readers .message-bubble { transform: translateX(-8px); }
       .message-attachment { display: grid; gap: 8px; }
       .message-image { display: block; height: auto; max-height: 300px; max-width: 100%; object-fit: contain; }
       .message-file { align-items: center; color: inherit; display: flex; font-weight: 700; gap: 8px; text-decoration: underline; }
@@ -633,9 +634,10 @@
       .chat-attachment-input { height: 1px; opacity: 0; pointer-events: none; position: absolute; width: 1px; }
       .chat-attachment-button.swiping { background: var(--black); color: var(--white); }
       .message-meta { color: var(--gray); display: flex; font-size: 11px; gap: 6px; }
+      .message-meta.message-meta-empty { display: none; }
       .message-read { color: var(--black); font-weight: 700; }
       .message-unread { color: var(--gray); font-weight: 700; }
-      .message-read-menu { background: var(--white); border: 1px solid var(--black); box-shadow: 0 12px 30px rgba(0, 0, 0, .16); max-width: min(320px, calc(100vw - 16px)); min-width: 210px; padding: 12px; position: fixed; z-index: 60; }
+      .message-read-menu { background: var(--white); border: 1px solid var(--black); box-shadow: 0 12px 30px rgba(0, 0, 0, .16); max-width: min(320px, calc(100vw - 16px)); min-width: 210px; padding: 12px; pointer-events: none; position: fixed; z-index: 60; }
       .message-read-menu strong { display: block; font-size: 13px; margin-bottom: 8px; }
       .message-read-menu p { color: var(--gray); font-size: 12px; line-height: 1.5; margin: 0; overflow-wrap: anywhere; }
       .chat-message-form { background: var(--white); border-top: 1px solid var(--black); bottom: var(--keyboard-inset, 0px); display: grid; gap: 8px; grid-template-columns: auto minmax(0, 1fr) auto; left: 0; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); position: absolute; right: 0; z-index: 10; }
@@ -901,7 +903,7 @@
           <input id="chat-message-input" maxlength="300" autocomplete="off" placeholder="메시지 입력" />
           <button type="submit" data-icon="send" data-icon-only aria-label="메시지 보내기">보내기</button>
         </form>
-        <div class="message-read-menu hidden" id="message-read-menu" role="dialog" aria-label="읽음 상태">
+        <div class="message-read-menu hidden" id="message-read-menu" role="status" aria-live="polite" aria-hidden="true">
           <strong id="message-read-menu-title">읽음 상태</strong>
           <p id="message-read-menu-copy"></p>
         </div>

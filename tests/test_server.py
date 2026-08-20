@@ -168,22 +168,27 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('chatRoom.addEventListener("paste", handlePastedChatAttachment)', bootstrap_script)
         self.assertNotIn('chatMessageInput.addEventListener("paste"', bootstrap_script)
 
-    def test_group_unread_names_are_only_shown_from_message_context_menu(self) -> None:
+    def test_message_readers_are_shown_only_during_left_swipe(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
         messenger_script = (server.ASSETS_DIR / "js" / "messenger.js").read_text(encoding="utf-8")
         bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
 
         self.assertIn('id="message-read-menu"', index_html)
-        self.assertIn("function showMessageReadMenuFromContext(event)", chat_script)
-        self.assertIn('unreadNames.join(", ")', chat_script)
-        self.assertIn("reader.username !== payload.username", messenger_script)
+        self.assertIn("function beginMessageReadSwipe(event)", chat_script)
+        self.assertIn("function updateMessageReadSwipe(event)", chat_script)
+        self.assertIn("function finishMessageReadSwipe(event)", chat_script)
+        self.assertIn("const readNames = (message.read_by || [])", chat_script)
+        self.assertIn('applyMessageReaderToCurrentMessages(payload.username, "realtime.room-read")', messenger_script)
+        self.assertIn("function applyMessageReaderToCurrentMessages", chat_script)
+        self.assertIn('chatMessageList.addEventListener("pointerdown", beginMessageReadSwipe)', bootstrap_script)
+        self.assertIn('chatMessageList.addEventListener("pointermove", updateMessageReadSwipe)', bootstrap_script)
+        self.assertIn('chatMessageList.addEventListener("pointerup", finishMessageReadSwipe)', bootstrap_script)
+        self.assertNotIn("showMessageReadMenuFromContext", chat_script)
         self.assertNotRegex(
             messenger_script,
             r'if \(currentRoom\(\)\?\.kind === "group"\) \{\s+void loadChatMessages',
         )
-        self.assertNotIn('`안 읽음: ${unreadNames.join', chat_script)
-        self.assertIn('chatMessageList.addEventListener("contextmenu", showMessageReadMenuFromContext)', bootstrap_script)
 
     def test_signup_is_a_separate_responsive_document(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -336,6 +341,8 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("const MESSAGE_TIME_CLUSTER_MS = 5 * 60 * 1000", chat_script)
         self.assertIn("nextMessage.username !== message.username", chat_script)
         self.assertIn("nextTimestamp - timestamp > MESSAGE_TIME_CLUSTER_MS", chat_script)
+        self.assertIn('sender.textContent = messageSenderDisplayName(room, message)', chat_script)
+        self.assertIn('row.querySelector(".message-sender")?.classList.toggle', chat_script)
         self.assertIn("syncMessageTimeVisibility(state.messages.length - 2)", chat_script)
 
     def test_supabase_requests_use_persistent_connection_pools(self) -> None:
@@ -2127,6 +2134,13 @@ class StateStoreTestCase(unittest.TestCase):
         _, changed_again = self.store.mark_room_read(self.room_id, "alice")
         self.assertFalse(changed_again)
 
+        received_messages = self.store.get_messages(self.room_id, "alice") or []
+        self.assertEqual(
+            [reader["username"] for reader in received_messages[-1]["read_by"]],
+            ["alice"],
+        )
+        self.assertNotIn("unread_by", received_messages[-1])
+
     def test_group_room_requires_friends_and_enforces_membership(self) -> None:
         group, error = self.store.create_group_room(
             "alice",
@@ -2182,13 +2196,27 @@ class StateStoreTestCase(unittest.TestCase):
         alice_messages = self.store.get_messages(group["id"], "alice") or []
         self.assertFalse(alice_messages[-1]["read"])
         self.assertEqual(
+            [reader["username"] for reader in alice_messages[-1]["read_by"]],
+            ["bob"],
+        )
+        self.assertEqual(
             [reader["username"] for reader in alice_messages[-1]["unread_by"]],
             ["eve"],
         )
+        bob_messages = self.store.get_messages(group["id"], "bob") or []
+        self.assertEqual(
+            [reader["username"] for reader in bob_messages[-1]["read_by"]],
+            ["bob"],
+        )
+        self.assertNotIn("unread_by", bob_messages[-1])
 
         self.store.mark_room_read(group["id"], "eve")
         alice_messages = self.store.get_messages(group["id"], "alice") or []
         self.assertTrue(alice_messages[-1]["read"])
+        self.assertEqual(
+            {reader["username"] for reader in alice_messages[-1]["read_by"]},
+            {"bob", "eve"},
+        )
         self.assertEqual(alice_messages[-1]["unread_by"], [])
 
     def test_group_settings_and_leave_revoke_access_and_transfer_owner(self) -> None:

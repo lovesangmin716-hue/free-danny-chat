@@ -2986,65 +2986,59 @@ class StateStore:
         *,
         all_messages: list[dict] | None = None,
     ) -> list[dict]:
-        reader_ids: list[str] = []
-        if room.get("kind") == "direct":
-            reader_id = next(
-                (user_id for user_id in room.get("participant_ids", []) if user_id != user["id"]),
-                "",
-            )
-            if reader_id:
-                reader_ids.append(reader_id)
-        elif room.get("kind") == "group":
-            reader_ids = [
-                user_id
-                for user_id in room.get("participant_ids", [])
-                if user_id != user["id"]
-            ]
-
         if all_messages is None:
             all_messages = self._room_messages_locked(room["id"])
         message_positions = {
             message["id"]: index
             for index, message in enumerate(all_messages)
         }
+        participant_ids = list(room.get("participant_ids", []))
         reader_positions: dict[str, int] = {}
         last_read_by = room.get("last_read_by", {})
-        for reader_id in reader_ids:
+        for reader_id in participant_ids:
             reader_positions[reader_id] = message_positions.get(
                 str(last_read_by.get(reader_id, "")),
                 -1,
             )
 
-        read_message_ids: set[str] = set()
-        if room.get("kind") == "group" and not reader_ids:
-            read_message_ids = {message["id"] for message in all_messages}
-        elif reader_ids and all_messages:
-            if all(position >= 0 for position in reader_positions.values()):
-                read_through_index = min(reader_positions.values())
-                read_message_ids = {
-                    message["id"]
-                    for message in all_messages[:read_through_index + 1]
-                }
-
         response_messages: list[dict] = []
         for message in messages:
             mine = message.get("username") == user["username"]
+            sender = self._users_by_username.get(str(message.get("username", "")))
+            sender_id = str(sender.get("id", "")) if sender is not None else ""
+            message_position = message_positions.get(str(message.get("id")), -1)
+            eligible_reader_ids = [
+                reader_id
+                for reader_id in participant_ids
+                if reader_id != sender_id
+            ]
+            read_by = [
+                {
+                    "id": reader["id"],
+                    "username": reader["username"],
+                    "display_name": reader.get("display_name") or reader["username"],
+                }
+                for reader_id in eligible_reader_ids
+                if reader_positions.get(reader_id, -1) >= message_position >= 0
+                if (reader := self._users_by_id.get(reader_id)) is not None
+            ]
+            unread_by = [
+                {
+                    "id": reader["id"],
+                    "username": reader["username"],
+                    "display_name": reader.get("display_name") or reader["username"],
+                }
+                for reader_id in eligible_reader_ids
+                if reader_positions.get(reader_id, -1) < message_position or message_position < 0
+                if (reader := self._users_by_id.get(reader_id)) is not None
+            ]
             response_message = {
                 **message,
-                "read": mine and message.get("id") in read_message_ids,
+                "read": mine and not unread_by,
+                "read_by": read_by,
             }
-            if room.get("kind") == "group" and mine:
-                message_position = message_positions.get(str(message.get("id")), -1)
-                response_message["unread_by"] = [
-                    {
-                        "id": reader["id"],
-                        "username": reader["username"],
-                        "display_name": reader.get("display_name") or reader["username"],
-                    }
-                    for reader_id in reader_ids
-                    if reader_positions.get(reader_id, -1) < message_position
-                    if (reader := self._users_by_id.get(reader_id)) is not None
-                ]
+            if mine:
+                response_message["unread_by"] = unread_by
             response_messages.append(response_message)
         return response_messages
 
@@ -3113,22 +3107,27 @@ class StateStore:
                 if user_id != user["id"]
             ]
             last_read_by = room.get("last_read_by", {})
-            if room.get("kind") == "group":
-                response_message["unread_by"] = [
-                    {
-                        "id": reader["id"],
-                        "username": reader["username"],
-                        "display_name": reader.get("display_name") or reader["username"],
-                    }
-                    for reader_id in reader_ids
-                    if str(last_read_by.get(reader_id, "")) != str(message.get("id", ""))
-                    if (reader := self._users_by_id.get(reader_id)) is not None
-                ]
-                response_message["read"] = not response_message["unread_by"]
-            elif room.get("kind") == "direct" and reader_ids:
-                response_message["read"] = (
-                    str(last_read_by.get(reader_ids[0], "")) == str(message.get("id", ""))
-                )
+            response_message["read_by"] = [
+                {
+                    "id": reader["id"],
+                    "username": reader["username"],
+                    "display_name": reader.get("display_name") or reader["username"],
+                }
+                for reader_id in reader_ids
+                if str(last_read_by.get(reader_id, "")) == str(message.get("id", ""))
+                if (reader := self._users_by_id.get(reader_id)) is not None
+            ]
+            response_message["unread_by"] = [
+                {
+                    "id": reader["id"],
+                    "username": reader["username"],
+                    "display_name": reader.get("display_name") or reader["username"],
+                }
+                for reader_id in reader_ids
+                if str(last_read_by.get(reader_id, "")) != str(message.get("id", ""))
+                if (reader := self._users_by_id.get(reader_id)) is not None
+            ]
+            response_message["read"] = not response_message["unread_by"]
             return response_message
 
     def mark_room_read(self, room_id: str, username: str) -> tuple[dict | None, bool]:

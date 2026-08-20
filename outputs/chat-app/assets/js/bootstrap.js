@@ -52,10 +52,16 @@ roomSettingsSheet.addEventListener("click", (event) => {
 });
 chatMessageForm.addEventListener("submit", sendChatMessage);
 chatMessageList.addEventListener("scroll", () => {
-  closeMessageReadMenu();
+  finishMessageReadSwipe();
   if (chatMessageList.scrollTop < 80) void loadOlderChatMessages();
 }, { passive: true });
-chatMessageList.addEventListener("contextmenu", showMessageReadMenuFromContext);
+chatMessageList.addEventListener("pointerdown", beginMessageReadSwipe);
+chatMessageList.addEventListener("pointermove", updateMessageReadSwipe);
+chatMessageList.addEventListener("pointerup", finishMessageReadSwipe);
+chatMessageList.addEventListener("pointercancel", finishMessageReadSwipe);
+chatMessageList.addEventListener("lostpointercapture", finishMessageReadSwipe);
+chatMessageList.addEventListener("contextmenu", suppressMessageReadContextMenu);
+chatMessageList.addEventListener("click", suppressClickAfterMessageSwipe, true);
 document.addEventListener("click", (event) => {
   if (!messageReadMenu.contains(event.target)) closeMessageReadMenu();
 });

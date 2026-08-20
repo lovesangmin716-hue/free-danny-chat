@@ -2,6 +2,9 @@
 
 // Message state, incremental rendering, pagination, retries, and sending.
 const MESSAGE_TIME_CLUSTER_MS = 5 * 60 * 1000;
+const MESSAGE_READ_SWIPE_THRESHOLD = 34;
+let messageReadSwipe = null;
+let suppressMessageClick = false;
 
 function shouldShowMessageTime(message, nextMessage) {
   if (!nextMessage || nextMessage.username !== message.username) return true;
@@ -9,6 +12,84 @@ function shouldShowMessageTime(message, nextMessage) {
   const nextTimestamp = Date.parse(nextMessage.timestamp);
   if (!Number.isFinite(timestamp) || !Number.isFinite(nextTimestamp) || nextTimestamp < timestamp) return true;
   return nextTimestamp - timestamp > MESSAGE_TIME_CLUSTER_MS;
+}
+
+function messageSenderDisplayName(room, message) {
+  if (message.username === state.messenger.user?.username) {
+    return state.messenger.user?.display_name || state.messenger.user?.username || message.username;
+  }
+  if (room?.peer?.username === message.username) {
+    return room.peer.display_name || room.peer.username;
+  }
+  return roomParticipantDisplayName(room, message.username);
+}
+
+function roomReadParticipants(room) {
+  const participants = [
+    state.messenger.user,
+    room?.peer,
+    ...(room?.participants || []),
+  ];
+  const unique = new Map();
+  for (const participant of participants) {
+    if (participant?.username && !unique.has(participant.username)) {
+      unique.set(participant.username, {
+        id: participant.id || "",
+        username: participant.username,
+        display_name: participant.display_name || participant.username,
+      });
+    }
+  }
+  return [...unique.values()];
+}
+
+function addMessageReader(message, username, room = currentRoom()) {
+  if (!message || !username || username === message.username) return message;
+  const existingReaders = Array.isArray(message.read_by) ? message.read_by : [];
+  if (existingReaders.some((reader) => reader.username === username)) return message;
+  const reader = roomReadParticipants(room).find((candidate) => candidate.username === username) || {
+    id: "",
+    username,
+    display_name: username,
+  };
+  const readBy = [...existingReaders, reader];
+  const eligibleReaders = roomReadParticipants(room).filter(
+    (candidate) => candidate.username !== message.username,
+  );
+  const unreadSource = Array.isArray(message.unread_by) ? message.unread_by : eligibleReaders;
+  const unreadBy = unreadSource.filter((candidate) => candidate.username !== username);
+  return {
+    ...message,
+    read_by: readBy,
+    unread_by: unreadBy,
+    read: message.username === state.messenger.user?.username ? unreadBy.length === 0 : Boolean(message.read),
+  };
+}
+
+function applyMessageReaderToCurrentMessages(username, transactionName = "messages.reader") {
+  const changedMessages = [];
+  appStore.transact(transactionName, () => {
+    for (let index = 0; index < state.messages.length; index += 1) {
+      const message = state.messages[index];
+      if (message.username === username) continue;
+      const readMessage = addMessageReader(message, username);
+      if (readMessage === message) continue;
+      state.messages[index] = readMessage;
+      changedMessages.push([message.id, readMessage]);
+    }
+    if (changedMessages.length) state.messageRevision += 1;
+  });
+  for (const [messageId, message] of changedMessages) replaceChatMessageNode(messageId, message);
+}
+
+function setMessageGroupMetaVisibility(row, message, nextMessage) {
+  const showGroupMeta = shouldShowMessageTime(message, nextMessage);
+  row.querySelector("time")?.classList.toggle("hidden", !showGroupMeta);
+  row.querySelector(".message-sender")?.classList.toggle("hidden", !showGroupMeta);
+  row.querySelector(".message-meta")?.classList.toggle(
+    "message-meta-empty",
+    !showGroupMeta && message.username !== state.messenger.user?.username,
+  );
 }
 
 function createChatMessageRow(message, nextMessage = null) {
@@ -19,12 +100,6 @@ function createChatMessageRow(message, nextMessage = null) {
   const bubble = document.createElement("div");
   bubble.className = "message-bubble";
   const room = currentRoom();
-  if (!mine && room?.kind === "group") {
-    const sender = document.createElement("strong");
-    sender.className = "message-sender";
-    sender.textContent = roomParticipantDisplayName(room, message.username);
-    bubble.appendChild(sender);
-  }
   if (message.attachment?.url) {
     const attachment = message.attachment;
     const attachmentLink = document.createElement("a");
@@ -66,11 +141,15 @@ function createChatMessageRow(message, nextMessage = null) {
     }
     meta.appendChild(read);
   }
+  const sender = document.createElement("strong");
+  sender.className = "message-sender";
+  sender.textContent = messageSenderDisplayName(room, message);
+  meta.appendChild(sender);
   const time = document.createElement("time");
   time.textContent = formatTime(message.timestamp);
-  time.classList.toggle("hidden", !shouldShowMessageTime(message, nextMessage));
   meta.appendChild(time);
   row.append(bubble, meta);
+  setMessageGroupMetaVisibility(row, message, nextMessage);
   return row;
 }
 
@@ -78,38 +157,84 @@ function syncMessageTimeVisibility(messageIndex) {
   if (!Number.isInteger(messageIndex) || messageIndex < 0 || messageIndex >= state.messages.length) return;
   const message = state.messages[messageIndex];
   const row = state.messageNodes.get(message.id);
-  const time = row?.querySelector("time");
-  if (!time) return;
-  time.classList.toggle("hidden", !shouldShowMessageTime(message, state.messages[messageIndex + 1]));
+  if (!row) return;
+  setMessageGroupMetaVisibility(row, message, state.messages[messageIndex + 1]);
 }
 
 function closeMessageReadMenu() {
   messageReadMenu.classList.add("hidden");
+  messageReadMenu.setAttribute("aria-hidden", "true");
 }
 
-function openMessageReadMenu(message, clientX, clientY) {
-  const unreadNames = (message.unread_by || [])
+function openMessageReadMenu(message, row) {
+  const readNames = (message.read_by || [])
     .map((reader) => reader.display_name || reader.username)
     .filter(Boolean);
-  messageReadMenuTitle.textContent = message.read ? "모두 읽음" : "아직 읽지 않음";
-  messageReadMenuCopy.textContent = unreadNames.length
-    ? unreadNames.join(", ")
-    : (message.read ? "모든 참여자가 이 메시지를 읽었어요." : "읽음 정보를 불러오는 중이에요.");
+  messageReadMenuTitle.textContent = `읽은 사람 ${readNames.length}명`;
+  messageReadMenuCopy.textContent = readNames.length
+    ? readNames.join(", ")
+    : "아직 읽은 사람이 없어요.";
   messageReadMenu.classList.remove("hidden");
+  messageReadMenu.setAttribute("aria-hidden", "false");
   const width = messageReadMenu.offsetWidth;
   const height = messageReadMenu.offsetHeight;
-  messageReadMenu.style.left = `${Math.max(8, Math.min(clientX, window.innerWidth - width - 8))}px`;
-  messageReadMenu.style.top = `${Math.max(8, Math.min(clientY, window.innerHeight - height - 8))}px`;
+  const rect = row.getBoundingClientRect();
+  const preferredLeft = row.classList.contains("mine") ? rect.left - width - 10 : rect.right + 10;
+  messageReadMenu.style.left = `${Math.max(8, Math.min(preferredLeft, window.innerWidth - width - 8))}px`;
+  messageReadMenu.style.top = `${Math.max(8, Math.min(rect.top + ((rect.height - height) / 2), window.innerHeight - height - 8))}px`;
 }
 
-function showMessageReadMenuFromContext(event) {
-  const row = event.target.closest?.(".message-row.mine");
-  const room = currentRoom();
-  if (!row || room?.kind !== "group") return;
+function beginMessageReadSwipe(event) {
+  if (event.button !== undefined && event.button !== 0) return;
+  const row = event.target.closest?.(".message-row");
+  if (!row || !currentRoom()) return;
   const message = state.messages[state.messageIndexes.get(row.dataset.messageId)];
   if (!message || message.pending || message.failed) return;
+  closeMessageReadMenu();
+  messageReadSwipe = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    message,
+    row,
+    revealed: false,
+  };
+  row.setPointerCapture?.(event.pointerId);
+}
+
+function updateMessageReadSwipe(event) {
+  const swipe = messageReadSwipe;
+  if (!swipe || swipe.pointerId !== event.pointerId || swipe.revealed) return;
+  const deltaX = event.clientX - swipe.startX;
+  const deltaY = event.clientY - swipe.startY;
+  if (deltaX > -MESSAGE_READ_SWIPE_THRESHOLD || Math.abs(deltaX) <= Math.abs(deltaY) * 1.15) return;
   event.preventDefault();
-  openMessageReadMenu(message, event.clientX, event.clientY);
+  swipe.revealed = true;
+  swipe.row.classList.add("showing-readers");
+  openMessageReadMenu(swipe.message, swipe.row);
+}
+
+function finishMessageReadSwipe(event) {
+  const swipe = messageReadSwipe;
+  if (!swipe || (event?.pointerId !== undefined && swipe.pointerId !== event.pointerId)) return;
+  if (swipe.revealed) {
+    suppressMessageClick = true;
+    window.setTimeout(() => { suppressMessageClick = false; }, 0);
+  }
+  messageReadSwipe = null;
+  swipe.row.classList.remove("showing-readers");
+  if (swipe.row.hasPointerCapture?.(swipe.pointerId)) swipe.row.releasePointerCapture(swipe.pointerId);
+  closeMessageReadMenu();
+}
+
+function suppressMessageReadContextMenu(event) {
+  if (event.target.closest?.(".message-row")) event.preventDefault();
+}
+
+function suppressClickAfterMessageSwipe(event) {
+  if (!suppressMessageClick) return;
+  event.preventDefault();
+  event.stopPropagation();
 }
 
 function rebuildMessageIndexes() {
@@ -283,6 +408,10 @@ async function loadChatMessages({ markRead = true, scrollToBottom = false } = {}
       void api("/rooms/read", {
         method: "POST",
         body: JSON.stringify({ roomId }),
+      }).then(() => {
+        if (state.selectedRoomId === roomId) {
+          applyMessageReaderToCurrentMessages(state.messenger.user?.username, "messages.mark-read");
+        }
       }).catch(() => {});
     }
   } catch (error) {

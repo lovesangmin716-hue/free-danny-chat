@@ -258,13 +258,22 @@ function registerRealtimeHandlers() {
       room = upsertMessengerRoom(payload.room);
       state.lastSeenRoomMessageIds[payload.roomId] = payload.message?.id || "";
       if (payload.roomId === state.selectedRoomId && payload.message?.id) {
-        if (appendChatMessageState(payload.message)) appendChatMessageNode(payload.message, true);
+        const visibleMessage = addMessageReader(
+          payload.message,
+          state.messenger.user?.username,
+          room,
+        );
+        if (appendChatMessageState(visibleMessage)) appendChatMessageNode(visibleMessage, true);
       }
     }, { event: payload.type });
     if (payload.roomId === state.selectedRoomId && payload.message?.id) {
       void requestAction("rooms.mark-read", "/rooms/read", {
         method: "POST",
         body: JSON.stringify({ roomId: payload.roomId }),
+      }).then(() => {
+        if (state.selectedRoomId === payload.roomId) {
+          applyMessageReaderToCurrentMessages(state.messenger.user?.username, "messages.mark-read");
+        }
       }).catch(() => {});
     } else if (!isShortsView) {
       renderChats();
@@ -274,30 +283,8 @@ function registerRealtimeHandlers() {
   });
   realtimeEvents.register("room_read", (payload) => {
     recordSyncRevision(payload.revision);
-    if (payload.username === state.messenger.user?.username || payload.roomId !== state.selectedRoomId) return;
-    const isGroup = currentRoom()?.kind === "group";
-    const changedMessages = [];
-    appStore.transact("realtime.room-read", () => {
-      for (let index = 0; index < state.messages.length; index += 1) {
-        const message = state.messages[index];
-        if (message.username !== state.messenger.user?.username || message.read) continue;
-        let readMessage;
-        if (isGroup) {
-          if (!Array.isArray(message.unread_by)) continue;
-          const unreadBy = message.unread_by.filter(
-            (reader) => reader.username !== payload.username,
-          );
-          if (unreadBy.length === message.unread_by.length) continue;
-          readMessage = { ...message, unread_by: unreadBy, read: unreadBy.length === 0 };
-        } else {
-          readMessage = { ...message, read: true };
-        }
-        state.messages[index] = readMessage;
-        changedMessages.push([message.id, readMessage]);
-      }
-      if (changedMessages.length) state.messageRevision += 1;
-    }, { event: payload.type });
-    for (const [messageId, message] of changedMessages) replaceChatMessageNode(messageId, message);
+    if (payload.roomId !== state.selectedRoomId) return;
+    applyMessageReaderToCurrentMessages(payload.username, "realtime.room-read");
   });
   realtimeEvents.register("room_updated", (payload, { isShortsView }) => {
     recordSyncRevision(payload.revision);
