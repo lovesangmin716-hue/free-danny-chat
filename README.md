@@ -95,6 +95,7 @@ cp .env.example .env
 | `SUPABASE_URL` | 미설정 | Supabase 프로젝트 URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | 미설정 | 서버 전용 Supabase service role key |
 | `REQUIRE_SUPABASE` | `false` | `true`이면 Supabase 설정이 없을 때 서버 시작을 중단해 임시 파일 저장을 방지 |
+| `LOCAL_SIGNUP_ENABLED` | `true` | 신규 로컬 회원가입과 휴대폰 인증 API 노출 여부. SMS 발송 연동 전 운영에서는 `false` |
 
 `SUPABASE_URL`과 `SUPABASE_SERVICE_ROLE_KEY`를 모두 설정하면 Supabase와 private `chat-uploads` 버킷을 사용합니다. 브라우저는 객체 하나에 한정된 signed upload URL로 저장소에 직접 전송하고, 서버는 크기·MIME·magic bytes를 확인한 뒤에만 메시지 첨부를 허용합니다. 다운로드는 방 접근 권한을 확인한 뒤 기본 60초 signed URL로 redirect하므로 정상 파일 바이트는 앱 서버를 지나지 않습니다. Supabase signed upload token 자체의 유효기간은 플랫폼이 정한 2시간이며, 앱의 pending grant는 기본 10분 뒤 만료되어 첨부에 사용할 수 없습니다. 최신 [`src/colorless/database/supabase-schema.sql`](src/colorless/database/supabase-schema.sql)은 사용자·관계·방·멤버·메시지·읽음 위치·세션·Shorts 상태의 정규화 테이블과 필수 제약/인덱스를 생성하며, 전환 검증과 rollback 동안 기존 `app_state`도 보존합니다.
 
@@ -176,20 +177,30 @@ http://localhost:8765/auth/kakao/callback
 SOCIAL_DEMO_LOGIN_ENABLED=false
 ```
 
-현재 저장소에는 SMS 발송 연동이 없습니다. `PHONE_VERIFICATION_MODE=prod`로 바꾸면 인증번호를 화면에서 숨기지만 문자를 보내지는 않으므로, 실제 배포 전에 SMS 공급자 연동이 필요합니다.
+현재 저장소에는 SMS 발송 연동이 없습니다. `PHONE_VERIFICATION_MODE=prod`로 바꾸면 인증번호를 화면에서 숨기지만 문자를 보내지는 않습니다. 그래서 Render 기본 설정은 `LOCAL_SIGNUP_ENABLED=false`로 신규 로컬 회원가입을 닫고 OAuth와 기존 로컬 계정 로그인만 허용합니다. SMS 공급자를 연동한 뒤에만 이 값을 `true`로 바꾸세요.
 
 ## Render 배포
 
 루트의 [`render.yaml`](render.yaml)은 저장소 루트에서 `colorless` 패키지를 설치합니다.
 
-1. 이 저장소를 GitHub에 푸시합니다.
-2. Render에서 새 Blueprint를 만들고 저장소를 연결합니다.
-3. Blueprint 생성 화면에서 `PUBLIC_BASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`와 사용할 Google/Kakao 로그인 자격 증명을 등록합니다.
-4. 배포된 도메인을 Google과 Kakao의 승인된 원본 및 리디렉션 URI에 추가합니다.
+1. Supabase 백업과 `app_state` 내보내기를 만든 뒤 최신 [`src/colorless/database/supabase-schema.sql`](src/colorless/database/supabase-schema.sql)을 먼저 적용합니다. 이 단계가 기존 사용자에서 계정과 첫 번째 아이덴티티를 분리하고 세션을 보강합니다.
+2. `python tests/deploy_preflight.py`로 소스·Blueprint·스키마 필수 항목을 확인한 뒤 이 저장소를 GitHub에 푸시합니다.
+3. Render에서 새 Blueprint를 만들고 저장소를 연결합니다.
+4. Blueprint 생성 화면에서 `PUBLIC_BASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`와 사용할 Google/Kakao 로그인 자격 증명을 등록합니다.
+5. 같은 운영 환경 변수로 `python tests/deploy_preflight.py --environment --remote`를 실행하고, 배포된 도메인을 Google과 Kakao의 승인된 원본 및 리디렉션 URI에 추가합니다.
+6. 배포 후 `/live`와 `/ready`가 모두 200인지 확인하고 아래 SQL 결과가 각각 0행/0건인지 확인합니다.
 
-Render는 Node.js 22로 프런트엔드를 빌드해 asset fingerprint를 갱신한 다음 Python 3.12 패키지와 웹 산출물을 함께 설치하고 `python -m colorless`로 서버를 시작합니다. 헬스 체크는 DB·migration·핵심 queue까지 확인하는 `/ready`를 사용합니다.
+```sql
+select count(*) from public.users where account_id is null;
+select account_id, count(*) from public.users group by account_id having count(*) > 3;
+select count(*) from public.sessions where account_id is null or active_user_id is null;
+```
+
+Render는 Node.js 22로 프런트엔드를 빌드해 asset fingerprint를 갱신하고 운영 Supabase의 계정 테이블·세션·무결성 RPC를 읽기 전용으로 검사한 다음 Python 3.12 패키지와 웹 산출물을 함께 설치해 `python -m colorless`로 서버를 시작합니다. 스키마가 아직 적용되지 않았거나 데이터 무결성 검사가 실패하면 새 배포를 시작하지 않습니다. 헬스 체크는 DB·migration·핵심 queue까지 확인하는 `/ready`를 사용하며 GitHub 검사가 성공한 커밋만 자동 배포합니다.
 
 Render Blueprint는 `REQUIRE_SUPABASE=true`로 실행됩니다. Supabase 환경 변수가 빠지면 서버가 시작되지 않으므로, 임시 파일 시스템에 계정과 첨부 파일이 저장되는 배포를 방지합니다.
+
+스키마 적용 전에는 새 서버를 배포하지 마세요. 문제가 생기면 Render에서 직전 정상 커밋으로 되돌리고, 새 서버가 쓰기를 받기 전이라면 보존된 `app_state`를 사용합니다. 쓰기 재개 후 데이터 문제가 확인되면 서비스를 내리고 전환 직전 Supabase 백업을 복원해야 합니다.
 
 ## 프로젝트 구조
 
