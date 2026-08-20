@@ -326,12 +326,14 @@ function renderProfileImagePreview() {
 
 function syncProfileImageControls() {
   const isBusy = state.profileImagePreparing;
+  const hasProfilePixels = Array.isArray(state.profilePixels)
+    && state.profilePixels.some((color) => color !== "#ffffff");
   selectProfilePhotoButton.disabled = false;
   profilePhotoInput.disabled = false;
   saveProfileButton.disabled = isBusy || state.profileCropOpen;
   removeProfilePhotoButton.disabled = isBusy
     || state.profileCropOpen
-    || !state.profilePixels.some((color) => color !== "#ffffff");
+    || !hasProfilePixels;
   profilePhotoZoom.disabled = isBusy;
   cancelProfilePhotoButton.disabled = isBusy;
   saveProfilePhotoButton.disabled = isBusy;
@@ -608,9 +610,9 @@ async function openProfileEditor() {
   const user = state.messenger.user || state.session?.user;
   const loadId = state.profileEditorLoadId + 1;
   state.profileEditorLoadId = loadId;
-  resetProfileImageCrop();
   state.profilePixels = blankProfilePixels();
   state.profilePixelsDirty = false;
+  resetProfileImageCrop();
   state.customPalette = Array.isArray(user?.custom_palette) ? user.custom_palette : [];
   profileDisplayName.value = getDisplayName(user);
   profileFriendCode.value = user?.friend_code || "";

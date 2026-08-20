@@ -635,6 +635,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("context.getImageData(0, 0, PIXEL_SIDE, PIXEL_SIDE)", profile_script)
         self.assertIn("state.profilePixels = normalizeProfilePixels(pixels)", profile_script)
         self.assertIn("state.profilePixelsDirty = true", profile_script)
+        self.assertIn("Array.isArray(state.profilePixels)", profile_script)
         self.assertNotIn('requestAction("profile.upload-image"', profile_script)
         self.assertNotIn("application/x-colorless-profile-bundle", profile_script)
         self.assertIn('requestAction("profile.remove-legacy-image"', profile_script)
