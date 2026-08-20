@@ -34,7 +34,7 @@ demoLoginButton.addEventListener("click", startDemoLogin);
 loginForm.addEventListener("submit", submitLogin);
 logoutButton.addEventListener("click", logout);
 workModeToggle.addEventListener("click", toggleWorkMode);
-workModeMessage.addEventListener("click", dismissWorkModeMessage);
+workModeScreen.addEventListener("click", handleWorkModeScreenTap);
 workModeReplyForm.addEventListener("submit", sendWorkModeReply);
 workModeReplyInput.addEventListener("compositionstart", beginWorkModeComposition);
 workModeReplyInput.addEventListener("compositionend", finishWorkModeComposition);
@@ -124,6 +124,7 @@ chatAttachmentGuide.addEventListener("click", (event) => {
   setAppStatus("준비 중인 기능이에요.");
 });
 chatAttachmentRemove.addEventListener("click", clearChatAttachment);
+chatVoiceButton.addEventListener("click", toggleVoiceRecording);
 chatAttachmentInput.addEventListener("change", () => {
   const file = chatAttachmentInput.files?.[0];
   if (!file) return;

@@ -10,21 +10,23 @@
     <script defer src="assets/js/platform/http.js?v=97f8d8f1879a"></script>
     <script defer src="assets/js/platform/pipeline.js?v=515264cdac84"></script>
     <script defer src="assets/js/platform/events.js?v=e67ecd100954"></script>
-    <script defer src="assets/js/platform/icons.js?v=10894f1a61f3"></script>
+    <script defer src="assets/js/platform/icons.js?v=3d260a55d324"></script>
     <script defer src="assets/js/platform/image-processing.js?v=c3632b3197bf"></script>
-    <script defer src="assets/js/core.js?v=4aae45b8def6"></script>
+    <script defer src="assets/js/core.js?v=3010ee903efd"></script>
     <script defer src="assets/js/profile.js?v=01b28035904d"></script>
-    <script defer src="assets/js/messenger.js?v=6e59bd2ebf2c"></script>
-    <script defer src="assets/js/attachments.js?v=0c018e271851"></script>
+    <script defer src="assets/js/messenger.js?v=73b30a92ae4e"></script>
+    <script defer src="assets/js/attachments.js?v=aab9df1f95f5"></script>
+    <script defer src="assets/js/voice.js?v=e5788e9fe947"></script>
     <script defer src="assets/js/room-settings.js?v=d602bb96b2da"></script>
     <script defer src="assets/js/chat.js?v=5ef40b31a97b"></script>
     <script defer src="assets/js/chat-virtual.js?v=75146485bd15"></script>
     <script defer src="assets/js/work-mode.js?v=cc2b3459b45b"></script>
+
     <script defer src="assets/js/shorts.js?v=d814daa9b922"></script>
     <script defer src="assets/js/action-bar.js?v=f5c052bc212e"></script>
     <script defer src="assets/js/app.js?v=99e80cd65174"></script>
     <script defer src="assets/js/auth.js?v=84a7ef3fc787"></script>
-    <script defer src="assets/js/bootstrap.js?v=69cfb094c8c0"></script>
+    <script defer src="assets/js/bootstrap.js?v=fdce06e4930e"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -328,7 +330,7 @@
       .my-actions { display: grid; gap: 8px; }
       .my-actions button { width: 100%; }
       body.work-mode-active { overflow: hidden; }
-      .work-mode-screen { background: var(--white); display: grid; inset: 0; padding: clamp(28px, 7vw, 96px); place-items: center; position: fixed; z-index: 200; }
+      .work-mode-screen { background: var(--white); display: grid; inset: 0; padding: clamp(28px, 7vw, 96px); place-items: center; position: fixed; touch-action: manipulation; z-index: 200; }
       .work-mode-screen.hidden { display: none; }
       .work-mode-message { cursor: pointer; display: grid; gap: 26px; max-width: 760px; width: 100%; }
       .work-mode-sender { align-items: center; display: grid; gap: 16px; grid-template-columns: 72px minmax(0, 1fr); }
@@ -684,10 +686,15 @@
       .message-attachment { display: grid; gap: 8px; }
       .message-image { display: block; height: auto; max-height: 300px; max-width: 100%; object-fit: contain; }
       .message-file { align-items: center; color: inherit; display: flex; font-weight: 700; gap: 8px; text-decoration: underline; }
+      .message-voice { align-items: center; display: flex; gap: 8px; min-width: min(270px, 68vw); }
+      .message-voice audio { height: 40px; max-width: 100%; width: 100%; }
+      .message-voice-duration { color: var(--gray); flex: 0 0 auto; font-size: 11px; }
+      .message-row.mine .voice-message-bubble { background: #f1f1f1; color: var(--black); }
       .chat-attachment-preview { align-items: center; background: var(--white); border-top: 1px solid var(--black); bottom: calc(74px + var(--keyboard-inset, 0px)); display: flex; font-size: 13px; gap: 8px; left: 0; min-height: 38px; padding: 6px 14px; position: absolute; right: 0; z-index: 11; }
       .chat-attachment-preview.hidden { display: none; }
       .chat-room:has(.chat-attachment-preview:not(.hidden)) .chat-message-list { padding-bottom: calc(146px + var(--keyboard-inset, 0px)); }
       .chat-attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .chat-voice-preview { height: 34px; max-width: min(280px, 58vw); }
       .chat-attachment-remove { background: var(--white); color: var(--black); margin-left: auto; }
       .chat-attachment-tray { display: none !important; }
       .chat-attachment-guide { bottom: 0; height: 240px; left: 0; pointer-events: auto; position: absolute; width: 240px; z-index: 21; }
@@ -711,9 +718,11 @@
       .message-read-menu { background: var(--white); border: 1px solid var(--black); box-shadow: 0 12px 30px rgba(0, 0, 0, .16); max-width: min(320px, calc(100vw - 16px)); min-width: 210px; padding: 12px; pointer-events: none; position: fixed; z-index: 60; }
       .message-read-menu strong { display: block; font-size: 13px; margin-bottom: 8px; }
       .message-read-menu p { color: var(--gray); font-size: 12px; line-height: 1.5; margin: 0; overflow-wrap: anywhere; }
-      .chat-message-form { background: var(--white); border-top: 1px solid var(--black); bottom: var(--keyboard-inset, 0px); display: grid; gap: 8px; grid-template-columns: auto minmax(0, 1fr) auto; left: 0; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); position: absolute; right: 0; z-index: 10; }
+      .chat-message-form { background: var(--white); border-top: 1px solid var(--black); bottom: var(--keyboard-inset, 0px); display: grid; gap: 8px; grid-template-columns: auto minmax(0, 1fr) auto auto; left: 0; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); position: absolute; right: 0; z-index: 10; }
       .chat-message-form input { min-height: 44px; }
       .chat-message-form button { min-height: 44px; padding-inline: 15px; }
+      .chat-voice-button { background: var(--white); color: var(--black); min-width: 44px; padding: 0 !important; }
+      .chat-voice-button.recording { background: var(--black); color: var(--white); }
       .desktop-chat-empty { display: none; }
 
       @media (min-width: 768px) {
@@ -972,7 +981,8 @@
         </header>
         <div class="chat-message-list" id="chat-message-list"></div>
         <div class="chat-attachment-preview hidden" id="chat-attachment-preview">
-          <span class="chat-attachment-name" id="chat-attachment-name"></span>
+          <span class="chat-attachment-name" id="chat-attachment-name" role="status" aria-live="polite"></span>
+          <audio class="chat-voice-preview hidden" id="chat-voice-preview" controls preload="metadata" controlslist="nodownload noplaybackrate"></audio>
           <button class="chat-attachment-remove" id="chat-attachment-remove" type="button" data-icon="x" data-icon-only aria-label="첨부 취소">첨부 취소</button>
         </div>
         <div class="chat-attachment-tray hidden" id="chat-attachment-tray" aria-label="Attachment options">
@@ -1003,6 +1013,7 @@
           <input class="chat-attachment-input" id="chat-attachment-input" type="file" accept="image/*,application/pdf" />
           <button class="chat-attachment-button" id="chat-attachment-button" type="button" data-icon="paperclip" data-icon-only aria-label="첨부 메뉴 열기" aria-expanded="false">첨부</button>
           <input id="chat-message-input" maxlength="300" autocomplete="off" placeholder="메시지 입력" />
+          <button class="chat-voice-button" id="chat-voice-button" type="button" data-icon="mic" data-icon-only aria-label="음성 메시지 녹음">음성 메시지 녹음</button>
           <button type="submit" data-icon="send" data-icon-only aria-label="메시지 보내기">보내기</button>
         </form>
         <div class="message-read-menu hidden" id="message-read-menu" role="status" aria-live="polite" aria-hidden="true">
@@ -1069,7 +1080,7 @@
           <button type="submit">보내기</button>
         </form>
         <p class="work-mode-feedback" id="work-mode-feedback" role="status" aria-live="polite"></p>
-        <p class="work-mode-hint">Alt+W 종료 · Esc 메시지 숨김</p>
+        <p class="work-mode-hint">한 번 탭: 메시지 숨김 · 두 번 탭: 종료 · Alt+W 종료</p>
       </section>
 
       <div class="sheet-backdrop hidden" id="directory-sheet" role="dialog" aria-modal="true" aria-labelledby="directory-title">

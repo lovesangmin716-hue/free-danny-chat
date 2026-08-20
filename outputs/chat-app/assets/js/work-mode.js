@@ -15,6 +15,13 @@ const workModeFeedback = document.getElementById("work-mode-feedback");
 let workModeReadMessageId = "";
 let workModeFeedbackTimer = null;
 let workModeComposing = false;
+let workModeTapTimer = null;
+const WORK_MODE_DOUBLE_TAP_MS = 300;
+
+function cancelWorkModeTap() {
+  window.clearTimeout(workModeTapTimer);
+  workModeTapTimer = null;
+}
 
 function renderWorkModeControl() {
   workModeToggle.setAttribute("aria-pressed", String(state.workModeEnabled));
@@ -36,6 +43,7 @@ function workModeMessageText(message) {
   if (message?.text) return message.text;
   const attachment = message?.attachment;
   if (attachment?.type?.startsWith("image/")) return "사진을 보냈습니다.";
+  if (attachment?.kind === "voice") return `음성 메시지 · ${formatVoiceDuration(attachment.duration_ms)}`;
   if (attachment?.type === "application/pdf") return `PDF · ${attachment.name || "파일"}`;
   return attachment?.name || "새 메시지";
 }
@@ -80,6 +88,7 @@ function syncWorkModeVisibility() {
 }
 
 function setWorkModeEnabled(enabled) {
+  cancelWorkModeTap();
   state.workModeEnabled = Boolean(enabled);
   localStorage.setItem("colorless-work-mode", state.workModeEnabled ? "on" : "off");
   if (!state.workModeEnabled) {
@@ -101,6 +110,21 @@ function dismissWorkModeMessage() {
   workModeFeedback.textContent = "";
   renderWorkModeMessage();
   workModeScreen.focus({ preventScroll: true });
+}
+
+function handleWorkModeScreenTap(event) {
+  if (!state.workModeEnabled || event.target.closest("#work-mode-reply-form")) return;
+  if (workModeTapTimer !== null) {
+    cancelWorkModeTap();
+    setWorkModeEnabled(false);
+    return;
+  }
+  const tappedMessageId = state.workModeMessage?.message?.id || "";
+  workModeTapTimer = window.setTimeout(() => {
+    workModeTapTimer = null;
+    if (!tappedMessageId || state.workModeMessage?.message?.id !== tappedMessageId) return;
+    dismissWorkModeMessage();
+  }, WORK_MODE_DOUBLE_TAP_MS);
 }
 
 async function markWorkModeMessageRead() {

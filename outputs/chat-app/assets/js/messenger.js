@@ -10,6 +10,14 @@ function recentChatRooms() {
   });
 }
 
+function messagePreviewCopy(message, fallback = "첨부 파일") {
+  if (message?.text) return message.text;
+  if (message?.attachment?.kind === "voice") return `음성 메시지 · ${formatVoiceDuration(message.attachment.duration_ms)}`;
+  if (message?.attachment?.type === "application/pdf") return "PDF";
+  if (message?.attachment?.type?.startsWith("image/")) return "Photo";
+  return fallback;
+}
+
 function renderChats() {
   chatList.replaceChildren();
   state.roomNodes.clear();
@@ -75,7 +83,7 @@ function renderChats() {
     */ const preview = document.createElement("span");
     preview.className = "item-preview";
     const lastMessageCopy = room.last_message
-      ? (room.last_message.text || (room.last_message.attachment?.type === "application/pdf" ? "PDF" : "Photo"))
+      ? messagePreviewCopy(room.last_message)
       : "Start a conversation.";
     preview.textContent = room.kind === "group" && room.last_message
       ? `${roomParticipantDisplayName(room, room.last_message.username)}: ${lastMessageCopy}`
@@ -162,7 +170,7 @@ function renderChatSearchResults(query) {
     preview.className = "item-preview";
     if (result.kind === "message" && result.message) {
       const sender = roomParticipantDisplayName(room, result.message.username);
-      preview.textContent = `${sender}: ${result.message.text || "첨부 파일"}`;
+      preview.textContent = `${sender}: ${messagePreviewCopy(result.message)}`;
       item.addEventListener("click", () => openChatRoomAtMessage(room, result.message.id));
     } else {
       preview.textContent = "대화방 열기";
