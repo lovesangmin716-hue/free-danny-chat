@@ -343,6 +343,8 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("function unloadChatMessages()", chat_script)
         self.assertIn("function trimChatMessageHistory()", chat_script)
         self.assertIn("function chatVirtualRange", chat_virtual_script)
+        self.assertIn("function captureChatVirtualAnchor()", chat_virtual_script)
+        self.assertIn('message?.attachment?.kind === "voice"', chat_virtual_script)
         self.assertIn("function scheduleChatVirtualRender()", chat_script)
         self.assertIn("function scheduleRoomRead(roomId)", chat_script)
         self.assertIn("window.clearTimeout(state.roomReadTimers.get(roomId))", chat_script)
@@ -355,6 +357,8 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("limit=${CHAT_HISTORY_PAGE_SIZE}", chat_script)
         self.assertIn("limit=${APP_CHAT_PAGE_SIZE}", app_script)
         self.assertIn("scheduleChatVirtualRender()", bootstrap_script)
+        self.assertIn("if (state.chatVirtualAdjusting) return", bootstrap_script)
+        self.assertIn("restoreScrollTop: chatVirtualScrollTopForAnchor(anchor)", app_script)
         self.assertIn("if (chatMessageList.scrollTop < 80) void loadOlderChatMessages()", bootstrap_script)
 
     def test_auth_client_omits_logout_body_and_reports_http_status(self) -> None:

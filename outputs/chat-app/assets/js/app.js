@@ -238,7 +238,6 @@ async function loadOlderChatMessages() {
   if (!state.selectedRoomId || !state.messagesNextCursor || state.messagesLoadingOlder) return;
   const roomId = state.selectedRoomId;
   const cursor = state.messagesNextCursor;
-  const previousScrollHeight = chatMessageList.scrollHeight;
   state.messagesLoadingOlder = true;
   const controller = new AbortController();
   state.messagesOlderLoadController?.abort();
@@ -251,6 +250,7 @@ async function loadOlderChatMessages() {
     );
     if (state.selectedRoomId !== roomId || state.messagesNextCursor !== cursor) return;
     const olderMessages = payload.items || [];
+    state.messagesNextCursor = payload.next_cursor || "";
     if (olderMessages.length) {
       const existingIds = new Set();
       for (const message of state.messages) existingIds.add(message.id);
@@ -259,13 +259,13 @@ async function loadOlderChatMessages() {
         if (!existingIds.has(message.id)) uniqueOlderMessages.push(message);
       }
       if (uniqueOlderMessages.length) {
+        const anchor = captureChatVirtualAnchor();
         state.messages = [...uniqueOlderMessages, ...state.messages];
         rebuildMessageIndexes();
         state.messageRevision += 1;
-        renderChatRoom({ preserveScrollHeight: previousScrollHeight });
+        renderChatRoom({ restoreScrollTop: chatVirtualScrollTopForAnchor(anchor) });
       }
     }
-    state.messagesNextCursor = payload.next_cursor || "";
   } catch (error) {
     if (error?.name === "AbortError") return;
     setAppStatus(error.message, "error");

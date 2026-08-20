@@ -472,7 +472,7 @@ async function deleteChatMessage(message, row) {
   }
 }
 
-function renderAllChatMessages({ scrollToBottom = false, preserveScrollHeight = 0 } = {}) {
+function renderAllChatMessages({ scrollToBottom = false, preserveScrollHeight = 0, restoreScrollTop = null } = {}) {
   if (state.chatVirtualFrame !== null) cancelAnimationFrame(state.chatVirtualFrame);
   state.chatVirtualFrame = null;
   const previousScrollTop = chatMessageList.scrollTop;
@@ -481,6 +481,14 @@ function renderAllChatMessages({ scrollToBottom = false, preserveScrollHeight = 
   const renderId = state.chatVirtualRenderId + 1;
   state.chatVirtualRenderId = renderId;
   state.chatVirtualAdjusting = true;
+  const range = state.messages.length
+    ? chatVirtualRange({
+        scrollToBottom,
+        targetScrollTop: Number.isFinite(restoreScrollTop)
+          ? restoreScrollTop
+          : (scrollToBottom ? null : previousScrollTop),
+      })
+    : null;
   state.messageNodes.clear();
   chatMessageList.replaceChildren();
   if (!state.messages.length) {
@@ -491,7 +499,6 @@ function renderAllChatMessages({ scrollToBottom = false, preserveScrollHeight = 
     empty.textContent = state.messagesInitialLoading ? "채팅을 불러오는 중…" : "첫 메시지를 보내 보세요.";
     chatMessageList.appendChild(empty);
   } else {
-    const range = chatVirtualRange({ scrollToBottom });
     state.renderedMessageStart = range.start;
     state.renderedMessageEnd = range.end;
     const fragment = document.createDocumentFragment();
@@ -508,16 +515,21 @@ function renderAllChatMessages({ scrollToBottom = false, preserveScrollHeight = 
     ));
     chatMessageList.appendChild(fragment);
   }
-  if (scrollToBottom) chatMessageList.scrollTop = chatMessageList.scrollHeight;
+  if (Number.isFinite(restoreScrollTop)) chatMessageList.scrollTop = restoreScrollTop;
+  else if (scrollToBottom) chatMessageList.scrollTop = chatMessageList.scrollHeight;
   state.renderedMessageRevision = state.messageRevision;
   state.renderedMessageRoomId = state.selectedRoomId;
   requestAnimationFrame(() => {
     if (state.chatVirtualRenderId !== renderId) return;
     if (state.renderedMessageRoomId !== state.selectedRoomId) {
-      state.chatVirtualAdjusting = false;
+      requestAnimationFrame(() => {
+        if (state.chatVirtualRenderId === renderId) state.chatVirtualAdjusting = false;
+      });
       return;
     }
-    if (preserveScrollHeight) {
+    if (Number.isFinite(restoreScrollTop)) {
+      chatMessageList.scrollTop = restoreScrollTop;
+    } else if (preserveScrollHeight) {
       chatMessageList.scrollTop = previousScrollTop + chatMessageList.scrollHeight - previousScrollHeight;
     } else {
       chatMessageList.scrollTop = scrollToBottom || wasNearBottom
@@ -526,11 +538,14 @@ function renderAllChatMessages({ scrollToBottom = false, preserveScrollHeight = 
     }
     measureRenderedChatMessages();
     if (scrollToBottom || wasNearBottom) chatMessageList.scrollTop = chatMessageList.scrollHeight;
-    state.chatVirtualAdjusting = false;
-    if (
-      state.messagesNextCursor
-      && chatMessageList.scrollHeight <= chatMessageList.clientHeight + 1
-    ) void loadOlderChatMessages();
+    requestAnimationFrame(() => {
+      if (state.chatVirtualRenderId !== renderId || state.renderedMessageRoomId !== state.selectedRoomId) return;
+      state.chatVirtualAdjusting = false;
+      if (
+        state.messagesNextCursor
+        && chatMessageList.scrollHeight <= chatMessageList.clientHeight + 1
+      ) void loadOlderChatMessages();
+    });
   });
 }
 
@@ -576,7 +591,7 @@ function replaceChatMessageNode(messageId, message) {
   requestAnimationFrame(() => measureRenderedChatMessages());
 }
 
-function renderChatRoom({ scrollToBottom = false, preserveScrollHeight = 0 } = {}) {
+function renderChatRoom({ scrollToBottom = false, preserveScrollHeight = 0, restoreScrollTop = null } = {}) {
   const room = currentRoom();
   if (!room) {
     chatRoom.classList.add("hidden");
@@ -606,7 +621,7 @@ function renderChatRoom({ scrollToBottom = false, preserveScrollHeight = 0 } = {
     state.renderedMessageRoomId !== room.id
     || state.renderedMessageRevision !== state.messageRevision
   ) {
-    renderAllChatMessages({ scrollToBottom, preserveScrollHeight });
+    renderAllChatMessages({ scrollToBottom, preserveScrollHeight, restoreScrollTop });
   } else if (scrollToBottom) {
     chatMessageList.scrollTop = chatMessageList.scrollHeight;
   }

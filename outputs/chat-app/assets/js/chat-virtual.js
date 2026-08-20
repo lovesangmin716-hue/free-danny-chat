@@ -6,6 +6,9 @@ const CHAT_VIRTUAL_ESTIMATE = typeof CHAT_MESSAGE_ESTIMATED_HEIGHT === "number" 
 const CHAT_VIRTUAL_GAP = typeof CHAT_MESSAGE_ROW_GAP === "number" ? CHAT_MESSAGE_ROW_GAP : 9;
 
 function estimatedChatMessageHeight(message) {
+  if (message?.attachment?.kind === "voice" && message.attachment.type?.startsWith("audio/")) {
+    return Math.max(CHAT_VIRTUAL_ESTIMATE, 92);
+  }
   const text = String(message?.text || "");
   const visualLines = text.split("\n").reduce(
     (total, line) => total + Math.max(1, Math.ceil([...line].length / 28)),
@@ -43,13 +46,31 @@ function chatVirtualIndexAtOffset(offsets, target) {
   return Math.max(0, low - 1);
 }
 
-function chatVirtualRange({ scrollToBottom = false } = {}) {
+function captureChatVirtualAnchor() {
+  if (!state.messages.length) return null;
+  const { offsets } = chatVirtualLayout();
+  const scrollTop = Math.max(0, chatMessageList.scrollTop);
+  const index = chatVirtualIndexAtOffset(offsets, scrollTop + 1);
+  return {
+    messageId: state.messages[index]?.id || "",
+    offset: scrollTop - (offsets[index] || 0),
+  };
+}
+
+function chatVirtualScrollTopForAnchor(anchor) {
+  const index = anchor ? state.messageIndexes.get(anchor.messageId) : null;
+  if (!Number.isInteger(index)) return chatMessageList.scrollTop;
+  const { offsets } = chatVirtualLayout();
+  return Math.max(0, (offsets[index] || 0) + anchor.offset);
+}
+
+function chatVirtualRange({ scrollToBottom = false, targetScrollTop = null } = {}) {
   const { offsets, totalHeight } = chatVirtualLayout();
   if (!state.messages.length) return { start: 0, end: 0, offsets, totalHeight };
   const viewportHeight = Math.max(chatMessageList.clientHeight, 1);
-  const scrollTop = scrollToBottom
-    ? Math.max(0, totalHeight - viewportHeight)
-    : chatMessageList.scrollTop;
+  const scrollTop = Number.isFinite(targetScrollTop)
+    ? Math.max(0, targetScrollTop)
+    : (scrollToBottom ? Math.max(0, totalHeight - viewportHeight) : chatMessageList.scrollTop);
   const startOffset = Math.max(0, scrollTop - CHAT_VIRTUAL_OVERSCAN);
   const endOffset = Math.min(totalHeight, scrollTop + viewportHeight + CHAT_VIRTUAL_OVERSCAN);
   const start = chatVirtualIndexAtOffset(offsets, startOffset);
