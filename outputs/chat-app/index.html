@@ -15,8 +15,8 @@
     <script defer src="assets/js/core.js?v=4d3bbb5eece8"></script>
     <script defer src="assets/js/profile.js?v=01b28035904d"></script>
     <script defer src="assets/js/messenger.js?v=8925db8e7170"></script>
-    <script defer src="assets/js/attachments.js?v=aab9df1f95f5"></script>
-    <script defer src="assets/js/voice.js?v=e5788e9fe947"></script>
+    <script defer src="assets/js/attachments.js?v=37c18ea753cc"></script>
+    <script defer src="assets/js/voice.js?v=77f8791f6132"></script>
     <script defer src="assets/js/room-settings.js?v=d602bb96b2da"></script>
     <script defer src="assets/js/chat.js?v=9789b9147681"></script>
     <script defer src="assets/js/chat-virtual.js?v=7808eafd564d"></script>
@@ -26,7 +26,7 @@
     <script defer src="assets/js/action-bar.js?v=f5c052bc212e"></script>
     <script defer src="assets/js/app.js?v=533de8b8fbd0"></script>
     <script defer src="assets/js/auth.js?v=84a7ef3fc787"></script>
-    <script defer src="assets/js/bootstrap.js?v=9f114cb83edf"></script>
+    <script defer src="assets/js/bootstrap.js?v=1c18db34c40a"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -704,13 +704,16 @@
       .attachment-guide-label { color: var(--black); font-size: 12px; font-weight: 700; position: absolute; }
       label.attachment-guide-label { cursor: pointer; pointer-events: auto; }
       .attachment-guide-label.active { color: var(--white); }
-      .attachment-guide-label[data-kind="photo"] { left: 20px; top: 40px; }
-      .attachment-guide-label[data-kind="pdf"] { left: 84px; top: 78px; }
-      .attachment-guide-label[data-kind="file"] { left: 145px; top: 134px; }
-      .attachment-guide-label[data-kind="camera"] { left: 183px; top: 190px; }
+      button.attachment-guide-label { background: transparent; border: 0; min-height: auto; padding: 0; pointer-events: auto; }
+      .attachment-guide-label[data-kind="photo"] { left: 18px; top: 31px; }
+      .attachment-guide-label[data-kind="pdf"] { left: 69px; top: 55px; }
+      .attachment-guide-label[data-kind="voice"] { left: 122px; top: 93px; }
+      .attachment-guide-label[data-kind="file"] { left: 164px; top: 139px; }
+      .attachment-guide-label[data-kind="camera"] { left: 194px; top: 191px; }
       .chat-attachment-button { background: var(--white); color: var(--black); min-width: 44px; padding: 0; touch-action: none; user-select: none; }
       .chat-attachment-input { height: 1px; opacity: 0; pointer-events: none; position: absolute; width: 1px; }
       .chat-attachment-button.swiping { background: var(--black); color: var(--white); }
+      .chat-attachment-button.recording { background: var(--black); color: var(--white); }
       .message-meta { color: var(--gray); display: flex; font-size: 11px; gap: 6px; }
       .message-meta.message-meta-empty { display: none; }
       .message-read { color: var(--black); font-weight: 700; }
@@ -718,11 +721,9 @@
       .message-read-menu { background: var(--white); border: 1px solid var(--black); box-shadow: 0 12px 30px rgba(0, 0, 0, .16); max-width: min(320px, calc(100vw - 16px)); min-width: 210px; padding: 12px; pointer-events: none; position: fixed; z-index: 60; }
       .message-read-menu strong { display: block; font-size: 13px; margin-bottom: 8px; }
       .message-read-menu p { color: var(--gray); font-size: 12px; line-height: 1.5; margin: 0; overflow-wrap: anywhere; }
-      .chat-message-form { background: var(--white); border-top: 1px solid var(--black); bottom: var(--keyboard-inset, 0px); display: grid; gap: 8px; grid-template-columns: auto minmax(0, 1fr) auto auto; left: 0; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); position: absolute; right: 0; z-index: 10; }
+      .chat-message-form { background: var(--white); border-top: 1px solid var(--black); bottom: var(--keyboard-inset, 0px); display: grid; gap: 8px; grid-template-columns: auto minmax(0, 1fr) auto; left: 0; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); position: absolute; right: 0; z-index: 10; }
       .chat-message-form input { min-height: 44px; }
       .chat-message-form button { min-height: 44px; padding-inline: 15px; }
-      .chat-voice-button { background: var(--white); color: var(--black); min-width: 44px; padding: 0 !important; }
-      .chat-voice-button.recording { background: var(--black); color: var(--white); }
       .desktop-chat-empty { display: none; }
 
       @media (min-width: 768px) {
@@ -999,13 +1000,15 @@
         </div>
         <div class="chat-attachment-guide hidden" id="chat-attachment-guide" aria-hidden="true">
           <svg viewBox="0 0 240 240" width="240" height="240">
-            <path class="attachment-guide-sector" data-kind="photo" d="M 0 240 L 0 0 A 240 240 0 0 1 91.8 18.2 Z" />
-            <path class="attachment-guide-sector" data-kind="pdf" d="M 0 240 L 91.8 18.2 A 240 240 0 0 1 169.8 70.2 Z" />
-            <path class="attachment-guide-sector" data-kind="file" d="M 0 240 L 169.8 70.2 A 240 240 0 0 1 221.8 148.2 Z" />
-            <path class="attachment-guide-sector" data-kind="camera" d="M 0 240 L 221.8 148.2 A 240 240 0 0 1 240 240 Z" />
+            <path class="attachment-guide-sector" data-kind="photo" d="M 0 240 L 0 0 A 240 240 0 0 1 74.2 11.7 Z" />
+            <path class="attachment-guide-sector" data-kind="pdf" d="M 0 240 L 74.2 11.7 A 240 240 0 0 1 141.1 45.8 Z" />
+            <path class="attachment-guide-sector" data-kind="voice" d="M 0 240 L 141.1 45.8 A 240 240 0 0 1 194.2 98.9 Z" />
+            <path class="attachment-guide-sector" data-kind="file" d="M 0 240 L 194.2 98.9 A 240 240 0 0 1 228.3 165.8 Z" />
+            <path class="attachment-guide-sector" data-kind="camera" d="M 0 240 L 228.3 165.8 A 240 240 0 0 1 240 240 Z" />
           </svg>
           <label class="attachment-guide-label" data-kind="photo" for="chat-attachment-input">사진</label>
           <label class="attachment-guide-label" data-kind="pdf" for="chat-attachment-input">PDF</label>
+          <button class="attachment-guide-label" data-kind="voice" type="button" data-icon="mic" aria-label="음성 녹음">음성</button>
           <span class="attachment-guide-label" data-kind="file">파일</span>
           <span class="attachment-guide-label" data-kind="camera">카메라</span>
         </div>
@@ -1013,7 +1016,6 @@
           <input class="chat-attachment-input" id="chat-attachment-input" type="file" accept="image/*,application/pdf" />
           <button class="chat-attachment-button" id="chat-attachment-button" type="button" data-icon="paperclip" data-icon-only aria-label="첨부 메뉴 열기" aria-expanded="false">첨부</button>
           <input id="chat-message-input" maxlength="300" autocomplete="off" placeholder="메시지 입력" />
-          <button class="chat-voice-button" id="chat-voice-button" type="button" data-icon="mic" data-icon-only aria-label="음성 메시지 녹음">음성 메시지 녹음</button>
           <button type="submit" data-icon="send" data-icon-only aria-label="메시지 보내기">보내기</button>
         </form>
         <div class="message-read-menu hidden" id="message-read-menu" role="status" aria-live="polite" aria-hidden="true">

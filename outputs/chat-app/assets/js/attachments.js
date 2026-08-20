@@ -6,12 +6,14 @@ function attachmentKindAt(x, y) {
   if (distance < 28 || x < 0 || y > 0) return "";
   const angle = Math.atan2(-y, x);
   if (angle < 0 || angle > Math.PI / 2) return "";
-  const segment = Math.min(3, Math.floor(angle / (Math.PI / 8)));
-  return ["camera", "file", "pdf", "photo"][segment];
+  const segment = Math.min(4, Math.floor(angle / (Math.PI / 10)));
+  return ["camera", "file", "voice", "pdf", "photo"][segment];
 }
 
 function showAttachmentGuide() {
   chatAttachmentGuide.classList.remove("hidden");
+  chatAttachmentGuide.setAttribute("aria-hidden", "false");
+  chatAttachmentButton.setAttribute("aria-expanded", "true");
 }
 
 function highlightAttachmentGuide(kind) {
@@ -33,11 +35,9 @@ function resetAttachmentSwipe() {
   state.chatAttachmentDrag = { active: false, kind: "", startX: 0, startY: 0 };
   chatAttachmentButton.classList.remove("swiping");
   chatAttachmentGuide.classList.add("hidden");
+  chatAttachmentGuide.setAttribute("aria-hidden", "true");
+  chatAttachmentButton.setAttribute("aria-expanded", "false");
   highlightAttachmentGuide("");
-}
-
-function usesDirectAttachmentPicker() {
-  return Boolean(window.matchMedia?.("(pointer: fine)").matches);
 }
 
 function openAttachmentPicker(kind = "all") {

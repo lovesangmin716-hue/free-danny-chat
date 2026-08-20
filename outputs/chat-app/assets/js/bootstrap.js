@@ -78,7 +78,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeMessageReadMenu();
 });
 chatAttachmentButton.addEventListener("pointerdown", (event) => {
-  if (usesDirectAttachmentPicker()) return;
+  if (state.voiceRecording || state.voiceRecordingStarting) return;
   event.preventDefault();
   if (state.chatAttachmentGuideTimer) {
     clearTimeout(state.chatAttachmentGuideTimer);
@@ -96,8 +96,10 @@ chatAttachmentButton.addEventListener("pointerup", (event) => {
   const kind = state.chatAttachmentDrag.kind;
   if (chatAttachmentButton.hasPointerCapture(event.pointerId)) chatAttachmentButton.releasePointerCapture(event.pointerId);
   if (kind) {
+    event.preventDefault();
     resetAttachmentSwipe();
-    openAttachmentPicker(kind);
+    if (kind === "voice") toggleVoiceRecording();
+    else openAttachmentPicker(kind);
     return;
   }
   state.chatAttachmentDrag.active = false;
@@ -107,23 +109,33 @@ chatAttachmentButton.addEventListener("pointerup", (event) => {
 chatAttachmentButton.addEventListener("pointercancel", resetAttachmentSwipe);
 chatAttachmentButton.addEventListener("click", (event) => {
   event.preventDefault();
-  if (!usesDirectAttachmentPicker()) return;
-  resetAttachmentSwipe();
-  openAttachmentPicker();
+  if (state.voiceRecording || state.voiceRecordingStarting) {
+    toggleVoiceRecording();
+    return;
+  }
+  showAttachmentGuide();
+  window.clearTimeout(state.chatAttachmentGuideTimer);
+  state.chatAttachmentGuideTimer = window.setTimeout(resetAttachmentSwipe, 4000);
 });
 chatAttachmentGuide.addEventListener("click", (event) => {
   const kind = event.target.closest?.("[data-kind]")?.dataset.kind;
   if (!kind) return;
   if (kind === "photo" || kind === "pdf") {
-    chatAttachmentInput.accept = kind === "pdf" ? "application/pdf" : "image/*";
-    chatAttachmentInput.value = "";
+    event.preventDefault();
+    resetAttachmentSwipe();
+    openAttachmentPicker(kind);
+    return;
+  }
+  if (kind === "voice") {
+    event.preventDefault();
+    resetAttachmentSwipe();
+    toggleVoiceRecording();
     return;
   }
   event.preventDefault();
   setAppStatus("준비 중인 기능이에요.");
 });
 chatAttachmentRemove.addEventListener("click", clearChatAttachment);
-chatVoiceButton.addEventListener("click", toggleVoiceRecording);
 chatAttachmentInput.addEventListener("change", () => {
   const file = chatAttachmentInput.files?.[0];
   if (!file) return;

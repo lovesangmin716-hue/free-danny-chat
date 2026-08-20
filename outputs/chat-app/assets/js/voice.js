@@ -2,7 +2,6 @@
 
 // In-app microphone recording. Audio files are never exposed through the file picker.
 const chatVoicePreview = document.getElementById("chat-voice-preview");
-const chatVoiceButton = document.getElementById("chat-voice-button");
 const VOICE_RECORDING_MAX_MS = 5 * 60 * 1000;
 const VOICE_RECORDING_MIN_MS = 300;
 const VOICE_RECORDING_MAX_BYTES = 8 * 1024 * 1024;
@@ -52,11 +51,11 @@ function clearVoiceRecordingTimers(recording) {
 
 function renderVoiceRecorderButton() {
   const recording = state.voiceRecording;
-  chatVoiceButton.classList.toggle("recording", recording);
-  chatVoiceButton.setAttribute("aria-pressed", String(recording));
-  chatVoiceButton.disabled = state.voiceRecordingStarting;
-  ColorlessPlatform.decorateIconButton(chatVoiceButton, recording ? "square" : "mic", {
-    label: recording ? "음성 녹음 중지" : "음성 메시지 녹음",
+  chatAttachmentButton.classList.toggle("recording", recording);
+  chatAttachmentButton.setAttribute("aria-pressed", String(recording));
+  chatAttachmentButton.disabled = state.voiceRecordingStarting;
+  ColorlessPlatform.decorateIconButton(chatAttachmentButton, recording ? "square" : "paperclip", {
+    label: recording ? "음성 녹음 중지" : "첨부 메뉴 열기",
     iconOnly: true,
   });
 }
