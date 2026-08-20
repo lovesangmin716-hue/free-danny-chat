@@ -53,7 +53,10 @@ roomSettingsSheet.addEventListener("click", (event) => {
 chatMessageForm.addEventListener("submit", sendChatMessage);
 chatMessageList.addEventListener("scroll", () => {
   finishMessageReadSwipe();
-  if (chatMessageList.scrollTop < 80) void loadOlderChatMessages();
+  scheduleChatVirtualRender();
+  if (!state.chatVirtualAdjusting) {
+    if (chatMessageList.scrollTop < 80) void loadOlderChatMessages();
+  }
 }, { passive: true });
 chatMessageList.addEventListener("pointerdown", beginMessageReadSwipe);
 chatMessageList.addEventListener("pointermove", updateMessageReadSwipe);

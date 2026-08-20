@@ -55,6 +55,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
                 "assets/js/attachments.js",
                 "assets/js/room-settings.js",
                 "assets/js/chat.js",
+                "assets/js/chat-virtual.js",
                 "assets/js/shorts.js",
                 "assets/js/action-bar.js",
                 "assets/js/app.js",
@@ -292,17 +293,29 @@ class StaticAppStructureTestCase(unittest.TestCase):
     def test_chat_history_is_chunked_lazy_and_unloaded_between_rooms(self) -> None:
         core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
         chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
+        chat_virtual_script = (server.ASSETS_DIR / "js" / "chat-virtual.js").read_text(encoding="utf-8")
+        messenger_script = (server.ASSETS_DIR / "js" / "messenger.js").read_text(encoding="utf-8")
         app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
         bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
 
         self.assertIn("const CHAT_MESSAGE_PAGE_SIZE = 30", core_script)
+        self.assertIn("const CHAT_MESSAGE_MEMORY_LIMIT = 300", core_script)
+        self.assertIn("const CHAT_MESSAGE_VIRTUAL_OVERSCAN_PX = 640", core_script)
         self.assertIn("function unloadChatMessages()", chat_script)
+        self.assertIn("function trimChatMessageHistory()", chat_script)
+        self.assertIn("function chatVirtualRange", chat_virtual_script)
+        self.assertIn("function scheduleChatVirtualRender()", chat_script)
+        self.assertIn("function scheduleRoomRead(roomId)", chat_script)
+        self.assertIn("window.clearTimeout(state.roomReadTimers.get(roomId))", chat_script)
+        self.assertIn("scheduleRoomRead(payload.roomId)", messenger_script)
+        self.assertIn('createChatVirtualSpacer("chat-virtual-spacer-top"', chat_script)
         self.assertIn("state.messagesLoadController?.abort()", chat_script)
         self.assertIn("state.messagesOlderLoadController?.abort()", chat_script)
         self.assertIn("new AbortController()", chat_script)
         self.assertIn("new AbortController()", app_script)
         self.assertIn("limit=${CHAT_MESSAGE_PAGE_SIZE}", chat_script)
         self.assertIn("limit=${CHAT_MESSAGE_PAGE_SIZE}", app_script)
+        self.assertIn("scheduleChatVirtualRender()", bootstrap_script)
         self.assertIn("if (chatMessageList.scrollTop < 80) void loadOlderChatMessages()", bootstrap_script)
 
     def test_auth_client_omits_logout_body_and_reports_http_status(self) -> None:
@@ -364,7 +377,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('sender.textContent = messageSenderDisplayName(room, message)', chat_script)
         self.assertIn("if (!mine) {", chat_script)
         self.assertIn('row.querySelector(".message-sender")?.classList.toggle', chat_script)
-        self.assertIn("syncMessageTimeVisibility(state.messages.length - 2)", chat_script)
+        self.assertIn("const row = createChatMessageRow(message, state.messages[index + 1], index)", chat_script)
         self.assertIn("function shouldShowMessageReadReceipt(message, messageIndex)", chat_script)
         self.assertIn("const nextIndex = nextOwnMessageIndex(messageIndex)", chat_script)
         self.assertIn('`${readerCount}명 읽음`', chat_script)

@@ -12,17 +12,18 @@
     <script defer src="assets/js/platform/events.js?v=e67ecd100954"></script>
     <script defer src="assets/js/platform/icons.js?v=10894f1a61f3"></script>
     <script defer src="assets/js/platform/image-processing.js?v=c3632b3197bf"></script>
-    <script defer src="assets/js/core.js?v=cd0f5c542ac0"></script>
+    <script defer src="assets/js/core.js?v=5882a4187bcb"></script>
     <script defer src="assets/js/profile.js?v=01b28035904d"></script>
-    <script defer src="assets/js/messenger.js?v=c565bc2c3e0f"></script>
+    <script defer src="assets/js/messenger.js?v=9b75475c4c00"></script>
     <script defer src="assets/js/attachments.js?v=0c018e271851"></script>
     <script defer src="assets/js/room-settings.js?v=d602bb96b2da"></script>
-    <script defer src="assets/js/chat.js?v=6debe5cdf952"></script>
+    <script defer src="assets/js/chat.js?v=7e1493ba66ad"></script>
+    <script defer src="assets/js/chat-virtual.js?v=75146485bd15"></script>
     <script defer src="assets/js/shorts.js?v=d814daa9b922"></script>
     <script defer src="assets/js/action-bar.js?v=f5c052bc212e"></script>
     <script defer src="assets/js/app.js?v=bbed35c4949e"></script>
     <script defer src="assets/js/auth.js?v=84a7ef3fc787"></script>
-    <script defer src="assets/js/bootstrap.js?v=b8511a9859cc"></script>
+    <script defer src="assets/js/bootstrap.js?v=264af8514501"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -637,9 +638,10 @@
       .room-settings-danger { border-top: 1px solid var(--black); display: grid; gap: 8px; padding-top: 16px; }
       .room-settings-danger p { color: var(--gray); font-size: 12px; line-height: 1.45; margin: 0; }
       .room-leave-button { background: var(--white); color: #b00020; width: 100%; }
-      .chat-message-list { bottom: 0; display: flex; flex-direction: column; gap: 9px; left: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 18px 18px calc(96px + var(--keyboard-inset, 0px)); position: absolute; right: 0; top: var(--chat-header-height); -webkit-overflow-scrolling: touch; }
+      .chat-message-list { bottom: 0; display: flex; flex-direction: column; gap: 0; left: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 18px 18px calc(96px + var(--keyboard-inset, 0px)); position: absolute; right: 0; top: var(--chat-header-height); -webkit-overflow-scrolling: touch; }
       .chat-empty { color: var(--gray); margin: auto; text-align: center; }
-      .message-row { display: flex; flex-direction: column; gap: 3px; max-width: 82%; touch-action: pan-y; }
+      .chat-virtual-spacer { flex: 0 0 auto; min-height: 0; pointer-events: none; width: 100%; }
+      .message-row { display: flex; flex-direction: column; gap: 3px; margin-bottom: 9px; max-width: 82%; touch-action: pan-y; }
       .message-row.mine { align-self: flex-end; align-items: flex-end; }
       .message-row.theirs { align-self: flex-start; }
       .message-row.pending .message-bubble { opacity: 0.72; }

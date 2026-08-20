@@ -69,9 +69,12 @@ function addMessageReader(message, username, room = currentRoom()) {
 function applyMessageReaderToCurrentMessages(username, transactionName = "messages.reader") {
   const changedMessages = [];
   appStore.transact(transactionName, () => {
-    for (let index = 0; index < state.messages.length; index += 1) {
+    // Read positions are monotonic. Walk only the unread tail and stop at the
+    // first eligible message that already contains this reader.
+    for (let index = state.messages.length - 1; index >= 0; index -= 1) {
       const message = state.messages[index];
       if (message.username === username) continue;
+      if ((message.read_by || []).some((reader) => reader.username === username)) break;
       const readMessage = addMessageReader(message, username);
       if (readMessage === message) continue;
       state.messages[index] = readMessage;
@@ -80,6 +83,9 @@ function applyMessageReaderToCurrentMessages(username, transactionName = "messag
     if (changedMessages.length) state.messageRevision += 1;
   });
   for (const [messageId, message] of changedMessages) replaceChatMessageNode(messageId, message);
+  if (changedMessages.length && state.renderedMessageRoomId === state.selectedRoomId) {
+    state.renderedMessageRevision = state.messageRevision;
+  }
 }
 
 function nextOwnMessageIndex(messageIndex) {
@@ -163,6 +169,11 @@ function createChatMessageRow(message, nextMessage = null, messageIndex = -1) {
       image.src = attachment.url;
       image.alt = attachment.name || "Attached photo";
       image.loading = "lazy";
+      image.addEventListener("load", () => {
+        if (!row.isConnected) return;
+        state.messageHeights.delete(message.id);
+        requestAnimationFrame(() => measureRenderedChatMessages());
+      }, { once: true });
       attachmentLink.appendChild(image);
     } else {
       attachmentLink.classList.add("message-file");
@@ -291,15 +302,41 @@ function rebuildMessageIndexes() {
 }
 
 function setChatMessages(messages) {
-  state.messages = messages;
+  state.messages = messages.length > CHAT_MESSAGE_MEMORY_LIMIT
+    ? messages.slice(-CHAT_MESSAGE_MEMORY_LIMIT)
+    : messages;
   rebuildMessageIndexes();
+  const messageIds = new Set(state.messages.map((message) => message.id));
+  for (const messageId of state.messageHeights.keys()) {
+    if (!messageIds.has(messageId)) state.messageHeights.delete(messageId);
+  }
+  state.renderedMessageStart = -1;
+  state.renderedMessageEnd = -1;
   state.messageRevision += 1;
+}
+
+function trimChatMessageHistory() {
+  const overflow = state.messages.length - CHAT_MESSAGE_MEMORY_LIMIT;
+  if (overflow <= 0) return 0;
+  const removedMessages = state.messages.splice(0, overflow);
+  for (const message of removedMessages) {
+    state.messageHeights.delete(message.id);
+    state.messageNodes.delete(message.id);
+  }
+  rebuildMessageIndexes();
+  // The first retained message becomes the cursor boundary, so dropped rows
+  // can still be fetched again if the user scrolls upward.
+  state.messagesNextCursor = state.messages[0]?.id || state.messagesNextCursor;
+  state.renderedMessageStart = -1;
+  state.renderedMessageEnd = -1;
+  return overflow;
 }
 
 function appendChatMessageState(message) {
   if (!message?.id || state.messageIndexes.has(message.id)) return false;
   state.messageIndexes.set(message.id, state.messages.length);
   state.messages.push(message);
+  trimChatMessageHistory();
   state.messageRevision += 1;
   return true;
 }
@@ -315,29 +352,50 @@ function replaceChatMessageState(messageId, message) {
 }
 
 function renderAllChatMessages({ scrollToBottom = false, preserveScrollHeight = 0 } = {}) {
+  if (state.chatVirtualFrame !== null) cancelAnimationFrame(state.chatVirtualFrame);
+  state.chatVirtualFrame = null;
   const previousScrollTop = chatMessageList.scrollTop;
   const previousScrollHeight = preserveScrollHeight || chatMessageList.scrollHeight;
   const wasNearBottom = chatMessageList.scrollHeight - chatMessageList.clientHeight - previousScrollTop < 80;
+  const renderId = state.chatVirtualRenderId + 1;
+  state.chatVirtualRenderId = renderId;
+  state.chatVirtualAdjusting = true;
   state.messageNodes.clear();
   chatMessageList.replaceChildren();
   if (!state.messages.length) {
+    state.renderedMessageStart = 0;
+    state.renderedMessageEnd = 0;
     const empty = document.createElement("p");
     empty.className = "chat-empty";
     empty.textContent = state.messagesInitialLoading ? "채팅을 불러오는 중…" : "첫 메시지를 보내 보세요.";
     chatMessageList.appendChild(empty);
   } else {
+    const range = chatVirtualRange({ scrollToBottom });
+    state.renderedMessageStart = range.start;
+    state.renderedMessageEnd = range.end;
     const fragment = document.createDocumentFragment();
-    for (let index = 0; index < state.messages.length; index += 1) {
+    fragment.appendChild(createChatVirtualSpacer("chat-virtual-spacer-top", range.offsets[range.start] || 0));
+    for (let index = range.start; index < range.end; index += 1) {
       const message = state.messages[index];
       const row = createChatMessageRow(message, state.messages[index + 1], index);
       state.messageNodes.set(message.id, row);
       fragment.appendChild(row);
     }
+    fragment.appendChild(createChatVirtualSpacer(
+      "chat-virtual-spacer-bottom",
+      range.totalHeight - (range.offsets[range.end] || range.totalHeight),
+    ));
     chatMessageList.appendChild(fragment);
   }
+  if (scrollToBottom) chatMessageList.scrollTop = chatMessageList.scrollHeight;
   state.renderedMessageRevision = state.messageRevision;
   state.renderedMessageRoomId = state.selectedRoomId;
   requestAnimationFrame(() => {
+    if (state.chatVirtualRenderId !== renderId) return;
+    if (state.renderedMessageRoomId !== state.selectedRoomId) {
+      state.chatVirtualAdjusting = false;
+      return;
+    }
     if (preserveScrollHeight) {
       chatMessageList.scrollTop = previousScrollTop + chatMessageList.scrollHeight - previousScrollHeight;
     } else {
@@ -345,6 +403,9 @@ function renderAllChatMessages({ scrollToBottom = false, preserveScrollHeight = 
         ? chatMessageList.scrollHeight
         : previousScrollTop;
     }
+    measureRenderedChatMessages();
+    if (scrollToBottom || wasNearBottom) chatMessageList.scrollTop = chatMessageList.scrollHeight;
+    state.chatVirtualAdjusting = false;
     if (
       state.messagesNextCursor
       && chatMessageList.scrollHeight <= chatMessageList.clientHeight + 1
@@ -352,23 +413,30 @@ function renderAllChatMessages({ scrollToBottom = false, preserveScrollHeight = 
   });
 }
 
-function appendChatMessageNode(message, scrollToBottom = false) {
-  chatMessageList.querySelector(".chat-empty")?.remove();
-  const messageIndex = state.messages.length - 1;
-  const row = createChatMessageRow(message, null, messageIndex);
-  state.messageNodes.set(message.id, row);
-  chatMessageList.appendChild(row);
-  syncMessageTimeVisibility(state.messages.length - 2);
-  syncMessageReadReceiptVisibility(previousOwnMessageIndex(messageIndex));
-  state.renderedMessageRevision = state.messageRevision;
-  state.renderedMessageRoomId = state.selectedRoomId;
-  if (scrollToBottom) chatMessageList.scrollTop = chatMessageList.scrollHeight;
+function scheduleChatVirtualRender() {
+  if (
+    state.chatVirtualAdjusting
+    || state.chatVirtualFrame !== null
+    || state.renderedMessageRoomId !== state.selectedRoomId
+  ) return;
+  state.chatVirtualFrame = requestAnimationFrame(() => {
+    state.chatVirtualFrame = null;
+    if (state.renderedMessageRoomId !== state.selectedRoomId || !state.messages.length) return;
+    const range = chatVirtualRange();
+    if (range.start !== state.renderedMessageStart || range.end !== state.renderedMessageEnd) {
+      renderAllChatMessages();
+    }
+  });
+}
+
+function appendChatMessageNode(_message, scrollToBottom = false) {
+  renderAllChatMessages({ scrollToBottom });
 }
 
 function replaceChatMessageNode(messageId, message) {
   const currentRow = state.messageNodes.get(messageId);
   if (!currentRow) {
-    renderAllChatMessages();
+    state.renderedMessageRevision = state.messageRevision;
     return;
   }
   const messageIndex = state.messageIndexes.get(message.id);
@@ -384,6 +452,7 @@ function replaceChatMessageNode(messageId, message) {
   syncMessageReadReceiptVisibility(messageIndex);
   syncMessageReadReceiptVisibility(previousOwnMessageIndex(messageIndex));
   state.renderedMessageRevision = state.messageRevision;
+  requestAnimationFrame(() => measureRenderedChatMessages());
 }
 
 function renderChatRoom({ scrollToBottom = false, preserveScrollHeight = 0 } = {}) {
@@ -434,6 +503,23 @@ async function updatePresence() {
   }
 }
 
+function scheduleRoomRead(roomId) {
+  if (!roomId) return;
+  window.clearTimeout(state.roomReadTimers.get(roomId));
+  const timer = window.setTimeout(() => {
+    state.roomReadTimers.delete(roomId);
+    void requestAction("rooms.mark-read", "/rooms/read", {
+      method: "POST",
+      body: JSON.stringify({ roomId }),
+    }).then(() => {
+      if (state.selectedRoomId === roomId) {
+        applyMessageReaderToCurrentMessages(state.messenger.user?.username, "messages.mark-read");
+      }
+    }).catch(() => {});
+  }, 120);
+  state.roomReadTimers.set(roomId, timer);
+}
+
 async function loadChatMessages({ markRead = true, scrollToBottom = false, aroundMessageId = "" } = {}) {
   if (!state.selectedRoomId) return;
   const roomId = state.selectedRoomId;
@@ -476,14 +562,7 @@ async function loadChatMessages({ markRead = true, scrollToBottom = false, aroun
       }));
     }
     if (markRead && state.selectedRoomId === roomId) {
-      void api("/rooms/read", {
-        method: "POST",
-        body: JSON.stringify({ roomId }),
-      }).then(() => {
-        if (state.selectedRoomId === roomId) {
-          applyMessageReaderToCurrentMessages(state.messenger.user?.username, "messages.mark-read");
-        }
-      }).catch(() => {});
+      scheduleRoomRead(roomId);
     }
   } catch (error) {
     if (error?.name === "AbortError") return;
@@ -504,6 +583,10 @@ function unloadChatMessages() {
   state.messagesLoadEpoch += 1;
   state.messagesLoadController?.abort();
   state.messagesOlderLoadController?.abort();
+  if (state.chatVirtualFrame !== null) cancelAnimationFrame(state.chatVirtualFrame);
+  state.chatVirtualRenderId += 1;
+  state.chatVirtualFrame = null;
+  state.chatVirtualAdjusting = false;
   state.messagesLoadController = null;
   state.messagesOlderLoadController = null;
   state.messagesInitialLoading = false;
@@ -511,6 +594,9 @@ function unloadChatMessages() {
   setChatMessages([]);
   state.messagesNextCursor = "";
   state.messageNodes.clear();
+  state.messageHeights.clear();
+  state.renderedMessageStart = -1;
+  state.renderedMessageEnd = -1;
   chatMessageList.replaceChildren();
 }
 
@@ -542,6 +628,7 @@ async function loadRoomMembers(roomId, { reset = true } = {}) {
 }
 
 async function openChatRoom(roomId, { aroundMessageId = "", focusInput = true } = {}) {
+  if (state.selectedRoomId && state.selectedRoomId !== roomId) unloadChatMessages();
   state.selectedRoomId = roomId;
   state.messagesInitialLoading = true;
   state.renderedMessageRoomId = "";

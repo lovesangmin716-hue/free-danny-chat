@@ -27,6 +27,7 @@ const initialState = {
   messages: [],
   messageIndexes: new Map(),
   messageNodes: new Map(),
+  messageHeights: new Map(),
   friendNodes: new Map(),
   roomNodes: new Map(),
   friendByUsername: new Map(),
@@ -37,6 +38,11 @@ const initialState = {
   messageRevision: 0,
   renderedMessageRevision: -1,
   renderedMessageRoomId: "",
+  renderedMessageStart: -1,
+  renderedMessageEnd: -1,
+  chatVirtualFrame: null,
+  chatVirtualAdjusting: false,
+  chatVirtualRenderId: 0,
   messagesNextCursor: "",
   messagesLoadingOlder: false,
   messagesInitialLoading: false,
@@ -73,6 +79,7 @@ const initialState = {
   roomsLoading: false,
   roomMemberCursors: new Map(),
   roomMembersLoading: new Set(),
+  roomReadTimers: new Map(),
   lastSeenRoomMessageIds: {},
   profilePixels: "",
   profilePixelsDirty: false,
@@ -149,6 +156,10 @@ const PROFILE_PIXEL_CACHE_MAX = 128;
 const MAX_SHORTS_FEED_ITEMS = 200;
 const SHORTS_DOM_WINDOW_SIZE = 5;
 const CHAT_MESSAGE_PAGE_SIZE = 30;
+const CHAT_MESSAGE_MEMORY_LIMIT = 300;
+const CHAT_MESSAGE_VIRTUAL_OVERSCAN_PX = 640;
+const CHAT_MESSAGE_ESTIMATED_HEIGHT = 72;
+const CHAT_MESSAGE_ROW_GAP = 9;
 const profilePixelCanvasCache = new Map();
 const DEFAULT_PROFILE_PALETTE = ["#ffffff", "#000000", "#777777", "#d9d9d9", "#e53935", "#fb8c00", "#fdd835", "#43a047", "#1e88e5", "#8e24aa", "#6d4c41", "#ec407a"];
 const PROFILE_PALETTES = [

@@ -356,14 +356,7 @@ function registerRealtimeHandlers() {
       }
     }, { event: payload.type });
     if (payload.roomId === state.selectedRoomId && payload.message?.id) {
-      void requestAction("rooms.mark-read", "/rooms/read", {
-        method: "POST",
-        body: JSON.stringify({ roomId: payload.roomId }),
-      }).then(() => {
-        if (state.selectedRoomId === payload.roomId) {
-          applyMessageReaderToCurrentMessages(state.messenger.user?.username, "messages.mark-read");
-        }
-      }).catch(() => {});
+      scheduleRoomRead(payload.roomId);
     } else if (!isShortsView) {
       renderChats();
     }
