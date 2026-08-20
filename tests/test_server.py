@@ -11,6 +11,7 @@ import queue
 import re
 import shutil
 import socket
+import sys
 import tempfile
 import threading
 import time
@@ -28,18 +29,45 @@ os.environ["STATE_FILE"] = str(Path(TEST_DATA_DIR) / "global-state.json")
 os.environ["UPLOADS_DIR"] = str(Path(TEST_DATA_DIR) / "uploads")
 os.environ["STRUCTURED_LOGS_ENABLED"] = "false"
 
-SERVER_PATH = Path(__file__).parents[1] / "outputs" / "chat-app" / "server.py"
-SPEC = importlib.util.spec_from_file_location("colorless_server", SERVER_PATH)
+REPO_ROOT = Path(__file__).parents[1]
+SRC_DIR = REPO_ROOT / "src"
+FRONTEND_SOURCE_DIR = REPO_ROOT / "frontend" / "src"
+FRONTEND_APP_DIR = FRONTEND_SOURCE_DIR / "app"
+sys.path.insert(0, str(SRC_DIR))
+from colorless import observability, shorts
+
+SERVER_PATH = SRC_DIR / "colorless" / "server.py"
+SPEC = importlib.util.spec_from_file_location("colorless._test_server", SERVER_PATH)
 assert SPEC is not None and SPEC.loader is not None
 server = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(server)
 
 
 class StaticAppStructureTestCase(unittest.TestCase):
+    def test_python_modules_keep_composition_root_dependency_one_way(self) -> None:
+        lower_level_modules = [
+            path
+            for path in server.PACKAGE_DIR.rglob("*.py")
+            if path.name not in {"server.py", "__main__.py"}
+        ]
+        for module_path in lower_level_modules:
+            source = module_path.read_text(encoding="utf-8")
+            module_name = module_path.relative_to(server.PACKAGE_DIR).as_posix()
+            self.assertNotIn("from .server import", source, module_name)
+            self.assertNotIn("from ..server import", source, module_name)
+            self.assertNotIn("import colorless.server", source, module_name)
+        self.assertEqual(server.StateStore.__module__, "colorless.state")
+        self.assertEqual(server.ApplicationServices.__module__, "colorless.application")
+        self.assertEqual(server.DurableEventBroker.__module__, "colorless.realtime")
+        self.assertEqual(server.ChatHandler.serve_session.__module__, "colorless.http.messaging")
+        self.assertEqual(server.ChatHandler.start_google_login.__module__, "colorless.http.auth")
+        self.assertEqual(server.ChatHandler.serve_public_shorts.__module__, "colorless.http.shorts")
+        self.assertEqual(server.ChatHandler.serve_upload.__module__, "colorless.http.uploads")
+
     def test_work_mode_supports_mobile_single_and_double_tap(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
-        work_mode_js = (server.ASSETS_DIR / "js" / "work-mode.js").read_text(encoding="utf-8")
-        bootstrap_js = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+        work_mode_js = (FRONTEND_APP_DIR / "work-mode.js").read_text(encoding="utf-8")
+        bootstrap_js = (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8")
 
         self.assertIn("touch-action: manipulation", index_html)
         self.assertIn("한 번 탭: 메시지 숨김 · 두 번 탭: 종료", index_html)
@@ -51,47 +79,45 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('workModeScreen.addEventListener("click", handleWorkModeScreenTap)', bootstrap_js)
         self.assertNotIn('workModeMessage.addEventListener("click", dismissWorkModeMessage)', bootstrap_js)
 
-    def test_feature_scripts_are_loaded_in_dependency_order(self) -> None:
+    def test_frontend_modules_build_into_one_production_entrypoint(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         script_sources = re.findall(r'<script defer src="([^"]+)"></script>', index_html)
 
         self.assertEqual(
             [source.split("?", 1)[0] for source in script_sources],
-            [
-                "assets/js/platform/store.js",
-                "assets/js/platform/http.js",
-                "assets/js/platform/pipeline.js",
-                "assets/js/platform/events.js",
-                "assets/js/platform/icons.js",
-                "assets/js/platform/image-processing.js",
-                "assets/js/core.js",
-                "assets/js/profile.js",
-                "assets/js/messenger.js",
-                "assets/js/attachments.js",
-                "assets/js/voice.js",
-                "assets/js/room-settings.js",
-                "assets/js/chat.js",
-                "assets/js/chat-virtual.js",
-                "assets/js/work-mode.js",
-                "assets/js/shorts.js",
-                "assets/js/action-bar.js",
-                "assets/js/app.js",
-                "assets/js/auth.js",
-                "assets/js/bootstrap.js",
-            ],
+            ["assets/js/main.js"],
         )
         self.assertNotIn("<script>", index_html)
+        module_root = FRONTEND_APP_DIR
+        entrypoint = module_root / "entrypoints" / "main.js"
+        import_pattern = re.compile(r'import(?:\s+[^"\']+\s+from\s+|\s*)["\']([^"\']+)["\']')
+        pending = [entrypoint.resolve()]
+        module_paths: set[Path] = set()
+        while pending:
+            module_path = pending.pop()
+            if module_path in module_paths:
+                continue
+            module_paths.add(module_path)
+            module_source = module_path.read_text(encoding="utf-8")
+            for import_url in import_pattern.findall(module_source):
+                imported_path = (module_path.parent / import_url.split("?", 1)[0]).resolve()
+                imported_path.relative_to(module_root.resolve())
+                self.assertTrue(imported_path.is_file(), import_url)
+                pending.append(imported_path)
+
+        expected_modules = {
+            path.resolve()
+            for path in module_root.rglob("*.js")
+            if path.name not in {"image-worker.js", "signup.js"}
+        }
+        self.assertEqual(module_paths, expected_modules)
         source_bytes = 0
-        compressed_bytes = 0
-        for source in script_sources:
-            asset_path = server.BASE_DIR / source.split("?", 1)[0]
-            self.assertTrue(asset_path.is_file(), source)
-            self.assertLess(asset_path.stat().st_size, 40 * 1024, source)
+        for asset_path in module_paths:
+            self.assertLess(asset_path.stat().st_size, 40 * 1024, asset_path.name)
             source_bytes += asset_path.stat().st_size
-            compressed_content = server.ASSET_GZIP_CONTENT.get(asset_path.resolve(), b"")
-            self.assertTrue(compressed_content, source)
-            compressed_bytes += len(compressed_content)
-        self.assertLess(compressed_bytes, source_bytes)
+        production_entrypoint = server.ASSETS_DIR / "js" / "main.js"
+        self.assertLess(production_entrypoint.stat().st_size, source_bytes)
+        self.assertLess(len(server.ASSET_GZIP_CONTENT[production_entrypoint.resolve()]), production_entrypoint.stat().st_size)
 
     def test_production_font_artifact_uses_one_preloaded_woff2(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -107,8 +133,8 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
     def test_html_and_fingerprinted_assets_have_separate_cache_and_encoding_policy(self) -> None:
         self.assertIsNotNone(server.brotli)
-        core_path = (server.ASSETS_DIR / "js" / "core.js").resolve()
-        core_hash = server.ASSET_FINGERPRINTS[core_path]
+        main_path = (server.ASSETS_DIR / "js" / "main.js").resolve()
+        main_hash = server.ASSET_FINGERPRINTS[main_path]
         font_path = next((server.ASSETS_DIR / "fonts").glob("*.woff2")).resolve()
         font_hash = server.ASSET_FINGERPRINTS[font_path]
         http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
@@ -130,21 +156,21 @@ class StaticAppStructureTestCase(unittest.TestCase):
             self.assertEqual(not_modified.status, 304)
             self.assertEqual(not_modified.read(), b"")
 
-            connection.request("GET", f"/assets/js/core.js?v={core_hash}", headers={"Accept-Encoding": "br, gzip"})
+            connection.request("GET", f"/assets/js/main.js?v={main_hash}", headers={"Accept-Encoding": "br, gzip"})
             immutable_asset = connection.getresponse()
             immutable_body = immutable_asset.read()
             self.assertEqual(immutable_asset.status, 200)
             self.assertEqual(immutable_asset.getheader("Content-Encoding"), "br")
             self.assertEqual(immutable_asset.getheader("Cache-Control"), "public, max-age=31536000, immutable")
             self.assertIn("javascript", immutable_asset.getheader("Content-Type", ""))
-            self.assertEqual(server.brotli.decompress(immutable_body), core_path.read_bytes())
+            self.assertEqual(server.brotli.decompress(immutable_body), main_path.read_bytes())
 
-            connection.request("GET", "/assets/js/core.js?v=stale-version", headers={"Accept-Encoding": "gzip"})
+            connection.request("GET", "/assets/js/main.js?v=stale-version", headers={"Accept-Encoding": "gzip"})
             stale_asset = connection.getresponse()
             stale_body = stale_asset.read()
             self.assertEqual(stale_asset.getheader("Content-Encoding"), "gzip")
             self.assertEqual(stale_asset.getheader("Cache-Control"), "public, no-cache, max-age=0")
-            self.assertEqual(gzip.decompress(stale_body), core_path.read_bytes())
+            self.assertEqual(gzip.decompress(stale_body), main_path.read_bytes())
 
             font_url = "/assets/fonts/" + font_path.name.replace(" ", "%20") + f"?v={font_hash}"
             connection.request("GET", font_url, headers={"Accept-Encoding": "br, gzip"})
@@ -163,7 +189,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
     def test_new_chat_uses_one_shared_member_selector(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
-        app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
+        app_script = (FRONTEND_APP_DIR / "app.js").read_text(encoding="utf-8")
 
         self.assertIn('id="open-new-chat-button"', index_html)
         self.assertIn('id="new-chat-sheet"', index_html)
@@ -177,24 +203,27 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertNotIn('id="group-member-list"', index_html)
 
     def test_attachment_picker_and_paste_have_desktop_and_room_contracts(self) -> None:
-        attachment_script = (server.ASSETS_DIR / "js" / "attachments.js").read_text(encoding="utf-8")
-        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+        attachment_script = (FRONTEND_APP_DIR / "attachments.js").read_text(encoding="utf-8")
+        bootstrap_script = (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8")
 
         self.assertIn('["camera", "file", "voice", "pdf", "photo"]', attachment_script)
         self.assertIn('openAttachmentPicker(kind = "all")', attachment_script)
-        self.assertIn('"image/*,application/pdf"', attachment_script)
+        self.assertIn('const GENERAL_FILE_ACCEPT', attachment_script)
+        self.assertIn('docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"', attachment_script)
+        self.assertIn('kind === "file"', attachment_script)
+        self.assertIn('data-kind="file" for="chat-attachment-input"', server.INDEX_FILE.read_text(encoding="utf-8"))
         self.assertIn('chatRoom.addEventListener("paste", handlePastedChatAttachment)', bootstrap_script)
         self.assertNotIn('chatMessageInput.addEventListener("paste"', bootstrap_script)
 
     def test_voice_messages_are_recorded_in_app_and_rendered_without_download_links(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
-        voice_script = (server.ASSETS_DIR / "js" / "voice.js").read_text(encoding="utf-8")
-        attachment_script = (server.ASSETS_DIR / "js" / "attachments.js").read_text(encoding="utf-8")
-        chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
+        voice_script = (FRONTEND_APP_DIR / "voice.js").read_text(encoding="utf-8")
+        attachment_script = (FRONTEND_APP_DIR / "attachments.js").read_text(encoding="utf-8")
+        chat_script = (FRONTEND_APP_DIR / "chat.js").read_text(encoding="utf-8")
         permissions_policy = dict(server.COMMON_SECURITY_HEADERS)["Permissions-Policy"]
 
         self.assertIn("microphone=(self)", permissions_policy)
-        self.assertIn('accept="image/*,application/pdf"', index_html)
+        self.assertIn('accept="image/*,application/pdf,.txt,.csv,.md,.rtf,.zip,.doc,.xls,.ppt,.docx,.xlsx,.pptx"', index_html)
         self.assertNotIn('accept="audio/', index_html)
         self.assertIn('class="attachment-guide-label" data-kind="voice"', index_html)
         self.assertNotIn('id="chat-voice-button"', index_html)
@@ -203,15 +232,24 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('{ source: "voice-recorder", durationMs }', voice_script)
         self.assertIn('ColorlessPlatform.decorateIconButton(chatAttachmentButton, recording ? "square" : "paperclip"', voice_script)
         self.assertIn('source: options.source || "file-picker"', attachment_script)
-        self.assertIn('if (kind === "voice") toggleVoiceRecording()', (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8"))
+        self.assertIn('if (kind === "voice") toggleVoiceRecording()', (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8"))
         self.assertIn('attachment.kind === "voice"', chat_script)
         self.assertIn('audio.setAttribute("controlslist", "nodownload noplaybackrate")', chat_script)
 
+    def test_general_file_attachments_render_as_downloads(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        chat_script = (FRONTEND_APP_DIR / "chat.js").read_text(encoding="utf-8")
+
+        self.assertIn('data-attachment-kind="file">File</button>', index_html)
+        self.assertNotIn('data-attachment-kind="file">File<br>soon</button>', index_html)
+        self.assertIn('`${isPdf ? "PDF" : "파일"} · ${attachment.name || "attachment"}`', chat_script)
+        self.assertIn('attachmentLink.download = attachment.name || "attachment"', chat_script)
+
     def test_message_non_readers_are_shown_only_during_left_swipe(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
-        chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
-        messenger_script = (server.ASSETS_DIR / "js" / "messenger.js").read_text(encoding="utf-8")
-        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+        chat_script = (FRONTEND_APP_DIR / "chat.js").read_text(encoding="utf-8")
+        messenger_script = (FRONTEND_APP_DIR / "messenger.js").read_text(encoding="utf-8")
+        bootstrap_script = (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8")
 
         self.assertIn('id="message-read-menu"', index_html)
         self.assertIn("function beginMessageReadSwipe(event)", chat_script)
@@ -264,15 +302,15 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('height: 100dvh', signup_css)
 
     def test_render_requires_supabase_persistence(self) -> None:
-        render_config = (SERVER_PATH.parents[2] / "render.yaml").read_text(encoding="utf-8")
+        render_config = (REPO_ROOT / "render.yaml").read_text(encoding="utf-8")
 
         self.assertIn("key: REQUIRE_SUPABASE", render_config)
         self.assertIn("key: SUPABASE_URL", render_config)
         self.assertIn("key: SUPABASE_SERVICE_ROLE_KEY", render_config)
 
     def test_normalized_storage_schema_has_row_constraints_and_indexes(self) -> None:
-        schema = (server.BASE_DIR / "supabase-schema.sql").read_text(encoding="utf-8")
-        persistence = (server.BASE_DIR / "persistence.py").read_text(encoding="utf-8")
+        schema = (server.PACKAGE_DIR / "database" / "supabase-schema.sql").read_text(encoding="utf-8")
+        persistence = (server.PACKAGE_DIR / "persistence.py").read_text(encoding="utf-8")
 
         for table in (
             "app_migrations", "users", "profile_art", "social_accounts", "friendships", "rooms", "room_members",
@@ -309,17 +347,17 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("ORDER BY rowid DESC", persistence)
 
     def test_realtime_client_persists_event_cursor_and_deduplicates_event_ids(self) -> None:
-        events_script = (server.ASSETS_DIR / "js" / "platform" / "events.js").read_text(encoding="utf-8")
+        events_script = (FRONTEND_APP_DIR / "platform" / "events.js").read_text(encoding="utf-8")
 
         self.assertIn("colorless-realtime-cursor", events_script)
         self.assertIn("message.lastEventId", events_script)
         self.assertIn("seenEventIds.has", events_script)
 
     def test_messenger_uses_paged_bootstrap_and_revision_sync(self) -> None:
-        app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
+        app_script = (FRONTEND_APP_DIR / "app.js").read_text(encoding="utf-8")
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
-        chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
-        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+        chat_script = (FRONTEND_APP_DIR / "chat.js").read_text(encoding="utf-8")
+        bootstrap_script = (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8")
 
         self.assertNotIn('requestAction("messenger.load", "/messenger"', app_script)
         self.assertIn('requestAction("messenger.me", "/me"', app_script)
@@ -331,12 +369,12 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('loadFriendsPage({ render: true })', bootstrap_script)
 
     def test_chat_history_is_chunked_lazy_and_unloaded_between_rooms(self) -> None:
-        core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
-        chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
-        chat_virtual_script = (server.ASSETS_DIR / "js" / "chat-virtual.js").read_text(encoding="utf-8")
-        messenger_script = (server.ASSETS_DIR / "js" / "messenger.js").read_text(encoding="utf-8")
-        app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
-        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+        core_script = (FRONTEND_APP_DIR / "core.js").read_text(encoding="utf-8")
+        chat_script = (FRONTEND_APP_DIR / "chat.js").read_text(encoding="utf-8")
+        chat_virtual_script = (FRONTEND_APP_DIR / "chat-virtual.js").read_text(encoding="utf-8")
+        messenger_script = (FRONTEND_APP_DIR / "messenger.js").read_text(encoding="utf-8")
+        app_script = (FRONTEND_APP_DIR / "app.js").read_text(encoding="utf-8")
+        bootstrap_script = (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8")
 
         self.assertIn("const CHAT_MESSAGE_PAGE_SIZE = 30", core_script)
         self.assertIn("const CHAT_MESSAGE_MEMORY_LIMIT = 300", core_script)
@@ -366,16 +404,16 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("if (chatMessageList.scrollTop < 80) void loadOlderChatMessages()", bootstrap_script)
 
     def test_auth_client_omits_logout_body_and_reports_http_status(self) -> None:
-        auth_script = (server.ASSETS_DIR / "js" / "auth.js").read_text(encoding="utf-8")
-        http_script = (server.ASSETS_DIR / "js" / "platform" / "http.js").read_text(encoding="utf-8")
+        auth_script = (FRONTEND_APP_DIR / "auth.js").read_text(encoding="utf-8")
+        http_script = (FRONTEND_APP_DIR / "platform" / "http.js").read_text(encoding="utf-8")
 
         self.assertIn('requestAction("auth.logout", "/logout", { method: "POST" })', auth_script)
         self.assertNotIn('requestAction("auth.logout", "/logout", { method: "POST", body:', auth_script)
         self.assertIn('${method} ${url} 요청 실패 (HTTP ${statusLabel})', http_script)
 
     def test_stale_session_check_cannot_overwrite_a_completed_login(self) -> None:
-        core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
-        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+        core_script = (FRONTEND_APP_DIR / "core.js").read_text(encoding="utf-8")
+        bootstrap_script = (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8")
 
         self.assertIn("authEpoch: 0", core_script)
         self.assertIn("function advanceAuthEpoch()", core_script)
@@ -385,8 +423,9 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertEqual(bootstrap_script.count("if (authEpoch !== state.authEpoch) return;"), 2)
 
     def test_attachments_use_signed_grants_and_bounded_streaming(self) -> None:
-        attachment_script = (server.ASSETS_DIR / "js" / "attachments.js").read_text(encoding="utf-8")
+        attachment_script = (FRONTEND_APP_DIR / "attachments.js").read_text(encoding="utf-8")
         server_script = SERVER_PATH.read_text(encoding="utf-8")
+        upload_routes = (server.PACKAGE_DIR / "http" / "uploads.py").read_text(encoding="utf-8")
 
         self.assertIn('"/uploads/grant"', attachment_script)
         self.assertIn('"attachments.transfer"', attachment_script)
@@ -395,12 +434,12 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("def supabase_signed_upload_url", server_script)
         self.assertIn("def supabase_signed_download_url", server_script)
         self.assertIn("def stream_request_body_to_file", server_script)
-        self.assertIn('self.send_header("Accept-Ranges", "bytes")', server_script)
+        self.assertIn('self.send_header("Accept-Ranges", "bytes")', upload_routes)
 
     def test_shorts_players_wait_for_readiness_and_preload_adjacent_cards(self) -> None:
-        shorts_script = (server.ASSETS_DIR / "js" / "shorts.js").read_text(encoding="utf-8")
-        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
-        server_script = SERVER_PATH.read_text(encoding="utf-8")
+        shorts_script = (FRONTEND_APP_DIR / "shorts.js").read_text(encoding="utf-8")
+        bootstrap_script = (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8")
+        shorts_routes = (server.PACKAGE_DIR / "http" / "shorts.py").read_text(encoding="utf-8")
 
         self.assertIn('autoplay: "0"', shorts_script)
         self.assertIn('mute: "1"', shorts_script)
@@ -410,11 +449,11 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("if (distance > 1)", shorts_script)
         self.assertIn('window.addEventListener("message", handleShortPlayerMessage)', bootstrap_script)
         self.assertIn("payload.cycled", shorts_script)
-        self.assertIn('"cycled": cycled', server_script)
+        self.assertIn('"cycled": cycled', shorts_routes)
 
     def test_desktop_headers_share_one_height_and_message_times_cluster_for_five_minutes(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
-        chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
+        chat_script = (FRONTEND_APP_DIR / "chat.js").read_text(encoding="utf-8")
 
         self.assertIn("--desktop-header-height: 88px", index_html)
         self.assertIn("--chat-header-height: var(--desktop-header-height)", index_html)
@@ -431,29 +470,32 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
     def test_supabase_requests_use_persistent_connection_pools(self) -> None:
         server_script = SERVER_PATH.read_text(encoding="utf-8")
-        persistence_script = (server.BASE_DIR / "persistence.py").read_text(encoding="utf-8")
+        integrations_script = (server.PACKAGE_DIR / "integrations.py").read_text(encoding="utf-8")
+        persistence_script = (server.PACKAGE_DIR / "persistence.py").read_text(encoding="utf-8")
 
-        self.assertIn("OUTBOUND_HTTP_CLIENT = httpx.Client", server_script)
+        self.assertIn("OUTBOUND_HTTP_CLIENT = httpx.Client", integrations_script)
+        self.assertIn("from .integrations import OUTBOUND_HTTP_CLIENT", server_script)
         self.assertIn("SUPABASE_HTTP_CLIENT = httpx.Client", persistence_script)
         self.assertNotIn("urlopen(request", persistence_script)
 
     def test_shared_pipeline_modules_define_one_feature_contract(self) -> None:
-        platform_dir = server.ASSETS_DIR / "js" / "platform"
+        platform_dir = FRONTEND_APP_DIR / "platform"
         store_script = (platform_dir / "store.js").read_text(encoding="utf-8")
         pipeline_script = (platform_dir / "pipeline.js").read_text(encoding="utf-8")
         events_script = (platform_dir / "events.js").read_text(encoding="utf-8")
-        core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
+        core_script = (FRONTEND_APP_DIR / "core.js").read_text(encoding="utf-8")
 
-        self.assertIn("platform.createStore", store_script)
-        self.assertIn("platform.createActionPipeline", pipeline_script)
-        self.assertIn("platform.createEventRouter", events_script)
-        self.assertIn("platform.createRealtimeClient", events_script)
+        self.assertIn("export function createStore", store_script)
+        self.assertIn("export function createActionPipeline", pipeline_script)
+        self.assertIn("export function createEventRouter", events_script)
+        self.assertIn("export function createRealtimeClient", events_script)
+        self.assertIn('from "./platform/index.js"', core_script)
         self.assertIn("function requestAction", core_script)
 
     def test_primary_actions_use_accessible_svg_icons(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
-        icons_script = (server.ASSETS_DIR / "js" / "platform" / "icons.js").read_text(encoding="utf-8")
-        shorts_script = (server.ASSETS_DIR / "js" / "shorts.js").read_text(encoding="utf-8")
+        icons_script = (FRONTEND_APP_DIR / "platform" / "icons.js").read_text(encoding="utf-8")
+        shorts_script = (FRONTEND_APP_DIR / "shorts.js").read_text(encoding="utf-8")
 
         self.assertIn("function decorateIconButton", icons_script)
         self.assertIn('classList.add("ui-icon")', icons_script)
@@ -476,12 +518,12 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
     def test_status_emoji_picker_is_mandatory_once_and_accepts_only_one_emoji(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
-        core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
-        app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
-        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
-        chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
-        messenger_script = (server.ASSETS_DIR / "js" / "messenger.js").read_text(encoding="utf-8")
-        server_script = SERVER_PATH.read_text(encoding="utf-8")
+        core_script = (FRONTEND_APP_DIR / "core.js").read_text(encoding="utf-8")
+        app_script = (FRONTEND_APP_DIR / "app.js").read_text(encoding="utf-8")
+        bootstrap_script = (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8")
+        chat_script = (FRONTEND_APP_DIR / "chat.js").read_text(encoding="utf-8")
+        messenger_script = (FRONTEND_APP_DIR / "messenger.js").read_text(encoding="utf-8")
+        messaging_routes = (server.PACKAGE_DIR / "http" / "messaging.py").read_text(encoding="utf-8")
 
         start_app = re.search(r"async function startApp\(\) \{(.*?)\n\}", app_script, re.DOTALL)
         self.assertIsNotNone(start_app)
@@ -502,7 +544,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("function openCustomStatusEmojiInput()", core_script)
         self.assertIn("statusEmojiOnly: true", core_script)
         self.assertIn("openCustomStatusEmojiInput()", bootstrap_script)
-        self.assertIn("saved_activity_emoji(status_message) != status_message.strip()", server_script)
+        self.assertIn("saved_activity_emoji(status_message) != status_message.strip()", messaging_routes)
         self.assertIn("state.statusPickerOpener", core_script)
         self.assertIn('event.key === "Escape"', bootstrap_script)
         self.assertIn('event.key !== "Tab"', bootstrap_script)
@@ -532,10 +574,10 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("min-width: 44px", action_rule.group(1))
 
     def test_context_action_bar_keeps_tab_state_and_room_creation_explicit(self) -> None:
-        core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
-        action_bar_script = (server.ASSETS_DIR / "js" / "action-bar.js").read_text(encoding="utf-8")
-        messenger_script = (server.ASSETS_DIR / "js" / "messenger.js").read_text(encoding="utf-8")
-        shorts_script = (server.ASSETS_DIR / "js" / "shorts.js").read_text(encoding="utf-8")
+        core_script = (FRONTEND_APP_DIR / "core.js").read_text(encoding="utf-8")
+        action_bar_script = (FRONTEND_APP_DIR / "action-bar.js").read_text(encoding="utf-8")
+        messenger_script = (FRONTEND_APP_DIR / "messenger.js").read_text(encoding="utf-8")
+        shorts_script = (FRONTEND_APP_DIR / "shorts.js").read_text(encoding="utf-8")
 
         self.assertIn("actionBarByTab", core_script)
         self.assertIn("function renderChatActionBar", action_bar_script)
@@ -549,9 +591,9 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
     def test_my_tab_owns_profile_status_and_logout_while_lists_own_search(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
-        app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
-        action_bar_script = (server.ASSETS_DIR / "js" / "action-bar.js").read_text(encoding="utf-8")
-        messenger_script = (server.ASSETS_DIR / "js" / "messenger.js").read_text(encoding="utf-8")
+        app_script = (FRONTEND_APP_DIR / "app.js").read_text(encoding="utf-8")
+        action_bar_script = (FRONTEND_APP_DIR / "action-bar.js").read_text(encoding="utf-8")
+        messenger_script = (FRONTEND_APP_DIR / "messenger.js").read_text(encoding="utf-8")
 
         self.assertIn('id="my-tab"', index_html)
         self.assertIn('id="my-view"', index_html)
@@ -575,7 +617,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
     def test_desktop_sheets_stay_in_the_left_content_pane_and_actions_are_not_duplicated(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
-        action_bar_script = (server.ASSETS_DIR / "js" / "action-bar.js").read_text(encoding="utf-8")
+        action_bar_script = (FRONTEND_APP_DIR / "action-bar.js").read_text(encoding="utf-8")
 
         self.assertIn(".app > .sheet-backdrop", index_html)
         self.assertIn("grid-column: 1 / 2", index_html)
@@ -587,8 +629,8 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
     def test_system_feedback_uses_list_slot_and_chat_popup_without_a_permanent_bar(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
-        core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
-        app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
+        core_script = (FRONTEND_APP_DIR / "core.js").read_text(encoding="utf-8")
+        app_script = (FRONTEND_APP_DIR / "app.js").read_text(encoding="utf-8")
 
         self.assertRegex(
             index_html,
@@ -603,10 +645,10 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn(".chat-room > .tab-status", index_html)
 
     def test_two_hundred_shorts_use_a_fixed_virtual_dom_window(self) -> None:
-        core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
-        shorts_script = (server.ASSETS_DIR / "js" / "shorts.js").read_text(encoding="utf-8")
-        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
-        app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
+        core_script = (FRONTEND_APP_DIR / "core.js").read_text(encoding="utf-8")
+        shorts_script = (FRONTEND_APP_DIR / "shorts.js").read_text(encoding="utf-8")
+        bootstrap_script = (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8")
+        app_script = (FRONTEND_APP_DIR / "app.js").read_text(encoding="utf-8")
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
 
         window_size = int(re.search(r"SHORTS_DOM_WINDOW_SIZE = (\d+)", core_script).group(1))
@@ -632,22 +674,24 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertNotIn("createShortFrame", create_card.group(0))
 
     def test_shorts_embed_identifies_its_web_origin(self) -> None:
-        shorts_script = (server.ASSETS_DIR / "js" / "shorts.js").read_text(encoding="utf-8")
+        shorts_script = (FRONTEND_APP_DIR / "shorts.js").read_text(encoding="utf-8")
         self.assertIn("origin: window.location.origin", shorts_script)
         self.assertIn("widget_referrer: window.location.href", shorts_script)
         self.assertIn('frame.referrerPolicy = "strict-origin-when-cross-origin"', shorts_script)
 
     def test_large_images_use_a_cancellable_worker_pipeline(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
-        worker_script = (server.ASSETS_DIR / "js" / "image-worker.js").read_text(encoding="utf-8")
-        manager_script = (server.ASSETS_DIR / "js" / "platform" / "image-processing.js").read_text(encoding="utf-8")
-        attachments_script = (server.ASSETS_DIR / "js" / "attachments.js").read_text(encoding="utf-8")
-        profile_script = (server.ASSETS_DIR / "js" / "profile.js").read_text(encoding="utf-8")
-        room_script = (server.ASSETS_DIR / "js" / "room-settings.js").read_text(encoding="utf-8")
+        worker_script = (FRONTEND_APP_DIR / "image-worker.js").read_text(encoding="utf-8")
+        manager_script = (FRONTEND_APP_DIR / "platform" / "image-processing.js").read_text(encoding="utf-8")
+        attachments_script = (FRONTEND_APP_DIR / "attachments.js").read_text(encoding="utf-8")
+        profile_script = (FRONTEND_APP_DIR / "profile.js").read_text(encoding="utf-8")
+        room_script = (FRONTEND_APP_DIR / "room-settings.js").read_text(encoding="utf-8")
         benchmark_html = (server.ASSETS_DIR / "image-worker-benchmark.html").read_text(encoding="utf-8")
-        benchmark_script = (server.ASSETS_DIR / "image-worker-benchmark.js").read_text(encoding="utf-8")
+        benchmark_script = (FRONTEND_SOURCE_DIR / "image-worker-benchmark.js").read_text(encoding="utf-8")
 
-        self.assertLess(index_html.index("platform/image-processing.js"), index_html.index("assets/js/core.js"))
+        self.assertIn('defer src="assets/js/main.js?', index_html)
+        self.assertIn('from "./platform/image-processing.js"', (FRONTEND_APP_DIR / "core.js").read_text(encoding="utf-8"))
+        self.assertIn("COLORLESS_IMAGE_WORKER_URL", manager_script)
         self.assertIn("new Worker(workerUrl)", manager_script)
         self.assertIn("job.worker.terminate()", manager_script)
         self.assertIn('new DOMException("Image processing was canceled", "AbortError")', manager_script)
@@ -680,7 +724,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
     def test_profile_pixel_editor_is_one_keyboard_accessible_canvas(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
-        profile_script = (server.ASSETS_DIR / "js" / "profile.js").read_text(encoding="utf-8")
+        profile_script = (FRONTEND_APP_DIR / "profile.js").read_text(encoding="utf-8")
 
         canvas = re.search(r'<canvas(?=[^>]*id="pixel-editor-grid")[^>]*>', index_html)
         self.assertIsNotNone(canvas)
@@ -696,9 +740,9 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertNotIn('className = "pixel-cell"', profile_script)
 
     def test_profile_pixel_original_is_loaded_only_when_editor_opens(self) -> None:
-        profile_script = (server.ASSETS_DIR / "js" / "profile.js").read_text(encoding="utf-8")
-        app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
-        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+        profile_script = (FRONTEND_APP_DIR / "profile.js").read_text(encoding="utf-8")
+        app_script = (FRONTEND_APP_DIR / "app.js").read_text(encoding="utf-8")
+        bootstrap_script = (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8")
 
         editor = re.search(r"async function openProfileEditor\(\) \{(.*?)\n\}", profile_script, re.DOTALL)
         self.assertIsNotNone(editor)
@@ -706,12 +750,12 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("profile.load-pixels", editor.group(1))
         self.assertNotIn('"/profile/pixels"', app_script)
         self.assertIn("() => void openProfileEditor()", bootstrap_script)
-        self.assertNotIn("pixels.join", (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8"))
+        self.assertNotIn("pixels.join", (FRONTEND_APP_DIR / "core.js").read_text(encoding="utf-8"))
 
     def test_profile_photo_import_converts_into_the_single_pixel_profile_system(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
-        profile_script = (server.ASSETS_DIR / "js" / "profile.js").read_text(encoding="utf-8")
-        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+        profile_script = (FRONTEND_APP_DIR / "profile.js").read_text(encoding="utf-8")
+        bootstrap_script = (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8")
 
         self.assertIn("사진으로 픽셀 프로필 만들기", index_html)
         self.assertIn("32×32 픽셀로 변환", index_html)
@@ -727,7 +771,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("convertCroppedProfileImageToPixels", bootstrap_script)
 
     def test_presence_events_patch_indexed_rows_on_one_animation_frame(self) -> None:
-        messenger_script = (server.ASSETS_DIR / "js" / "messenger.js").read_text(encoding="utf-8")
+        messenger_script = (FRONTEND_APP_DIR / "messenger.js").read_text(encoding="utf-8")
 
         self.assertIn("function rebuildPresenceIndexes", messenger_script)
         self.assertIn("state.friendByUsername.get(payload.username)", messenger_script)
@@ -746,7 +790,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("schedulePresencePatch", presence_handler.group(1))
         feature_scripts = [
             path.read_text(encoding="utf-8")
-            for path in (server.ASSETS_DIR / "js").glob("*.js")
+            for path in (FRONTEND_APP_DIR).glob("*.js")
             if path.name != "signup.js"
         ]
         self.assertTrue(all("fetch(" not in script for script in feature_scripts))
@@ -1130,7 +1174,7 @@ class AuthenticationHttpIntegrationTestCase(unittest.TestCase):
             requests = (
                 ("/", {}),
                 ("/health", {}),
-                ("/assets/js/core.js", {}),
+                ("/assets/js/main.js", {}),
                 (f"/uploads/{filename}", {"Cookie": f"{server.SESSION_COOKIE_NAME}={session_token}"}),
                 ("/auth/providers", {"X-Forwarded-Proto": "https", "X-Forwarded-Host": "chat.example.com"}),
             )
@@ -1188,7 +1232,7 @@ class OperationsObservabilityTestCase(unittest.TestCase):
         self.assertIsNone(error)
         self.assertIsNotNone(user)
         captured = io.StringIO()
-        with mock.patch.object(server, "STRUCTURED_LOGS_ENABLED", True), redirect_stdout(captured):
+        with mock.patch.object(observability, "STRUCTURED_LOGS_ENABLED", True), redirect_stdout(captured):
             http_server, server_thread = self.start_server()
             connection = http.client.HTTPConnection("127.0.0.1", http_server.server_address[1], timeout=5)
             try:
@@ -1316,9 +1360,9 @@ class ShortsCatalogTestCase(unittest.TestCase):
         collector = server.ShortsCatalogCollector(self.repository, "collector-a", start=False)
         try:
             with (
-                mock.patch.object(server, "YOUTUBE_API_KEY", "test-key"),
+                mock.patch.object(shorts, "YOUTUBE_API_KEY", "test-key"),
                 mock.patch.object(
-                    server,
+                    shorts,
                     "collect_youtube_catalog_job",
                     side_effect=server.YoutubeCatalogError("http-429"),
                 ),
@@ -1346,8 +1390,8 @@ class ShortsCatalogTestCase(unittest.TestCase):
 
         try:
             with (
-                mock.patch.object(server, "YOUTUBE_API_KEY", "test-key"),
-                mock.patch.object(server, "collect_youtube_catalog_job", side_effect=slow_collect),
+                mock.patch.object(shorts, "YOUTUBE_API_KEY", "test-key"),
+                mock.patch.object(shorts, "collect_youtube_catalog_job", side_effect=slow_collect),
             ):
                 thread = threading.Thread(target=first.run_once)
                 thread.start()
@@ -1406,7 +1450,7 @@ class ShortsCatalogTestCase(unittest.TestCase):
         timings = []
         try:
             with (
-                mock.patch.object(server, "fetch_youtube_catalog_json", side_effect=AssertionError("external call")) as catalog_fetch,
+                mock.patch.object(shorts, "fetch_youtube_catalog_json", side_effect=AssertionError("external call")) as catalog_fetch,
             ):
                 for request_index in range(20):
                     connection = http.client.HTTPConnection(*address, timeout=5)
@@ -1633,11 +1677,11 @@ class AttachmentTransferIntegrationTestCase(unittest.TestCase):
         finally:
             connection.close()
 
-    def grant(self, payload: bytes, name: str = "report.pdf") -> dict:
+    def grant(self, payload: bytes, name: str = "report.pdf", content_type: str = "application/pdf") -> dict:
         status, _, body = self.request(
             "POST",
             "/uploads/grant",
-            json.dumps({"name": name, "type": "application/pdf", "size": len(payload)}).encode("utf-8"),
+            json.dumps({"name": name, "type": content_type, "size": len(payload)}).encode("utf-8"),
             {"Content-Type": "application/json"},
         )
         self.assertEqual(status, 201, body)
@@ -1733,6 +1777,54 @@ class AttachmentTransferIntegrationTestCase(unittest.TestCase):
             {"Content-Type": "application/json"},
         )
         self.assertEqual(status, 409)
+
+    def test_general_text_file_is_uploaded_sent_and_downloaded(self) -> None:
+        payload = "Colorless 일반 파일 첨부\n두 번째 줄\n".encode("utf-8")
+        upload = self.grant(payload, "회의 메모.txt", "text/plain")
+
+        status, _, body = self.request("PUT", upload["url"], payload, upload["headers"])
+        self.assertEqual(status, 200, body)
+        status, _, body = self.request(
+            "POST",
+            "/uploads/complete",
+            json.dumps({"id": upload["id"]}).encode("utf-8"),
+            {"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 201, body)
+        attachment = json.loads(body.decode("utf-8"))["attachment"]
+        self.assertEqual(attachment["name"], "회의 메모.txt")
+        self.assertEqual(attachment["type"], "text/plain")
+
+        status, _, body = self.request(
+            "POST",
+            "/messages",
+            json.dumps({
+                "roomId": self.room["id"],
+                "text": "일반 파일",
+                "attachment": attachment,
+                "clientMessageId": f"file_{str(time.time_ns())[-18:]}",
+            }).encode("utf-8"),
+            {"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 201, body)
+        saved_attachment = json.loads(body.decode("utf-8"))["attachment"]
+        self.assertEqual(saved_attachment["name"], "회의 메모.txt")
+
+        status, headers, body = self.request("GET", attachment["url"])
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("Content-Type"), "text/plain")
+        self.assertEqual(body, payload)
+
+    def test_binary_content_cannot_be_disguised_as_text_or_zip(self) -> None:
+        text_payload = b"text-prefix\x00binary"
+        text_upload = self.grant(text_payload, "fake.txt", "text/plain")
+        status, _, _ = self.request("PUT", text_upload["url"], text_payload, text_upload["headers"])
+        self.assertEqual(status, 400)
+
+        zip_payload = b"not-a-zip-file"
+        zip_upload = self.grant(zip_payload, "fake.zip", "application/zip")
+        status, _, _ = self.request("PUT", zip_upload["url"], zip_payload, zip_upload["headers"])
+        self.assertEqual(status, 400)
 
     def test_voice_upload_requires_in_app_recorder_metadata(self) -> None:
         payload = b"\x1a\x45\xdf\xa3" + (b"recorded-opus" * 128)

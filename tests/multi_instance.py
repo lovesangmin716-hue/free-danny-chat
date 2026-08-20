@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
-SERVER = ROOT / "outputs" / "chat-app" / "server.py"
+SRC_DIR = ROOT / "src"
 
 
 def request(port: int, method: str, path: str, payload: dict | None = None, cookie: str = "") -> tuple[int, dict, str]:
@@ -64,8 +64,11 @@ def start_server(port: int, state_file: Path, instance_id: str) -> subprocess.Po
             "SOCIAL_DEMO_LOGIN_ENABLED": "false",
         }
     )
+    environment["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(SRC_DIR), environment.get("PYTHONPATH", "")) if part
+    )
     process = subprocess.Popen(
-        [sys.executable, str(SERVER)],
+        [sys.executable, "-m", "colorless"],
         cwd=ROOT,
         env=environment,
         stdout=subprocess.DEVNULL,

@@ -1,0 +1,14 @@
+import "../core.js";
+import "../profile.js";
+import "../messenger.js";
+import "../attachments.js";
+import "../voice.js";
+import "../room-settings.js";
+import "../chat.js";
+import "../chat-virtual.js";
+import "../work-mode.js";
+import "../shorts.js";
+import "../action-bar.js";
+import "../app.js";
+import "../auth.js";
+import "../bootstrap.js";

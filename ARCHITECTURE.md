@@ -14,16 +14,18 @@ view intent
   -> render
 ```
 
-The platform modules are loaded before all feature scripts:
+`frontend/src/app/entrypoints/main.js` is the source entrypoint. It imports the feature graph as native ES Modules; every cross-file dependency is an explicit `import`/`export` binding rather than a shared global or an HTML script-order contract. esbuild resolves that graph into the minified production entrypoint `src/colorless/web/assets/js/main.js`. Only generated browser artifacts are included in the Python package, leaving the source graph available for future web, desktop, and mobile clients without serving it in production.
 
 - `platform/store.js`: named state transactions and subscriptions
 - `platform/http.js`: JSON parsing and normalized HTTP errors
 - `platform/pipeline.js`: action lifecycle, deduplication, commit, effects, and failures
 - `platform/events.js`: SSE transport plus typed realtime event registration and dispatch
 - `platform/icons.js`: accessible SVG controls shared by static and dynamic views
+- `platform/image-processing.js`: cancellable Worker boundary whose fingerprinted URL is injected during the build
+- `core.js`: shared state, DOM references, API actions, and registered lifecycle hooks
 - `action-bar.js`: tab-scoped chat, friend, shorts, notification, and input modes
 
-Feature modules must not call `fetch` directly. Network work goes through `requestAction`, and SSE messages go through `realtimeEvents`.
+Feature modules must not call `fetch` directly or publish new browser globals. Network work goes through `requestAction`, SSE messages go through `realtimeEvents`, and dependencies cross files only through module imports. Core-to-feature callbacks use `registerCoreHooks`, keeping the core independent from feature implementations and avoiding cyclic initialization.
 
 ## Server flow
 
@@ -41,6 +43,29 @@ HTTP route
 `ApplicationServices` contains feature commands without writing HTTP responses. A command either raises `CommandFailure` or returns `CommandOutcome`. This keeps validation, persistence, response status, and emitted events in one explicit result.
 
 Binary upload handlers retain specialized parsing, but use the same stores and event contracts after validation.
+
+### Python module boundaries
+
+- `config.py`: environment loading, limits, security policy, and immutable application constants
+- `web_resources.py`: packaged HTML/assets, fingerprints, compression caches, and content negotiation
+- `observability.py`: request/SSE metrics, safe route labels, process probes, and structured logging
+- `utils.py`: identifiers, cursors, profile/image validation, cookies, passwords, and phone normalization
+- `runtime.py`: bounded in-memory session, upload grant, rate-limit, presence, OAuth, and verification stores
+- `shorts.py`: YouTube catalog queries, collection lease worker, filtering, and collector metrics
+- `cache.py`: bounded single-flight TTL cache
+- `integrations.py`: pooled outbound HTTP plus shared Supabase request headers
+- `persistence.py`: normalized SQLite and Supabase repositories
+- `state.py`: state indexes, normalized repository coordination, and chat domain persistence boundary
+- `application.py`: feature commands and explicit `CommandOutcome` domain events
+- `realtime.py`: durable event outbox, replay, cross-instance consumption, and presence cleanup
+- `http/auth.py`: local/social authentication and phone verification routes
+- `http/shorts.py`: the authenticated Shorts feed HTTP boundary
+- `http/messaging.py`: session, profile, room, message, presence, and SSE routes
+- `http/uploads.py`: profile/room images and attachment transfer routes
+- `http/context.py`: live composition-root dependency view used by route mixins
+- `server.py`: composition root, shared HTTP transport/dispatch, and process lifecycle
+
+Lower-level modules do not import `server.py`. Route mixins receive a live `HandlerContext` view of the composition root, so tests and deployments can replace runtime collaborators without circular imports. `StateStore` receives presence through `bind_presence`, application services receive stores through their constructor, and the durable broker receives delivery/cleanup callbacks. The composition root performs this wiring, which keeps startup direction acyclic and leaves future desktop and mobile clients dependent on HTTP/realtime contracts rather than Python implementation details.
 
 ## Rules
 
@@ -111,9 +136,9 @@ The production font artifact contains one 200,272-byte Korean WOFF2 and no TTF/O
 
 Every production asset URL includes the first 12 hexadecimal characters of its SHA-256 content hash. The server independently computes the same manifest at startup and grants `public, max-age=31536000, immutable` only when the supplied hash matches. A stale or unversioned URL remains usable for an older HTML document but receives `no-cache`, preventing mismatched content from being pinned under an obsolete fingerprint. HTML uses an ETag with `no-cache, max-age=0` and returns `304` on revalidation. `Vary: Accept-Encoding` accompanies identity, gzip, and Brotli responses; already-compressed WOFF2 is not recompressed.
 
-`tests/static_budget.py` fails on any TTF/OTF, stale content hash, or budget overrun. Current raw budgets and measurements are: JavaScript 222,472/256,000 bytes, CSS 3,828/16,384, font 200,272/256,000, images 0/102,400, HTML 59,038/81,920, and total static artifact 485,610/524,288. Combined compressible assets measure 52,972 bytes with gzip and 47,985 bytes with Brotli. The GitHub Actions workflow installs the pinned Brotli dependency and runs both this budget and the full unit suite.
+`tests/static_budget.py` fails on any TTF/OTF, unresolved source-module import, stale content hash, or budget overrun. The esbuild production output measures 151,729 bytes of JavaScript against the 256,000-byte raw budget, while the complete static artifact measures 426,719 bytes against 524,288. Entry HTML, standalone workers, and Worker URLs use content fingerprints. CI runs `npm run build:check` before the budget test so a source change without regenerated artifacts cannot be merged.
 
-The browser fixture `/assets/static-load-benchmark.html` fetches the production index and every critical asset twice at a 390×844 mobile viewport. Local Chromium cold load transferred 267,870 bytes in 396.4ms, including one 200,572-byte font request; the warm pass transferred 10,246 bytes in 154.1ms, with all 18 fingerprinted scripts/font served from cache at zero transfer bytes. The fixture page recorded FCP at 280ms. These localhost values verify policy and provide a regression baseline; a throttled production LCP below 2.5 seconds remains a service-level candidate rather than a claim derived from the local probe.
+The browser fixture `/assets/static-load-benchmark.html` fetches the production index and every critical asset twice at a 390×844 mobile viewport. After bundling, the index exposes one application script plus the font preload instead of a multi-request module graph. A local Chromium run in the validation session completed the fixture successfully and recorded FCP at 148ms; cache state makes that localhost number diagnostic rather than a production performance claim. A throttled production LCP below 2.5 seconds remains a service-level candidate.
 
 ## Normalized persistence migration
 

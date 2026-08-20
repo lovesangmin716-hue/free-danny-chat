@@ -1,18 +1,31 @@
 services:
   - type: web
-    name: codex-talk
+    name: colorless
     runtime: python
-    rootDir: outputs/chat-app
     plan: free
-    buildCommand: pip install -r requirements.txt && python -m py_compile server.py
-    startCommand: python server.py
+    buildCommand: npm --prefix frontend ci && npm --prefix frontend run build && npm --prefix frontend run build:check && python -m pip install . && python -m compileall -q src/colorless
+    startCommand: python -m colorless
     healthCheckPath: /ready
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.11
+      - key: NODE_VERSION
+        value: 22.22.0
       - key: HOST
         value: 0.0.0.0
       - key: PORT
         value: 10000
       - key: PUBLIC_BASE_URL
+        sync: false
+      - key: PHONE_VERIFICATION_MODE
+        value: prod
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: KAKAO_REST_API_KEY
+        sync: false
+      - key: KAKAO_CLIENT_SECRET
         sync: false
       - key: MAX_REQUEST_THREADS
         value: "64"
@@ -40,6 +53,8 @@ services:
         value: "5000"
       - key: YOUTUBE_API_KEY
         sync: false
+      - key: SOCIAL_DEMO_LOGIN_ENABLED
+        value: "false"
       - key: REQUIRE_SUPABASE
         value: "true"
       - key: SUPABASE_URL

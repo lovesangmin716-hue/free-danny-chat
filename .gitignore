@@ -21,8 +21,11 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+frontend/node_modules/
 
 # Colorless runtime data
+.colorless-data/
+# Legacy runtime location retained so existing local data is never committed.
 outputs/chat-app/chat_state.json
 outputs/chat-app/chat_state.json.tmp
 outputs/chat-app/chat_state.json.sqlite3

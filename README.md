@@ -8,7 +8,7 @@
 - Google, Kakao OAuth 로그인
 - 친구 ID 검색과 친구 추가
 - 1:1 채팅, 읽음 상태, 접속 상태, 실시간 이벤트
-- 이미지 및 PDF 첨부와 채팅 입력창 붙여넣기(이미지 원본은 최대 50MB까지 선택 가능하며 브라우저에서 WebP로 줄인 뒤 8MB 이하만 전송, PDF와 GIF는 최대 8MB)
+- 이미지, PDF, 텍스트·CSV·Markdown·RTF·ZIP 및 Office 문서 첨부와 채팅 입력창 붙여넣기(이미지 원본은 최대 50MB까지 선택 가능하며 브라우저에서 WebP로 줄인 뒤 8MB 이하만 전송, 나머지 파일은 최대 8MB)
 - 픽셀 아바타 편집과 프로필 사진 업로드(픽셀 원본은 별도 3KB RGB 리소스로 저장·편집기를 열 때만 조회하고, 목록은 immutable 버전 썸네일만 지연 로딩)
 - YouTube Data API v3 기반 Shorts 피드와 채팅 공유
 - 로컬 SQLite 또는 Supabase를 이용한 증분 상태 저장
@@ -21,15 +21,15 @@
 - Python 3.10 이상
 - Git
 
-정적 응답 Brotli 압축을 위해 pinned 의존성을 설치합니다.
+`pyproject.toml`이 Python 패키지와 정적 웹 리소스를 함께 설치합니다.
 
 ### 실행
 
 ```bash
 git clone https://github.com/lovesangmin716-hue/free-danny-chat.git
 cd free-danny-chat
-pip install -r outputs/chat-app/requirements.txt
-python outputs/chat-app/server.py
+python -m pip install -e .
+python -m colorless
 ```
 
 브라우저에서 [http://localhost:8765](http://localhost:8765)를 엽니다. 서버 상태는 다음 명령으로 확인할 수 있습니다.
@@ -53,16 +53,16 @@ curl http://localhost:8765/health
 PowerShell:
 
 ```powershell
-Copy-Item outputs/chat-app/.env.example outputs/chat-app/.env
+Copy-Item .env.example .env
 ```
 
 macOS 또는 Linux:
 
 ```bash
-cp outputs/chat-app/.env.example outputs/chat-app/.env
+cp .env.example .env
 ```
 
-`outputs/chat-app/.env`는 Git에서 제외됩니다. 실제 키나 Supabase service role key를 커밋하지 마세요.
+루트의 `.env`는 Git에서 제외됩니다. 다른 설정 파일을 사용하려면 `COLORLESS_ENV_FILE`에 경로를 지정하세요. 실제 키나 Supabase service role key를 커밋하지 마세요.
 
 ### 서버와 저장소
 
@@ -71,7 +71,7 @@ cp outputs/chat-app/.env.example outputs/chat-app/.env
 | `HOST` | `0.0.0.0` | 서버가 바인딩할 호스트 |
 | `PORT` | `8765` | 서버 포트 |
 | `PUBLIC_BASE_URL` | 로컬에서는 요청 주소에서 계산 | OAuth 콜백에 사용할 공개 기준 URL. 운영에서 OAuth를 켜면 필수 |
-| `DATA_DIR` | `outputs/chat-app` | 로컬 상태와 업로드 파일을 저장할 디렉터리 |
+| `DATA_DIR` | `<실행 디렉터리>/.colorless-data` | 로컬 상태와 업로드 파일을 저장할 디렉터리 |
 | `STATE_FILE` | `<DATA_DIR>/chat_state.json` | 기존 JSON을 가져올 경로이자 SQLite 파일 이름의 기준 경로. 실제 DB는 `<STATE_FILE>.sqlite3`에 생성 |
 | `UPLOADS_DIR` | `<DATA_DIR>/uploads` | 로컬 첨부 파일 디렉터리 |
 | `MAX_REQUEST_THREADS` | `64` | SSE를 포함한 프로세스 전체 동시 요청 스레드 상한 |
@@ -96,17 +96,17 @@ cp outputs/chat-app/.env.example outputs/chat-app/.env
 | `SUPABASE_SERVICE_ROLE_KEY` | 미설정 | 서버 전용 Supabase service role key |
 | `REQUIRE_SUPABASE` | `false` | `true`이면 Supabase 설정이 없을 때 서버 시작을 중단해 임시 파일 저장을 방지 |
 
-`SUPABASE_URL`과 `SUPABASE_SERVICE_ROLE_KEY`를 모두 설정하면 Supabase와 private `chat-uploads` 버킷을 사용합니다. 브라우저는 객체 하나에 한정된 signed upload URL로 저장소에 직접 전송하고, 서버는 크기·MIME·magic bytes를 확인한 뒤에만 메시지 첨부를 허용합니다. 다운로드는 방 접근 권한을 확인한 뒤 기본 60초 signed URL로 redirect하므로 정상 파일 바이트는 앱 서버를 지나지 않습니다. Supabase signed upload token 자체의 유효기간은 플랫폼이 정한 2시간이며, 앱의 pending grant는 기본 10분 뒤 만료되어 첨부에 사용할 수 없습니다. 최신 [`outputs/chat-app/supabase-schema.sql`](outputs/chat-app/supabase-schema.sql)은 사용자·관계·방·멤버·메시지·읽음 위치·세션·Shorts 상태의 정규화 테이블과 필수 제약/인덱스를 생성하며, 전환 검증과 rollback 동안 기존 `app_state`도 보존합니다.
+`SUPABASE_URL`과 `SUPABASE_SERVICE_ROLE_KEY`를 모두 설정하면 Supabase와 private `chat-uploads` 버킷을 사용합니다. 브라우저는 객체 하나에 한정된 signed upload URL로 저장소에 직접 전송하고, 서버는 크기·MIME·magic bytes를 확인한 뒤에만 메시지 첨부를 허용합니다. 다운로드는 방 접근 권한을 확인한 뒤 기본 60초 signed URL로 redirect하므로 정상 파일 바이트는 앱 서버를 지나지 않습니다. Supabase signed upload token 자체의 유효기간은 플랫폼이 정한 2시간이며, 앱의 pending grant는 기본 10분 뒤 만료되어 첨부에 사용할 수 없습니다. 최신 [`src/colorless/database/supabase-schema.sql`](src/colorless/database/supabase-schema.sql)은 사용자·관계·방·멤버·메시지·읽음 위치·세션·Shorts 상태의 정규화 테이블과 필수 제약/인덱스를 생성하며, 전환 검증과 rollback 동안 기존 `app_state`도 보존합니다.
 
 서버는 문서, JSON, 정적 asset, 인증된 업로드를 포함한 모든 HTTP 응답에 CSP, MIME sniffing 차단, framing 차단, Referrer Policy, Permissions Policy를 공통 적용합니다. CSP는 자체 리소스와 Google Identity/YouTube에 필요한 origin만 허용합니다. HTTPS로 전달된 운영 요청에는 HSTS도 추가되므로 Render 앞단에서 `X-Forwarded-Proto: https`가 유지되어야 합니다.
 
-두 변수가 없으면 상태는 `outputs/chat-app/chat_state.json.sqlite3`, 첨부 파일은 `outputs/chat-app/uploads/`에 저장됩니다. 이 fallback은 요청을 64KB씩 `.part` 파일로 기록하고 magic bytes와 정확한 크기를 검증한 뒤 atomic rename하며, 다운로드의 단일 `Range` 요청과 backpressure를 지원합니다. 이전 버전의 `chat_state.json`이 있으면 첫 실행 때 SQLite로 가져옵니다. 런타임 상태와 업로드 파일은 `.gitignore`에 포함되어 있습니다.
+두 변수가 없으면 상태는 `.colorless-data/chat_state.json.sqlite3`, 첨부 파일은 `.colorless-data/uploads/`에 저장됩니다. 다만 새 데이터 디렉터리가 없고 기존 `outputs/chat-app`에 로컬 DB나 업로드가 있으면 데이터 유실을 피하기 위해 그 위치를 자동으로 이어서 사용합니다. 이 fallback은 요청을 64KB씩 `.part` 파일로 기록하고 magic bytes와 정확한 크기를 검증한 뒤 atomic rename하며, 다운로드의 단일 `Range` 요청과 backpressure를 지원합니다. 런타임 상태와 업로드 파일은 `.gitignore`에 포함되어 있습니다.
 
 로컬 SQLite는 최초 실행에 기존 `state_parts`를 정규화 행으로 원자적으로 가져옵니다. 이후 메시지는 `messages`에 동기 INSERT되고 방별 JSON 배열을 다시 쓰거나 프로세스 메모리에 전체 적재하지 않습니다. 운영 데이터는 오프라인 전환 전에 백업과 건수/FK 검증을 실행하세요.
 
 ```bash
-python outputs/chat-app/migrate_normalized.py outputs/chat-app/chat_state.json.sqlite3
-python outputs/chat-app/migrate_normalized.py outputs/chat-app/chat_state.json.sqlite3 --verify-only
+colorless-migrate .colorless-data/chat_state.json.sqlite3
+colorless-migrate .colorless-data/chat_state.json.sqlite3 --verify-only
 ```
 
 첫 명령은 기본적으로 `.pre-normalized.bak` 백업을 만든 뒤 한 트랜잭션으로 변환합니다. 검증이 실패하면 서버를 내리고 백업 DB로 원본을 복원할 수 있으며, `state_parts` 자체도 전환 안정화 기간 동안 삭제하지 않습니다.
@@ -114,7 +114,7 @@ python outputs/chat-app/migrate_normalized.py outputs/chat-app/chat_state.json.s
 Supabase 운영 전환은 쓰기를 잠근 유지보수 창에서 진행합니다.
 
 1. Supabase의 Point-in-Time Recovery 또는 수동 백업을 만들고 `app_state`를 별도로 내보냅니다.
-2. [`outputs/chat-app/supabase-schema.sql`](outputs/chat-app/supabase-schema.sql)을 적용합니다. 정규화 테이블은 `service_role`만 직접 접근할 수 있고 여러 행을 바꾸는 명령은 트랜잭션 RPC로 노출됩니다.
+2. [`src/colorless/database/supabase-schema.sql`](src/colorless/database/supabase-schema.sql)을 적용합니다. 정규화 테이블은 `service_role`만 직접 접근할 수 있고 여러 행을 바꾸는 명령은 트랜잭션 RPC로 노출됩니다.
 3. 새 서버를 시작합니다. `app_migrations.normalized_state`가 없으면 서버가 기존 `app_state`를 멱등 upsert로 가져오고, 모든 단계가 성공한 뒤에만 전환 마커를 기록합니다.
 4. SQL Editor에서 `select public.colorless_storage_counts();`와 `select * from public.app_migrations where key = 'normalized_state';`를 확인한 뒤 쓰기를 다시 엽니다. 서버 복원은 고정 정렬과 `limit`/`offset` 페이지를 사용하므로 PostgREST의 1,000행 응답 상한을 넘는 계정과 방도 누락하지 않습니다.
 
@@ -180,14 +180,14 @@ SOCIAL_DEMO_LOGIN_ENABLED=false
 
 ## Render 배포
 
-루트의 [`render.yaml`](render.yaml)은 `outputs/chat-app`을 서비스 루트로 사용합니다.
+루트의 [`render.yaml`](render.yaml)은 저장소 루트에서 `colorless` 패키지를 설치합니다.
 
 1. 이 저장소를 GitHub에 푸시합니다.
 2. Render에서 새 Blueprint를 만들고 저장소를 연결합니다.
-3. Blueprint 생성 화면에서 `PUBLIC_BASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`를 반드시 등록합니다.
+3. Blueprint 생성 화면에서 `PUBLIC_BASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`와 사용할 Google/Kakao 로그인 자격 증명을 등록합니다.
 4. 배포된 도메인을 Google과 Kakao의 승인된 원본 및 리디렉션 URI에 추가합니다.
 
-Render는 pinned 의존성을 설치하고 `python -m py_compile server.py`로 빌드를 확인한 뒤 `python server.py`로 서버를 시작합니다. 헬스 체크는 DB·migration·핵심 queue까지 확인하는 `/ready`를 사용합니다.
+Render는 Node.js 22로 프런트엔드를 빌드해 asset fingerprint를 갱신한 다음 Python 3.12 패키지와 웹 산출물을 함께 설치하고 `python -m colorless`로 서버를 시작합니다. 헬스 체크는 DB·migration·핵심 queue까지 확인하는 `/ready`를 사용합니다.
 
 Render Blueprint는 `REQUIRE_SUPABASE=true`로 실행됩니다. Supabase 환경 변수가 빠지면 서버가 시작되지 않으므로, 임시 파일 시스템에 계정과 첨부 파일이 저장되는 배포를 방지합니다.
 
@@ -195,15 +195,37 @@ Render Blueprint는 `REQUIRE_SUPABASE=true`로 실행됩니다. Supabase 환경 
 
 ```text
 .
-├── outputs/chat-app/
-│   ├── assets/fonts/       # 로컬 웹폰트
-│   ├── assets/js/platform/ # 상태·HTTP·액션·실시간 공통 파이프라인
-│   ├── .env.example        # 환경 변수 예시
-│   ├── index.html          # 화면, 스타일, 브라우저 로직
-│   ├── server.py           # HTTP API, 인증, 채팅, 저장소 로직
-│   └── supabase-schema.sql # 상태 테이블과 업로드 버킷
+├── apps/
+│   ├── desktop/            # 향후 데스크톱 클라이언트
+│   └── mobile/             # 향후 모바일 클라이언트
+├── frontend/
+│   ├── src/app/            # 웹 기능·platform ES Module 원본
+│   ├── src/*.js            # 브라우저 성능 검증 fixture 원본
+│   ├── scripts/build.mjs   # esbuild 번들·해시·HTML 갱신
+│   └── package.json        # 프런트엔드 빌드 의존성
+├── src/colorless/
+│   ├── database/           # Supabase 스키마
+│   ├── http/               # 인증·메시징·쇼츠·업로드 HTTP 기능 라우트
+│   ├── web/                # 패키지에 포함되는 HTML과 빌드 산출물
+│   │   └── assets/js/      # minify된 main·signup·Worker 번들
+│   ├── __main__.py         # `python -m colorless` 진입점
+│   ├── application.py      # 기능 명령과 domain event 결과
+│   ├── cache.py            # 단일 실행 TTL 캐시
+│   ├── config.py           # 환경 변수, 제한값, 보안 정책
+│   ├── integrations.py     # 외부 HTTP와 Supabase 공통 요청
+│   ├── observability.py    # 요청/SSE 메트릭과 구조화 로그
+│   ├── persistence.py      # SQLite와 Supabase 저장소
+│   ├── realtime.py         # durable event와 다중 인스턴스 replay
+│   ├── runtime.py          # 세션, 업로드, presence 런타임 저장소
+│   ├── shorts.py           # YouTube Shorts catalog 수집기
+│   ├── state.py            # 채팅 상태·인덱스·저장소 조정
+│   ├── utils.py            # 식별자, 이미지, 쿠키 검증 유틸리티
+│   ├── web_resources.py    # 정적 리소스 압축·fingerprint 로더
+│   └── server.py           # 조립, 공통 HTTP dispatch, 프로세스 lifecycle
 ├── tests/
 │   └── test_server.py      # 권한, 읽음 상태, 저장소 경계 테스트
+├── .env.example            # 환경 변수 예시
+├── pyproject.toml          # 패키지·의존성·CLI 정의
 ├── .gitattributes
 ├── .gitignore
 ├── README.md
@@ -214,15 +236,19 @@ Render Blueprint는 `REQUIRE_SUPABASE=true`로 실행됩니다. Supabase 환경 
 
 ## 처리 파이프라인
 
-브라우저의 모든 기능 요청은 `requestAction()`을 통해 공통 액션 파이프라인과 HTTP 클라이언트를 통과합니다. 실시간 이벤트는 타입별 이벤트 라우터가 기능 핸들러로 전달하며, 상태 변경은 이름이 붙은 스토어 트랜잭션으로 기록됩니다.
+개발 소스는 `frontend/src/app/entrypoints/main.js`에서 시작하며 기능과 platform 파일을 명시적인 ES Module `import`/`export`로 연결합니다. esbuild는 이 그래프를 minify된 `src/colorless/web/assets/js/main.js`로 만들고, Python wheel에는 실행용 산출물만 포함됩니다. 모든 기능 요청은 `requestAction()`을 통해 공통 액션 파이프라인과 HTTP 클라이언트를 통과합니다. 실시간 이벤트는 타입별 이벤트 라우터가 기능 핸들러로 전달하며, 상태 변경은 이름이 붙은 스토어 트랜잭션으로 기록됩니다.
 
 서버의 핵심 변경 명령은 `run_json_command()`에서 `ApplicationServices`를 호출합니다. 서비스는 HTTP 응답을 직접 작성하지 않고 데이터, 상태 코드, 발행할 이벤트가 포함된 `CommandOutcome`을 반환합니다. 세부 원칙과 흐름은 [`ARCHITECTURE.md`](ARCHITECTURE.md)를 참고하세요.
 
 ## 개발 확인
 
-서버 테스트는 Python 표준 라이브러리의 `unittest`로 실행하며 Brotli 의존성은 requirements 파일에서 설치합니다. 브라우저 JavaScript 문법 검사는 Node.js 22 이상을 사용합니다.
+서버 테스트는 Python 표준 라이브러리의 `unittest`로 실행하며 개발 전 `python -m pip install -e .`로 패키지를 설치합니다. 브라우저 빌드와 JavaScript 문법 검사는 Node.js 22 이상을 사용합니다.
 
 ```bash
+cd frontend
+npm ci
+npm run build
+cd ..
 python -m unittest discover -s tests -v
 python tests/js_syntax.py
 python tests/static_budget.py
@@ -236,20 +262,20 @@ python tests/operations_load.py --profile smoke
 대용량 이미지 경로는 서버 실행 후 `/assets/image-worker-benchmark.html`에서 확인할 수 있습니다. 이 자동 fixture는 Worker에서 12MP JPEG 변환, 100ms 이상 Long Task, 재선택 취소, 과도한 픽셀 헤더 거부를 한 번에 검사합니다. Worker 기능이 없는 브라우저는 12MP의 더 낮은 fallback 상한을 적용합니다.
 
 ```bash
-python -m py_compile outputs/chat-app/server.py
+python -m compileall -q src/colorless
 curl http://localhost:8765/health
 curl http://localhost:8765/ready
 curl http://localhost:8765/metrics
 ```
 
-프런트엔드는 빌드 단계가 없는 단일 HTML 파일입니다. 모바일 화면, 로그인, 친구 추가, 채팅 전송, 첨부 업로드를 브라우저에서 직접 확인해야 합니다.
+프런트엔드 소스를 바꾼 뒤 `frontend`에서 `npm run build`를 실행해 번들과 HTML fingerprint를 함께 갱신해야 합니다. CI는 `npm run build:check`로 커밋된 산출물이 소스와 정확히 일치하는지 확인합니다. 모바일 화면, 로그인, 친구 추가, 채팅 전송, 첨부 업로드도 브라우저에서 직접 확인해야 합니다.
 
 ## 알려진 제한 사항
 
 - 휴대폰 인증은 개발용 코드 미리보기만 구현되어 있습니다.
 - 로컬 SQLite 모드는 단일 서버 프로세스용입니다. 여러 인스턴스를 운영하려면 Supabase 같은 공유 저장소가 필요합니다.
 - 세션 토큰 해시는 상태 저장소에 보관됩니다. 실시간 접속 상태만 서버 재시작 시 초기화됩니다.
-- `index.html`과 `server.py`에 기능이 집중되어 있어 규모가 커지면 모듈 분리가 필요합니다.
+- `StateStore`는 독립 모듈이지만 여전히 큰 단위이며 `ChatHandler`도 여러 기능 라우트를 포함합니다. 다음 단계에서는 두 클래스를 기능별 서비스와 HTTP route mixin으로 더 세분화해야 합니다.
 
 ## 기여
 

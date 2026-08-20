@@ -13,8 +13,9 @@ except ImportError:
 
 
 ROOT = Path(__file__).parents[1]
-APP = ROOT / "outputs" / "chat-app"
+APP = ROOT / "src" / "colorless" / "web"
 ASSETS = APP / "assets"
+SOURCE_JS = ROOT / "frontend" / "src"
 BUDGETS = {
     ".js": 250 * 1024,
     ".css": 16 * 1024,
@@ -25,6 +26,7 @@ BUDGETS = {
 }
 IMAGE_SUFFIXES = {".avif", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"}
 VERSIONED_URL = re.compile(r"(?P<url>(?:/?assets/|\.\./|js/|[a-z0-9-]+\.js)[^\"')]*?)\?v=(?P<hash>[0-9a-f]{12})")
+MODULE_IMPORT = re.compile(r'import(?:\s+[^"\']+\s+from\s+|\s*)["\']([^"\']+)["\']')
 
 
 def referenced_asset(source: Path, url: str) -> Path:
@@ -60,6 +62,7 @@ def main() -> int:
     text_sources = [APP / "index.html", APP / "signup.html", ASSETS / "image-worker-benchmark.html"]
     text_sources.extend(path for path in files if path.suffix.lower() in {".js", ".css", ".html"})
     checked = 0
+    module_imports = 0
     for source in text_sources:
         text = source.read_text(encoding="utf-8")
         for match in VERSIONED_URL.finditer(text):
@@ -70,13 +73,25 @@ def main() -> int:
             if actual != match.group("hash"):
                 raise SystemExit(f"Stale fingerprint in {source}: {asset.name} has {actual}")
             checked += 1
-    if checked < 20:
-        raise SystemExit(f"Expected at least 20 fingerprinted references, found {checked}")
+    for source in SOURCE_JS.rglob("*.js"):
+        for import_url in MODULE_IMPORT.findall(source.read_text(encoding="utf-8")):
+            imported_asset = (source.parent / import_url.split("?", 1)[0]).resolve()
+            try:
+                imported_asset.relative_to(SOURCE_JS.resolve())
+            except ValueError as error:
+                raise SystemExit(f"Module import escapes frontend source root: {source} -> {import_url}") from error
+            if not imported_asset.is_file():
+                raise SystemExit(f"Missing frontend module import in {source}: {import_url}")
+            module_imports += 1
+    if checked < 4:
+        raise SystemExit(f"Expected fingerprinted entrypoints and worker assets, found {checked}")
+    if module_imports < 20:
+        raise SystemExit(f"Expected an ES Module graph, found only {module_imports} imports")
 
     compressible = b"\n".join(path.read_bytes() for path in files if path.suffix.lower() in {".css", ".html", ".js", ".json", ".svg"})
     gzip_bytes = len(gzip.compress(compressible, compresslevel=6))
     brotli_bytes = len(brotli.compress(compressible, quality=5)) if brotli is not None else None
-    print({"raw": totals, "gzip_compressible": gzip_bytes, "brotli_compressible": brotli_bytes, "fingerprints": checked})
+    print({"raw": totals, "gzip_compressible": gzip_bytes, "brotli_compressible": brotli_bytes, "fingerprints": checked, "module_imports": module_imports})
     return 0
 
 

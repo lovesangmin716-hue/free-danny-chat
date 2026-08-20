@@ -6,21 +6,24 @@ import importlib.util
 import json
 import math
 import os
+import sys
 import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
-APP_DIR = Path(__file__).parents[1] / "outputs" / "chat-app"
-SERVER_PATH = APP_DIR / "server.py"
+ROOT_DIR = Path(__file__).parents[1]
+SRC_DIR = ROOT_DIR / "src"
+sys.path.insert(0, str(SRC_DIR))
+SERVER_PATH = SRC_DIR / "colorless" / "server.py"
 
 
 def load_server(data_dir: Path):
     os.environ["DATA_DIR"] = str(data_dir)
     os.environ["STATE_FILE"] = str(data_dir / "state.json")
     os.environ["UPLOADS_DIR"] = str(data_dir / "uploads")
-    spec = importlib.util.spec_from_file_location("colorless_bootstrap_scale_server", SERVER_PATH)
+    spec = importlib.util.spec_from_file_location("colorless._bootstrap_scale_server", SERVER_PATH)
     if spec is None or spec.loader is None:
         raise RuntimeError("server module could not be loaded")
     module = importlib.util.module_from_spec(spec)

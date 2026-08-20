@@ -10,9 +10,9 @@ import time
 from pathlib import Path
 
 
-APP_DIR = Path(__file__).parents[1] / "outputs" / "chat-app"
-sys.path.insert(0, str(APP_DIR))
-from persistence import NormalizedSqliteRepository
+SRC_DIR = Path(__file__).parents[1] / "src"
+sys.path.insert(0, str(SRC_DIR))
+from colorless.persistence import NormalizedSqliteRepository
 
 
 def rss_bytes() -> int:

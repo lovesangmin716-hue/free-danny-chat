@@ -6,6 +6,7 @@ import importlib.util
 import json
 import math
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -20,8 +21,10 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 
-APP_DIR = Path(__file__).parents[1] / "outputs" / "chat-app"
-SERVER_PATH = APP_DIR / "server.py"
+ROOT_DIR = Path(__file__).parents[1]
+SRC_DIR = ROOT_DIR / "src"
+sys.path.insert(0, str(SRC_DIR))
+SERVER_PATH = SRC_DIR / "colorless" / "server.py"
 PDF_FIXTURE = b"%PDF-1.7\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n"
 
 PROFILES = {
@@ -145,7 +148,7 @@ class FixtureServer(AbstractContextManager):
             "YOUTUBE_API_KEY": "",
         })
         spec = importlib.util.spec_from_file_location(
-            f"colorless_operations_{time.time_ns()}",
+            f"colorless._operations_{time.time_ns()}",
             SERVER_PATH,
         )
         if spec is None or spec.loader is None:

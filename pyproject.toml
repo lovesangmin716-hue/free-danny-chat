@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "colorless"
+version = "0.1.0"
+description = "Colorless real-time chat server and web client"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "Brotli==1.2.0",
+    "httpx==0.28.1",
+]
+
+[project.scripts]
+colorless = "colorless.server:main"
+colorless-migrate = "colorless.migrate_normalized:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+colorless = [
+    "database/*.sql",
+    "web/*.html",
+    "web/assets/*.html",
+    "web/assets/*.js",
+    "web/assets/css/*.css",
+    "web/assets/fonts/*.woff2",
+    "web/assets/js/*.js",
+]
