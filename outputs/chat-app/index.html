@@ -12,7 +12,7 @@
     <script defer src="assets/js/platform/events.js?v=e67ecd100954"></script>
     <script defer src="assets/js/platform/icons.js?v=10894f1a61f3"></script>
     <script defer src="assets/js/platform/image-processing.js?v=c3632b3197bf"></script>
-    <script defer src="assets/js/core.js?v=86d314397587"></script>
+    <script defer src="assets/js/core.js?v=41307e89edaa"></script>
     <script defer src="assets/js/profile.js?v=94132f3ffcbb"></script>
     <script defer src="assets/js/messenger.js?v=c565bc2c3e0f"></script>
     <script defer src="assets/js/attachments.js?v=0c018e271851"></script>
@@ -20,7 +20,7 @@
     <script defer src="assets/js/chat.js?v=9e27c4eaedff"></script>
     <script defer src="assets/js/shorts.js?v=0b732c851324"></script>
     <script defer src="assets/js/action-bar.js?v=f5c052bc212e"></script>
-    <script defer src="assets/js/app.js?v=a6818f6d1ff6"></script>
+    <script defer src="assets/js/app.js?v=989fe43f9645"></script>
     <script defer src="assets/js/auth.js?v=84a7ef3fc787"></script>
     <script defer src="assets/js/bootstrap.js?v=acc9a3669f1e"></script>
     <style>
@@ -252,8 +252,7 @@
       .header-search input { min-height: 44px; min-width: 0; width: 100%; }
       .header-search button { background: var(--white); color: var(--black); min-height: 44px; min-width: 44px; padding: 0; }
 
-      .app.shorts-mode .app-header,
-      .app.shorts-mode .app-status { display: none; }
+      .app.shorts-mode .app-header { display: none; }
 
       .app-actions {
         display: flex;
@@ -480,14 +479,23 @@
         text-align: center;
       }
 
-      .app-status {
-        border-top: 1px solid var(--black);
+      .tab-status {
         color: var(--gray);
         font-size: 13px;
+        font-weight: 700;
+        left: 18px;
+        line-height: 1.45;
         margin: 0;
-        min-height: 43px;
-        padding: 13px 18px calc(13px + env(safe-area-inset-bottom));
+        pointer-events: none;
+        position: absolute;
+        right: 18px;
+        text-align: center;
+        text-shadow: 0 0 4px var(--white), 0 0 4px var(--white);
+        top: 12px;
+        z-index: 3;
       }
+
+      .tab-status.error { color: var(--black); }
 
       .sheet-backdrop {
         align-items: flex-end;
@@ -689,11 +697,10 @@
           grid-template-areas:
             "header chat"
             "list chat"
-            "status chat"
             "actions chat"
             "tabs chat";
           grid-template-columns: minmax(340px, 430px) minmax(0, 1fr);
-          grid-template-rows: var(--desktop-header-height) minmax(0, 1fr) auto auto auto;
+          grid-template-rows: var(--desktop-header-height) minmax(0, 1fr) auto auto;
           height: min(900px, calc(100dvh - 48px));
           min-height: min(640px, calc(100dvh - 48px));
           width: min(100%, 1180px);
@@ -703,7 +710,6 @@
         .app-header h1 { font-size: 32px; }
         .list-content { grid-area: list; }
         .chat-list, .friend-list { border: 0; margin: 0; max-width: none; min-height: 100%; }
-        .app-status { grid-area: status; }
         .short-share-bar { grid-area: actions; }
         .list-tabs { grid-area: tabs; }
         .desktop-chat-empty {
@@ -736,7 +742,7 @@
         .chat-room-header { grid-template-columns: 42px minmax(0, 1fr) auto; }
         .app > .sheet-backdrop {
           grid-column: 1 / 2;
-          grid-row: 2 / 5;
+          grid-row: 2 / 4;
         }
       }
 
@@ -866,6 +872,7 @@
       </header>
 
       <section class="list-content">
+        <p class="tab-status hidden" id="app-status" role="status" aria-live="polite"></p>
         <div class="chat-list" id="chat-list"></div>
         <div class="friend-list hidden" id="friend-list"></div>
         <section class="shorts-view hidden" id="shorts-view" tabindex="0" aria-label="YouTube 쇼츠">
@@ -894,7 +901,6 @@
           </div>
         </section>
       </section>
-      <p class="app-status" id="app-status" role="status" aria-live="polite">채팅 목록을 불러오는 중이에요.</p>
       <aside class="short-share-bar" id="short-share-bar" aria-label="컨텍스트 작업">
         <span class="short-share-label">최근 대화</span>
         <div class="short-share-list" id="short-share-list"></div>

@@ -473,9 +473,25 @@ function setProviderStatus(message, tone = "default") {
   providerStatus.className = `provider-status${tone === "default" ? "" : ` ${tone}`}`;
 }
 
+let appStatusTimer = null;
+
+function syncAppStatusForActiveTab() {
+  const belongsToActiveTab = appStatus.dataset.tab === state.activeList;
+  appStatus.classList.toggle("hidden", !appStatus.textContent || !belongsToActiveTab);
+}
+
 function setAppStatus(message, tone = "default") {
-  appStatus.textContent = message;
-  appStatus.className = `app-status${tone === "default" ? "" : ` ${tone}`}`;
+  window.clearTimeout(appStatusTimer);
+  const normalizedMessage = String(message || "").trim();
+  appStatus.textContent = normalizedMessage;
+  appStatus.dataset.tab = state.activeList;
+  appStatus.className = `tab-status${tone === "default" ? "" : ` ${tone}`}`;
+  syncAppStatusForActiveTab();
+  if (!normalizedMessage) return;
+  appStatusTimer = window.setTimeout(() => {
+    appStatus.textContent = "";
+    appStatus.classList.add("hidden");
+  }, tone === "error" ? 5000 : 3500);
 }
 
 let layoutViewportHeight = Math.max(window.innerHeight, document.documentElement.clientHeight);

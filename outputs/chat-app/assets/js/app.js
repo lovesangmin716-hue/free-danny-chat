@@ -8,6 +8,7 @@ function renderMessenger() {
   appTitle.textContent = ({ chats: "채팅", friends: "친구", shorts: "쇼츠", my: "MY" })[state.activeList] || "채팅";
   openLoginButton.classList.add("hidden");
   renderStatusEmojiControl();
+  syncAppStatusForActiveTab();
   renderHeaderSearch();
   openDirectoryButton.classList.toggle("hidden", state.activeList !== "friends");
   openNewChatButton.classList.toggle("hidden", state.activeList !== "chats");
@@ -217,7 +218,7 @@ async function startApp() {
     window.clearTimeout(state.appStartRetryTimer);
     state.appStartRetryTimer = null;
     state.appStartRetryCount = 0;
-    setAppStatus("친구를 추가하거나 새 대화를 시작해 보세요.");
+    setAppStatus("");
   } catch (error) {
     setAppStatus(`${error.message} 연결되면 자동으로 다시 시도합니다.`, "error");
     const retryDelay = Math.min(30000, 1000 * (2 ** Math.min(state.appStartRetryCount, 5)));
