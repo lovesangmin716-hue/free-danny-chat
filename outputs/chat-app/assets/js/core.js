@@ -476,6 +476,12 @@ function setProviderStatus(message, tone = "default") {
 let appStatusTimer = null;
 
 function syncAppStatusForActiveTab() {
+  const showAsChatPopup = Boolean(state.selectedRoomId && !chatRoom.classList.contains("hidden"));
+  if (showAsChatPopup && appStatus.parentElement !== chatRoom) {
+    chatRoom.appendChild(appStatus);
+  } else if (!showAsChatPopup && appStatus.parentElement !== appScreen) {
+    appScreen.insertBefore(appStatus, shortShareBar);
+  }
   const belongsToActiveTab = appStatus.dataset.tab === state.activeList;
   appStatus.classList.toggle("hidden", !appStatus.textContent || !belongsToActiveTab);
 }

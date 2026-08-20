@@ -500,25 +500,28 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
         self.assertIn(".app > .sheet-backdrop", index_html)
         self.assertIn("grid-column: 1 / 2", index_html)
-        self.assertIn("grid-row: 2 / 4", index_html)
+        self.assertIn("grid-row: 2 / 5", index_html)
         self.assertNotIn('createContextAction("새 채팅", "message-plus", openNewChat)', action_bar_script)
         self.assertNotIn('createContextAction("친구 추가", "user-plus", openDirectory)', action_bar_script)
         self.assertNotIn('createContextAction("검색", "search"', action_bar_script)
         self.assertIn('id="header-search-input"', index_html)
 
-    def test_system_feedback_appears_inside_the_active_tab_without_a_reserved_bar(self) -> None:
+    def test_system_feedback_uses_list_slot_and_chat_popup_without_a_permanent_bar(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")
         app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
 
-        list_content = re.search(r'<section class="list-content">.*?</section>', index_html, re.DOTALL)
-        self.assertIsNotNone(list_content)
-        self.assertIn('class="tab-status hidden" id="app-status"', list_content.group(0))
+        self.assertRegex(
+            index_html,
+            r'class="tab-status hidden" id="app-status".*?</p>\s*<aside class="short-share-bar"',
+        )
         self.assertNotIn('class="app-status"', index_html)
-        self.assertNotIn('"status chat"', index_html)
         self.assertNotIn("친구를 추가하거나 새 대화를 시작해 보세요.", app_script)
         self.assertIn("appStatus.dataset.tab = state.activeList", core_script)
         self.assertIn("function syncAppStatusForActiveTab", core_script)
+        self.assertIn("chatRoom.appendChild(appStatus)", core_script)
+        self.assertIn("appScreen.insertBefore(appStatus, shortShareBar)", core_script)
+        self.assertIn(".chat-room > .tab-status", index_html)
 
     def test_two_hundred_shorts_use_a_fixed_virtual_dom_window(self) -> None:
         core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")

@@ -390,6 +390,7 @@ function renderChatRoom({ scrollToBottom = false, preserveScrollHeight = 0 } = {
   const room = currentRoom();
   if (!room) {
     chatRoom.classList.add("hidden");
+    syncAppStatusForActiveTab();
     openRoomSettingsButton.classList.add("hidden");
     roomSettingsSheet.classList.add("hidden");
     return;
@@ -398,6 +399,7 @@ function renderChatRoom({ scrollToBottom = false, preserveScrollHeight = 0 } = {
   const isGroupRoom = room.kind === "group";
   const isInThisRoom = Boolean(presence?.online && presence.active_room_ids?.includes(room.id));
   chatRoom.classList.remove("hidden");
+  syncAppStatusForActiveTab();
   openRoomSettingsButton.classList.toggle("hidden", !isGroupRoom);
   renderChatAttachmentTray();
   renderChatAttachmentPreview();
@@ -543,6 +545,7 @@ function closeChatRoom() {
     ColorlessImageProcessing.cancel("room-image");
   }
   chatRoom.classList.add("hidden");
+  syncAppStatusForActiveTab();
   roomSettingsSheet.classList.add("hidden");
   updatePresence();
   if (wasReplyingToShortNotice) resumeShortMessageNotice();
