@@ -36,6 +36,21 @@ SPEC.loader.exec_module(server)
 
 
 class StaticAppStructureTestCase(unittest.TestCase):
+    def test_work_mode_supports_mobile_single_and_double_tap(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        work_mode_js = (server.ASSETS_DIR / "js" / "work-mode.js").read_text(encoding="utf-8")
+        bootstrap_js = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+
+        self.assertIn("touch-action: manipulation", index_html)
+        self.assertIn("한 번 탭: 메시지 숨김 · 두 번 탭: 종료", index_html)
+        self.assertIn("const WORK_MODE_DOUBLE_TAP_MS = 300", work_mode_js)
+        self.assertIn("function handleWorkModeScreenTap(event)", work_mode_js)
+        self.assertIn('event.target.closest("#work-mode-reply-form")', work_mode_js)
+        self.assertIn("dismissWorkModeMessage();", work_mode_js)
+        self.assertIn("setWorkModeEnabled(false);", work_mode_js)
+        self.assertIn('workModeScreen.addEventListener("click", handleWorkModeScreenTap)', bootstrap_js)
+        self.assertNotIn('workModeMessage.addEventListener("click", dismissWorkModeMessage)', bootstrap_js)
+
     def test_feature_scripts_are_loaded_in_dependency_order(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         script_sources = re.findall(r'<script defer src="([^"]+)"></script>', index_html)

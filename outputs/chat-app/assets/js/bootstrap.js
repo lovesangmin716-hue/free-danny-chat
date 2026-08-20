@@ -34,7 +34,7 @@ demoLoginButton.addEventListener("click", startDemoLogin);
 loginForm.addEventListener("submit", submitLogin);
 logoutButton.addEventListener("click", logout);
 workModeToggle.addEventListener("click", toggleWorkMode);
-workModeMessage.addEventListener("click", dismissWorkModeMessage);
+workModeScreen.addEventListener("click", handleWorkModeScreenTap);
 workModeReplyForm.addEventListener("submit", sendWorkModeReply);
 workModeReplyInput.addEventListener("compositionstart", beginWorkModeComposition);
 workModeReplyInput.addEventListener("compositionend", finishWorkModeComposition);

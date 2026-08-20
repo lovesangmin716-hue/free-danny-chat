@@ -18,12 +18,12 @@
     <script defer src="assets/js/attachments.js?v=0c018e271851"></script>
     <script defer src="assets/js/room-settings.js?v=d602bb96b2da"></script>
     <script defer src="assets/js/chat.js?v=5ef40b31a97b"></script>
-    <script defer src="assets/js/work-mode.js?v=cc2b3459b45b"></script>
+    <script defer src="assets/js/work-mode.js?v=4b9eb55d5631"></script>
     <script defer src="assets/js/shorts.js?v=d814daa9b922"></script>
     <script defer src="assets/js/action-bar.js?v=f5c052bc212e"></script>
     <script defer src="assets/js/app.js?v=99e80cd65174"></script>
     <script defer src="assets/js/auth.js?v=84a7ef3fc787"></script>
-    <script defer src="assets/js/bootstrap.js?v=69cfb094c8c0"></script>
+    <script defer src="assets/js/bootstrap.js?v=e7b312aa817f"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -327,7 +327,7 @@
       .my-actions { display: grid; gap: 8px; }
       .my-actions button { width: 100%; }
       body.work-mode-active { overflow: hidden; }
-      .work-mode-screen { background: var(--white); display: grid; inset: 0; padding: clamp(28px, 7vw, 96px); place-items: center; position: fixed; z-index: 200; }
+      .work-mode-screen { background: var(--white); display: grid; inset: 0; padding: clamp(28px, 7vw, 96px); place-items: center; position: fixed; touch-action: manipulation; z-index: 200; }
       .work-mode-screen.hidden { display: none; }
       .work-mode-message { cursor: pointer; display: grid; gap: 26px; max-width: 760px; width: 100%; }
       .work-mode-sender { align-items: center; display: grid; gap: 16px; grid-template-columns: 72px minmax(0, 1fr); }
@@ -1067,7 +1067,7 @@
           <button type="submit">보내기</button>
         </form>
         <p class="work-mode-feedback" id="work-mode-feedback" role="status" aria-live="polite"></p>
-        <p class="work-mode-hint">Alt+W 종료 · Esc 메시지 숨김</p>
+        <p class="work-mode-hint">한 번 탭: 메시지 숨김 · 두 번 탭: 종료 · Alt+W 종료</p>
       </section>
 
       <div class="sheet-backdrop hidden" id="directory-sheet" role="dialog" aria-modal="true" aria-labelledby="directory-title">
