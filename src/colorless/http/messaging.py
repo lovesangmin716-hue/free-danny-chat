@@ -9,42 +9,7 @@ class MessagingRoutesMixin:
         if user is None:
             self.send_json({"authenticated": False}, self.context.HTTPStatus.OK)
             return
-        account_context = self.context.STORE.get_account_context(user["username"]) or {}
-        self.send_json({"authenticated": True, "user": user, **account_context}, self.context.HTTPStatus.OK)
-
-    def create_identity(self, user: dict) -> None:
-        payload = self.read_json_body()
-        if payload is None:
-            return
-        identity, error = self.context.STORE.create_identity(
-            user["username"],
-            str(payload.get("username", "")),
-            str(payload.get("displayName", "")),
-            str(payload.get("friendCode", "")),
-            str(payload.get("statusMessage", "")),
-        )
-        if error:
-            self.send_json({"error": error}, self.context.HTTPStatus.BAD_REQUEST)
-            return
-        account_context = self.context.STORE.get_account_context(user["username"]) or {}
-        self.send_json({"identity": identity, **account_context}, self.context.HTTPStatus.CREATED)
-
-    def switch_identity(self, user: dict) -> None:
-        payload = self.read_json_body()
-        if payload is None:
-            return
-        identity_id = str(payload.get("identityId", "")).strip()
-        token = self.read_session_token()
-        username = self.context.SESSIONS.switch_identity(token, identity_id)
-        if username is None:
-            self.send_json({"error": "이 계정이 소유한 활동 ID가 아닙니다."}, self.context.HTTPStatus.FORBIDDEN)
-            return
-        active_user = self.context.STORE.get_user_public(username)
-        if active_user is None:
-            self.send_json({"error": "활동 ID를 찾을 수 없습니다."}, self.context.HTTPStatus.NOT_FOUND)
-            return
-        account_context = self.context.STORE.get_account_context(username) or {}
-        self.send_json({"authenticated": True, "user": active_user, **account_context}, self.context.HTTPStatus.OK)
+        self.send_json({"authenticated": True, "user": user}, self.context.HTTPStatus.OK)
 
     def serve_profile_art_thumbnail(self, user_id: str) -> None:
         thumbnail = self.context.STORE.get_profile_art_thumbnail(user_id)

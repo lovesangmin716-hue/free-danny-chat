@@ -8,15 +8,6 @@ import { renderWorkModeControl, syncWorkModeVisibility } from "./work-mode.js";
 import { loadGuestShorts, releaseAllShortFrames, renderShortShareBar, renderShorts } from "./shorts.js";
 import { activeActionBarState, renderFriendActionBar, renderHeaderSearch } from "./action-bar.js";
 
-const accountIdentifier = document.getElementById("account-identifier");
-const identitySwitcher = document.getElementById("identity-switcher");
-const identityCreateForm = document.getElementById("identity-create-form");
-const identityUsername = document.getElementById("identity-username");
-const identityDisplayName = document.getElementById("identity-display-name");
-const identityFriendCode = document.getElementById("identity-friend-code");
-const identityCreateButton = document.getElementById("identity-create-button");
-const identityFormStatus = document.getElementById("identity-form-status");
-
 // Application orchestration and feature-level state transitions.
 const APP_CHAT_PAGE_SIZE = typeof CHAT_MESSAGE_PAGE_SIZE === "number" ? CHAT_MESSAGE_PAGE_SIZE : 30;
 
@@ -64,74 +55,9 @@ function renderMy() {
   ));
   myDisplayName.textContent = getDisplayName(user);
   myFriendCode.textContent = user.friend_code ? `친구 ID · ${user.friend_code}` : "친구 ID 없음";
-  const identities = state.session?.identities || [user];
-  const activeIdentityId = state.session?.active_identity_id || user.id;
-  identitySwitcher.replaceChildren(...identities.map((identity) => {
-    const option = document.createElement("option");
-    option.value = identity.id;
-    option.textContent = `${getDisplayName(identity)} (@${identity.username})`;
-    option.selected = identity.id === activeIdentityId;
-    return option;
-  }));
-  identitySwitcher.disabled = identities.length < 2;
-  const account = state.session?.account;
-  accountIdentifier.textContent = account?.id
-    ? `사용자 고유식별 번호 · ${account.id} · ${identities.length}/${account.identity_limit || 3}`
-    : `${identities.length}/3개의 활동 ID 사용 중`;
-  identityCreateForm.classList.toggle("hidden", identities.length >= Number(account?.identity_limit || 3));
   renderStatusEmojiControl();
   renderWorkModeControl();
 }
-
-async function switchIdentity() {
-  const identityId = identitySwitcher.value;
-  if (!identityId || identityId === state.session?.active_identity_id) return;
-  identitySwitcher.disabled = true;
-  identityFormStatus.textContent = "활동 ID를 전환하고 있어요.";
-  try {
-    await requestAction("identities.switch", "/identities/switch", {
-      method: "POST",
-      body: JSON.stringify({ identityId }),
-    });
-    window.location.reload();
-  } catch (error) {
-    identityFormStatus.textContent = error.message;
-    identitySwitcher.value = state.session?.active_identity_id || "";
-    identitySwitcher.disabled = false;
-  }
-}
-
-async function createIdentity(event) {
-  event.preventDefault();
-  identityCreateButton.disabled = true;
-  identityFormStatus.textContent = "새 활동 ID를 만들고 있어요.";
-  try {
-    const payload = await requestAction("identities.create", "/identities", {
-      method: "POST",
-      body: JSON.stringify({
-        username: identityUsername.value.trim(),
-        displayName: identityDisplayName.value.trim(),
-        friendCode: identityFriendCode.value.trim(),
-      }),
-    });
-    state.session = {
-      ...state.session,
-      account: payload.account,
-      identities: payload.identities || state.session?.identities || [],
-      active_identity_id: payload.active_identity_id || state.session?.active_identity_id,
-    };
-    identityCreateForm.reset();
-    identityFormStatus.textContent = "새 활동 ID를 만들었어요.";
-    renderMy();
-  } catch (error) {
-    identityFormStatus.textContent = error.message;
-  } finally {
-    identityCreateButton.disabled = false;
-  }
-}
-
-identitySwitcher.addEventListener("change", () => void switchIdentity());
-identityCreateForm.addEventListener("submit", (event) => void createIdentity(event));
 
 function mergeEntitiesById(current, incoming, reset = false) {
   const entities = new Map((reset ? [] : current).map((item) => [item.id, item]));
@@ -235,13 +161,6 @@ async function loadMessenger(render = true) {
   state.friendsNextCursor = friendsPage.next_cursor || "";
   state.roomsNextCursor = roomsPage.next_cursor || "";
   const user = { ...(state.session?.user || {}), ...(me.user || {}) };
-  state.session = {
-    ...state.session,
-    user,
-    account: me.account || state.session?.account,
-    identities: me.identities || state.session?.identities || [user],
-    active_identity_id: me.active_identity_id || state.session?.active_identity_id || user.id,
-  };
   const incomingMessages = applyMessengerData({
     user,
     friends: friendsPage.items || [],

@@ -89,12 +89,6 @@ class SessionStore:
             session["expires_at"] = now + self.ttl_seconds
             return str(session["username"])
 
-    def switch_identity(self, token: str | None, user_id: str) -> str | None:
-        if not token or self.state_store is None:
-            return None
-        token_hash = self._token_hash(token)
-        return self.state_store.switch_session_identity(token_hash, user_id)
-
     def destroy(self, token: str | None) -> None:
         if not token:
             return

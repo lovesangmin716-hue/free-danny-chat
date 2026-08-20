@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#ffffff" />
     <title>Colorless</title>
     <link rel="preload" href="assets/fonts/The%20Jamsil%203%20Regular.woff2?v=4e887c501a6c" as="font" type="font/woff2" crossorigin />
-    <script defer src="assets/js/main.js?v=674dfeccf82f"></script>
+    <script defer src="assets/js/main.js?v=91daf1126f15"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -300,13 +300,6 @@
       .my-profile-copy { display: grid; gap: 4px; min-width: 0; }
       .my-profile-copy strong { font-size: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .my-profile-copy span { color: var(--gray); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .identity-panel { border-top: 1px solid var(--black); display: grid; gap: 10px; padding-top: 14px; }
-      .identity-panel-copy { color: var(--gray); font-size: 12px; line-height: 1.45; margin: 0; overflow-wrap: anywhere; }
-      .identity-panel select { background: var(--white); border: 1px solid var(--black); min-height: 44px; padding: 0 10px; width: 100%; }
-      .identity-create-form { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
-      .identity-create-form input { min-width: 0; }
-      .identity-create-form button, .identity-create-form .identity-form-status { grid-column: 1 / -1; }
-      .identity-form-status { color: var(--gray); font-size: 12px; margin: 0; min-height: 1.4em; }
       .my-status-row { align-items: center; border-block: 1px solid var(--light-gray); display: flex; justify-content: space-between; padding: 14px 0; }
       .my-status-copy { display: grid; gap: 3px; }
       .my-status-copy span { color: var(--gray); font-size: 12px; }
@@ -923,19 +916,6 @@
                 <strong id="my-display-name"></strong>
                 <span id="my-friend-code"></span>
               </div>
-            </div>
-            <div class="identity-panel" aria-labelledby="identity-panel-title">
-              <strong id="identity-panel-title">활동 ID</strong>
-              <p class="identity-panel-copy" id="account-identifier"></p>
-              <label class="sr-only" for="identity-switcher">현재 활동 ID</label>
-              <select id="identity-switcher" aria-label="현재 활동 ID"></select>
-              <form class="identity-create-form" id="identity-create-form">
-                <input id="identity-username" maxlength="24" autocomplete="off" placeholder="사용자 이름" required />
-                <input id="identity-display-name" maxlength="24" autocomplete="nickname" placeholder="표시 이름" required />
-                <input id="identity-friend-code" maxlength="20" autocomplete="off" placeholder="친구 ID" required />
-                <button type="submit" class="secondary-button" id="identity-create-button">새 활동 ID 만들기</button>
-                <p class="identity-form-status" id="identity-form-status" role="status" aria-live="polite"></p>
-              </form>
             </div>
             <div class="my-status-row">
               <div class="my-status-copy">

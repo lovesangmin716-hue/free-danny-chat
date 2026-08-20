@@ -64,7 +64,6 @@ from .config import (
     MAX_FORM_REQUEST_BYTES,
     MAX_GROUP_PARTICIPANTS,
     MAX_JSON_REQUEST_BYTES,
-    LOCAL_SIGNUP_ENABLED,
     MAX_MESSAGES_PAGE_SIZE,
     MAX_MESSAGES_PER_ROOM,
     MAX_PROFILE_IMAGE_BYTES,
@@ -661,10 +660,7 @@ class ChatHandler(
             self.serve_index()
             return
         if path == "/signup":
-            if LOCAL_SIGNUP_ENABLED:
-                self.serve_signup_page()
-            else:
-                self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+            self.serve_signup_page()
             return
         if path.startswith("/assets/"):
             self.serve_asset(path, query)
@@ -871,7 +867,6 @@ class ChatHandler(
                     ),
                     "app_name": APP_NAME,
                     "public_base_url": self.public_base_url(),
-                    "local_signup_enabled": LOCAL_SIGNUP_ENABLED,
                 },
                 HTTPStatus.OK,
             )
@@ -967,18 +962,6 @@ class ChatHandler(
             if user is None:
                 return
             self.update_profile(user)
-            return
-        if path == "/identities":
-            user = self.require_auth()
-            if user is None:
-                return
-            self.create_identity(user)
-            return
-        if path == "/identities/switch":
-            user = self.require_auth()
-            if user is None:
-                return
-            self.switch_identity(user)
             return
         if path == "/profile/image":
             user = self.require_auth_record()

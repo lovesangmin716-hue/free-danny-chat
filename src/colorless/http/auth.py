@@ -285,9 +285,6 @@ class AuthRoutesMixin:
         )
 
     def signup(self) -> None:
-        if not self.context.LOCAL_SIGNUP_ENABLED:
-            self.send_json({"error": "현재 신규 회원가입을 받지 않습니다."}, self.context.HTTPStatus.SERVICE_UNAVAILABLE)
-            return
         if not self.allow_request("signup", 10, 15 * 60):
             return
         payload = self.read_json_body()
@@ -350,9 +347,6 @@ class AuthRoutesMixin:
         )
 
     def request_phone_code(self) -> None:
-        if not self.context.LOCAL_SIGNUP_ENABLED:
-            self.send_json({"error": "현재 신규 회원가입을 받지 않습니다."}, self.context.HTTPStatus.SERVICE_UNAVAILABLE)
-            return
         if not self.allow_request("phone-code", 5, 10 * 60):
             return
         payload = self.read_json_body()
@@ -377,9 +371,6 @@ class AuthRoutesMixin:
         self.send_json(response, self.context.HTTPStatus.OK)
 
     def verify_phone_code(self) -> None:
-        if not self.context.LOCAL_SIGNUP_ENABLED:
-            self.send_json({"error": "현재 신규 회원가입을 받지 않습니다."}, self.context.HTTPStatus.SERVICE_UNAVAILABLE)
-            return
         if not self.allow_request("phone-verify", 10, 10 * 60):
             return
         payload = self.read_json_body()

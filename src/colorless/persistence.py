@@ -132,7 +132,6 @@ class NormalizedSupabaseRepository:
     def import_legacy_state(self, state: dict) -> dict[str, int]:
         users = state.get("users", [])
         users_by_username = {user["username"]: user for user in users}
-        self.upsert("accounts", [self.account_row(account) for account in state.get("accounts", [])], "id")
         compact_users = []
         profile_rows = []
         for user in users:
@@ -151,7 +150,7 @@ class NormalizedSupabaseRepository:
         self.upsert(
             "social_accounts",
             [
-                {"provider": user.get("auth_provider", "local"), "provider_user_id": user["provider_user_id"], "user_id": user["id"], "account_id": user["account_id"]}
+                {"provider": user.get("auth_provider", "local"), "provider_user_id": user["provider_user_id"], "user_id": user["id"]}
                 for user in users if user.get("provider_user_id")
             ],
             "provider,provider_user_id",
@@ -180,7 +179,7 @@ class NormalizedSupabaseRepository:
         for token_hash, session in state.get("sessions", {}).items():
             user = users_by_username.get(session.get("username", ""))
             if user:
-                self.upsert("sessions", [{"token_hash": token_hash, "user_id": user["id"], "account_id": user["account_id"], "active_user_id": user["id"], "created_at": session["created_at"], "expires_at": session["expires_at"]}], "token_hash")
+                self.upsert("sessions", [{"token_hash": token_hash, "user_id": user["id"], "created_at": session["created_at"], "expires_at": session["expires_at"]}], "token_hash")
         for username, feed in state.get("shorts_feeds", {}).items():
             user = users_by_username.get(username)
             if user:
@@ -193,25 +192,6 @@ class NormalizedSupabaseRepository:
         if not revision:
             raise ConcurrentUpdateError("user revision conflict")
         user["_revision"] = int(revision)
-
-    def identity_by_id(self, account_id: str, user_id: str) -> dict | None:
-        rows = self.rows(
-            "users",
-            {
-                "select": "data,revision",
-                "account_id": f"eq.{account_id}",
-                "id": f"eq.{user_id}",
-                "limit": "1",
-            },
-        )
-        if not rows:
-            return None
-        identity = dict(rows[0]["data"])
-        identity["_revision"] = int(rows[0].get("revision", 0))
-        return identity
-
-    def sync_account(self, account: dict) -> None:
-        self.upsert("accounts", [self.account_row(account)], "id")
 
     def load_profile_art(self, user_id: str) -> tuple[int, bytes] | None:
         rows = self.rows(
@@ -372,15 +352,12 @@ class NormalizedSupabaseRepository:
         )
         return {str(row["room_id"]) for row in rows}
 
-    def create_session(self, token_hash: str, account_id: str, active_user_id: str, created_at: float, expires_at: float, max_sessions: int) -> None:
-        self.rpc("colorless_create_account_session", {"session_token_hash": token_hash, "session_account_id": account_id, "session_active_user_id": active_user_id, "created_epoch": created_at, "expires_epoch": expires_at, "max_session_count": max_sessions})
+    def create_session(self, token_hash: str, user_id: str, created_at: float, expires_at: float, max_sessions: int) -> None:
+        self.rpc("colorless_create_session", {"session_token_hash": token_hash, "session_user_id": user_id, "created_epoch": created_at, "expires_epoch": expires_at, "max_session_count": max_sessions})
 
     def session_username(self, token_hash: str, now: float) -> str | None:
-        result = self.rpc("colorless_account_session_username", {"session_token_hash": token_hash, "now_epoch": now})
+        result = self.rpc("colorless_session_username", {"session_token_hash": token_hash, "now_epoch": now})
         return str(result) if result else None
-
-    def switch_session_identity(self, token_hash: str, account_id: str, user_id: str) -> bool:
-        return bool(self.rpc("colorless_switch_session_identity", {"session_token_hash": token_hash, "session_account_id": account_id, "target_user_id": user_id}))
 
     def refresh_session(self, token_hash: str, expires_at: float) -> None:
         self.transport(f"/rest/v1/sessions?token_hash=eq.{quote(token_hash, safe='')}", method="PATCH", payload={"expires_at": expires_at})
@@ -509,16 +486,11 @@ class NormalizedSupabaseRepository:
         return len(result) if isinstance(result, list) else 0
 
     def load_state(self) -> dict:
-        accounts = [
-            dict(row["data"])
-            for row in self.all_rows("accounts", {"select": "data", "order": "id.asc"})
-        ]
         users = []
         migrated_users = []
         migrated_profile_rows = []
         for row in self.all_rows("users", {"select": "id,username,friend_code,data,revision", "order": "id.asc"}):
             user, packed_art, migrated_art = split_legacy_profile_art(dict(row["data"]))
-            user.setdefault("account_id", f"account_{user['id']}")
             if migrated_art:
                 migrated_users.append(self.user_row(user))
                 if packed_art is not None:
@@ -561,22 +533,14 @@ class NormalizedSupabaseRepository:
             room["participant_ids"] = members.get(room["id"], [])
             room["last_read_by"] = reads.get(room["id"], {})
         users_by_id = {user["id"]: user for user in users}
-        sessions = {}
-        for row in self.all_rows(
-            "sessions",
-            {"select": "token_hash,user_id,account_id,active_user_id,created_at,expires_at", "order": "token_hash.asc"},
-        ):
-            active_user_id = str(row.get("active_user_id") or row.get("user_id") or "")
-            active_user = users_by_id.get(active_user_id)
-            if active_user is None:
-                continue
-            sessions[str(row["token_hash"])] = {
-                "username": active_user["username"],
-                "account_id": str(row.get("account_id") or active_user["account_id"]),
-                "active_user_id": active_user_id,
-                "created_at": float(row["created_at"]),
-                "expires_at": float(row["expires_at"]),
-            }
+        sessions = {
+            row["token_hash"]: {"username": users_by_id[row["user_id"]]["username"], "created_at": float(row["created_at"]), "expires_at": float(row["expires_at"])}
+            for row in self.all_rows(
+                "sessions",
+                {"select": "token_hash,user_id,created_at,expires_at", "order": "token_hash.asc"},
+            )
+            if row["user_id"] in users_by_id
+        }
         feed_cursors = {
             str(row["user_id"]): str(row.get("next_cursor", ""))
             for row in self.all_rows(
@@ -597,24 +561,7 @@ class NormalizedSupabaseRepository:
                     "seen_ids": seen_by_user.get(user_id, []),
                     "next_cursor": feed_cursors.get(user_id, ""),
                 }
-        if not accounts:
-            derived_accounts = {
-                user["account_id"]: {
-                    "id": user["account_id"],
-                    "auth_provider": user.get("auth_provider", "local"),
-                    "provider_user_id": user.get("provider_user_id", ""),
-                    "password_salt": user.get("password_salt", ""),
-                    "password_hash": user.get("password_hash", ""),
-                    "phone": user.get("phone", ""),
-                    "age_group": user.get("age_group", ""),
-                    "gender": user.get("gender", ""),
-                    "created_at": user.get("created_at", ""),
-                    "status": "active",
-                }
-                for user in users
-            }
-            accounts = list(derived_accounts.values())
-        return {"accounts": accounts, "users": users, "friendships": friendships, "rooms": rooms, "messages": {}, "sessions": sessions, "shorts_feeds": shorts_feeds}
+        return {"users": users, "friendships": friendships, "rooms": rooms, "messages": {}, "sessions": sessions, "shorts_feeds": shorts_feeds}
 
     def publish_event(
         self,
@@ -728,12 +675,7 @@ class NormalizedSupabaseRepository:
     @staticmethod
     def user_row(user: dict) -> dict:
         compact = compact_user_profile_fields(user)
-        compact.setdefault("account_id", f"account_{compact['id']}")
-        return {"id": compact["id"], "account_id": compact["account_id"], "username": compact["username"], "friend_code": compact["friend_code"], "data": compact}
-
-    @staticmethod
-    def account_row(account: dict) -> dict:
-        return {"id": account["id"], "status": account.get("status", "active"), "data": dict(account)}
+        return {"id": compact["id"], "username": compact["username"], "friend_code": compact["friend_code"], "data": compact}
 
     @staticmethod
     def message_row(message: dict, sender_id: str) -> dict:
@@ -772,14 +714,8 @@ class NormalizedSqliteRepository:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS accounts (
-                    id TEXT PRIMARY KEY,
-                    status TEXT NOT NULL DEFAULT 'active',
-                    data_json TEXT NOT NULL
-                );
                 CREATE TABLE IF NOT EXISTS users (
                     id TEXT PRIMARY KEY,
-                    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
                     username TEXT NOT NULL UNIQUE,
                     friend_code TEXT NOT NULL UNIQUE,
                     revision INTEGER NOT NULL DEFAULT 1,
@@ -795,7 +731,6 @@ class NormalizedSqliteRepository:
                     provider TEXT NOT NULL,
                     provider_user_id TEXT NOT NULL,
                     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
                     PRIMARY KEY(provider, provider_user_id)
                 );
                 CREATE TABLE IF NOT EXISTS friendships (
@@ -842,8 +777,6 @@ class NormalizedSqliteRepository:
                 CREATE TABLE IF NOT EXISTS sessions (
                     token_hash TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-                    active_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     created_at REAL NOT NULL,
                     expires_at REAL NOT NULL
                 );
@@ -920,100 +853,8 @@ class NormalizedSqliteRepository:
                 """
             )
             user_columns = {str(row[1]) for row in database.execute("PRAGMA table_info(users)")}
-            if "account_id" not in user_columns:
-                database.execute("ALTER TABLE users ADD COLUMN account_id TEXT")
             if "revision" not in user_columns:
                 database.execute("ALTER TABLE users ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
-            social_columns = {str(row[1]) for row in database.execute("PRAGMA table_info(social_accounts)")}
-            if "account_id" not in social_columns:
-                database.execute("ALTER TABLE social_accounts ADD COLUMN account_id TEXT")
-            session_columns = {str(row[1]) for row in database.execute("PRAGMA table_info(sessions)")}
-            if "account_id" not in session_columns:
-                database.execute("ALTER TABLE sessions ADD COLUMN account_id TEXT")
-            if "active_user_id" not in session_columns:
-                database.execute("ALTER TABLE sessions ADD COLUMN active_user_id TEXT")
-            account_migration = database.execute(
-                "SELECT value FROM schema_meta WHERE key='account_identity_schema_version'"
-            ).fetchone()
-            if account_migration is None or int(account_migration[0]) < 1:
-                for user_id, data_json, account_id in database.execute(
-                    "SELECT id, data_json, account_id FROM users"
-                ).fetchall():
-                    user = self.decode(data_json)
-                    resolved_account_id = str(account_id or user.get("account_id") or f"account_{user_id}")
-                    account = {
-                        "id": resolved_account_id,
-                        "auth_provider": user.get("auth_provider", "local"),
-                        "provider_user_id": user.get("provider_user_id", ""),
-                        "password_salt": user.get("password_salt", ""),
-                        "password_hash": user.get("password_hash", ""),
-                        "phone": user.get("phone", ""),
-                        "age_group": user.get("age_group", ""),
-                        "gender": user.get("gender", ""),
-                        "created_at": user.get("created_at", ""),
-                        "status": "active",
-                    }
-                    for account_field in ("password_salt", "password_hash", "phone", "age_group", "gender"):
-                        user.pop(account_field, None)
-                    database.execute(
-                        "INSERT OR IGNORE INTO accounts(id, status, data_json) VALUES(?, 'active', ?)",
-                        (resolved_account_id, self.encode(account)),
-                    )
-                    user["account_id"] = resolved_account_id
-                    database.execute(
-                        "UPDATE users SET account_id=?, data_json=? WHERE id=?",
-                        (resolved_account_id, self.encode(user), user_id),
-                    )
-                database.execute(
-                    "UPDATE social_accounts SET account_id=(SELECT users.account_id FROM users WHERE users.id=social_accounts.user_id) "
-                    "WHERE account_id IS NULL"
-                )
-                database.execute(
-                    "UPDATE sessions SET account_id=(SELECT users.account_id FROM users WHERE users.id=sessions.user_id), "
-                    "active_user_id=user_id WHERE account_id IS NULL OR active_user_id IS NULL"
-                )
-                database.execute(
-                    "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('account_identity_schema_version', '1')"
-                )
-            account_migration = database.execute(
-                "SELECT value FROM schema_meta WHERE key='account_identity_schema_version'"
-            ).fetchone()
-            if account_migration is None or int(account_migration[0]) < 2:
-                over_limit = database.execute(
-                    "SELECT account_id FROM users GROUP BY account_id HAVING COUNT(*) > 3 LIMIT 1"
-                ).fetchone()
-                if over_limit is not None:
-                    raise sqlite3.IntegrityError(
-                        f"account identity limit already exceeded for account {over_limit[0]}"
-                    )
-                database.execute(
-                    "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('account_identity_schema_version', '2')"
-                )
-            database.execute("CREATE INDEX IF NOT EXISTS users_account_idx ON users(account_id, id)")
-            database.execute(
-                "CREATE TRIGGER IF NOT EXISTS users_account_identity_limit "
-                "BEFORE INSERT ON users "
-                "WHEN NOT EXISTS(SELECT 1 FROM users WHERE id=NEW.id) "
-                "AND (SELECT COUNT(*) FROM users WHERE account_id=NEW.account_id) >= 3 "
-                "BEGIN SELECT RAISE(ABORT, 'account identity limit exceeded'); END"
-            )
-            database.execute(
-                "CREATE TRIGGER IF NOT EXISTS users_account_identity_update_limit "
-                "BEFORE UPDATE OF account_id ON users "
-                "WHEN NEW.account_id <> OLD.account_id "
-                "AND (SELECT COUNT(*) FROM users WHERE account_id=NEW.account_id AND id<>NEW.id) >= 3 "
-                "BEGIN SELECT RAISE(ABORT, 'account identity limit exceeded'); END"
-            )
-            database.execute(
-                "CREATE TRIGGER IF NOT EXISTS users_require_account "
-                "BEFORE INSERT ON users WHEN NEW.account_id IS NULL "
-                "BEGIN SELECT RAISE(ABORT, 'user account is required'); END"
-            )
-            database.execute(
-                "CREATE TRIGGER IF NOT EXISTS sessions_require_account_identity "
-                "BEFORE INSERT ON sessions WHEN NEW.account_id IS NULL OR NEW.active_user_id IS NULL "
-                "BEGIN SELECT RAISE(ABORT, 'session account and identity are required'); END"
-            )
             room_columns = {str(row[1]) for row in database.execute("PRAGMA table_info(rooms)")}
             if "revision" not in room_columns:
                 database.execute("ALTER TABLE rooms ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
@@ -1046,18 +887,13 @@ class NormalizedSqliteRepository:
         rooms = state.get("rooms", [])
         with self.connection() as database:
             database.execute("BEGIN IMMEDIATE")
-            for account in state.get("accounts", []):
-                database.execute(
-                    "INSERT OR REPLACE INTO accounts(id, status, data_json) VALUES(?, ?, ?)",
-                    (account["id"], account.get("status", "active"), self.encode(account)),
-                )
             for user in users:
                 compact_user, packed_art, migrated_art = split_legacy_profile_art(user)
                 database.execute(
-                    "INSERT INTO users(id, account_id, username, friend_code, data_json) VALUES(?, ?, ?, ?, ?) "
+                    "INSERT INTO users(id, username, friend_code, data_json) VALUES(?, ?, ?, ?) "
                     "ON CONFLICT(id) DO UPDATE SET username=excluded.username, "
-                    "account_id=excluded.account_id, friend_code=excluded.friend_code, data_json=excluded.data_json",
-                    (user["id"], user["account_id"], user["username"], user["friend_code"], self.encode(compact_user)),
+                    "friend_code=excluded.friend_code, data_json=excluded.data_json",
+                    (user["id"], user["username"], user["friend_code"], self.encode(compact_user)),
                 )
                 if migrated_art:
                     if packed_art is None:
@@ -1071,8 +907,8 @@ class NormalizedSqliteRepository:
                 provider_user_id = str(user.get("provider_user_id", ""))
                 if provider_user_id:
                     database.execute(
-                        "INSERT OR REPLACE INTO social_accounts(provider, provider_user_id, user_id, account_id) VALUES(?, ?, ?, ?)",
-                        (user.get("auth_provider", "local"), provider_user_id, user["id"], user["account_id"]),
+                        "INSERT OR REPLACE INTO social_accounts(provider, provider_user_id, user_id) VALUES(?, ?, ?)",
+                        (user.get("auth_provider", "local"), provider_user_id, user["id"]),
                     )
             for friendship in state.get("friendships", []):
                 user_ids = sorted(friendship.get("user_ids", []))
@@ -1108,8 +944,8 @@ class NormalizedSqliteRepository:
                 user = users_by_username.get(session.get("username", ""))
                 if user:
                     database.execute(
-                        "INSERT OR REPLACE INTO sessions(token_hash, user_id, account_id, active_user_id, created_at, expires_at) VALUES(?, ?, ?, ?, ?, ?)",
-                        (token_hash, user["id"], user["account_id"], user["id"], session["created_at"], session["expires_at"]),
+                        "INSERT OR REPLACE INTO sessions(token_hash, user_id, created_at, expires_at) VALUES(?, ?, ?, ?)",
+                        (token_hash, user["id"], session["created_at"], session["expires_at"]),
                     )
             for username, feed in state.get("shorts_feeds", {}).items():
                 user = users_by_username.get(username)
@@ -1141,8 +977,8 @@ class NormalizedSqliteRepository:
                 new_revision = 1
                 persisted_user = {**compact_user_profile_fields(user), "_revision": new_revision}
                 database.execute(
-                    "INSERT INTO users(id, account_id, username, friend_code, revision, data_json) VALUES(?, ?, ?, ?, ?, ?)",
-                    (user["id"], user["account_id"], user["username"], user["friend_code"], new_revision, self.encode(persisted_user)),
+                    "INSERT INTO users(id, username, friend_code, revision, data_json) VALUES(?, ?, ?, ?, ?)",
+                    (user["id"], user["username"], user["friend_code"], new_revision, self.encode(persisted_user)),
                 )
             else:
                 if int(row[0]) != expected_revision:
@@ -1150,8 +986,8 @@ class NormalizedSqliteRepository:
                 new_revision = expected_revision + 1
                 persisted_user = {**compact_user_profile_fields(user), "_revision": new_revision}
                 cursor = database.execute(
-                    "UPDATE users SET account_id=?, username=?, friend_code=?, revision=?, data_json=? WHERE id=? AND revision=?",
-                    (user["account_id"], user["username"], user["friend_code"], new_revision, self.encode(persisted_user), user["id"], expected_revision),
+                    "UPDATE users SET username=?, friend_code=?, revision=?, data_json=? WHERE id=? AND revision=?",
+                    (user["username"], user["friend_code"], new_revision, self.encode(persisted_user), user["id"], expected_revision),
                 )
                 if cursor.rowcount != 1:
                     raise ConcurrentUpdateError("user revision conflict")
@@ -1159,30 +995,10 @@ class NormalizedSqliteRepository:
             provider_user_id = str(user.get("provider_user_id", ""))
             if provider_user_id:
                 database.execute(
-                    "INSERT INTO social_accounts(provider, provider_user_id, user_id, account_id) VALUES(?, ?, ?, ?)",
-                    (user.get("auth_provider", "local"), provider_user_id, user["id"], user["account_id"]),
+                    "INSERT INTO social_accounts(provider, provider_user_id, user_id) VALUES(?, ?, ?)",
+                    (user.get("auth_provider", "local"), provider_user_id, user["id"]),
                 )
         user["_revision"] = new_revision
-
-    def identity_by_id(self, account_id: str, user_id: str) -> dict | None:
-        with self.connection() as database:
-            row = database.execute(
-                "SELECT data_json, revision FROM users WHERE account_id=? AND id=?",
-                (account_id, user_id),
-            ).fetchone()
-        if row is None:
-            return None
-        identity = self.decode(row[0])
-        identity["_revision"] = int(row[1])
-        return identity
-
-    def sync_account(self, account: dict) -> None:
-        with self.connection() as database:
-            database.execute(
-                "INSERT INTO accounts(id, status, data_json) VALUES(?, ?, ?) "
-                "ON CONFLICT(id) DO UPDATE SET status=excluded.status, data_json=excluded.data_json",
-                (account["id"], account.get("status", "active"), self.encode(account)),
-            )
 
     def load_profile_art(self, user_id: str) -> tuple[int, bytes] | None:
         with self.connection() as database:
@@ -1275,13 +1091,13 @@ class NormalizedSqliteRepository:
                 (room_id, user_id, message_id),
             )
 
-    def create_session(self, token_hash: str, account_id: str, active_user_id: str, created_at: float, expires_at: float, max_sessions: int) -> None:
+    def create_session(self, token_hash: str, user_id: str, created_at: float, expires_at: float, max_sessions: int) -> None:
         with self.connection() as database:
             database.execute("BEGIN IMMEDIATE")
             database.execute("DELETE FROM sessions WHERE expires_at<=?", (created_at,))
             database.execute(
-                "INSERT OR REPLACE INTO sessions(token_hash, user_id, account_id, active_user_id, created_at, expires_at) VALUES(?, ?, ?, ?, ?, ?)",
-                (token_hash, active_user_id, account_id, active_user_id, created_at, expires_at),
+                "INSERT OR REPLACE INTO sessions(token_hash, user_id, created_at, expires_at) VALUES(?, ?, ?, ?)",
+                (token_hash, user_id, created_at, expires_at),
             )
             session_count = int(database.execute("SELECT COUNT(*) FROM sessions").fetchone()[0])
             overflow = max(0, session_count - max_sessions)
@@ -1295,20 +1111,10 @@ class NormalizedSqliteRepository:
         with self.connection() as database:
             database.execute("DELETE FROM sessions WHERE expires_at<=?", (now,))
             row = database.execute(
-                "SELECT users.username FROM sessions JOIN users ON users.id=sessions.active_user_id "
-                "JOIN accounts ON accounts.id=sessions.account_id WHERE token_hash=? AND accounts.status='active'",
+                "SELECT users.username FROM sessions JOIN users ON users.id=sessions.user_id WHERE token_hash=?",
                 (token_hash,),
             ).fetchone()
         return str(row[0]) if row else None
-
-    def switch_session_identity(self, token_hash: str, account_id: str, user_id: str) -> bool:
-        with self.connection() as database:
-            cursor = database.execute(
-                "UPDATE sessions SET active_user_id=?, user_id=? WHERE token_hash=? AND account_id=? "
-                "AND EXISTS(SELECT 1 FROM users WHERE id=? AND account_id=?)",
-                (user_id, user_id, token_hash, account_id, user_id, account_id),
-            )
-            return cursor.rowcount == 1
 
     def refresh_session(self, token_hash: str, expires_at: float) -> None:
         with self.connection() as database:
@@ -1480,10 +1286,6 @@ class NormalizedSqliteRepository:
 
     def load_state(self) -> dict:
         with self.connection() as database:
-            accounts = [
-                self.decode(data_json)
-                for (data_json,) in database.execute("SELECT data_json FROM accounts ORDER BY id")
-            ]
             users = []
             for user_id, data_json, revision in database.execute("SELECT id, data_json, revision FROM users"):
                 user, packed_art, migrated_art = split_legacy_profile_art(self.decode(data_json))
@@ -1520,14 +1322,12 @@ class NormalizedSqliteRepository:
             users_by_id = {user["id"]: user for user in users}
             sessions = {
                 str(row[0]): {
-                    "username": users_by_id[str(row[2])]["username"],
-                    "account_id": str(row[1]),
-                    "active_user_id": str(row[2]),
-                    "created_at": float(row[3]),
-                    "expires_at": float(row[4]),
+                    "username": users_by_id[str(row[1])]["username"],
+                    "created_at": float(row[2]),
+                    "expires_at": float(row[3]),
                 }
-                for row in database.execute("SELECT token_hash, account_id, active_user_id, created_at, expires_at FROM sessions")
-                if row[1] is not None and str(row[2]) in users_by_id
+                for row in database.execute("SELECT token_hash, user_id, created_at, expires_at FROM sessions")
+                if str(row[1]) in users_by_id
             }
             seen_by_user: dict[str, list[str]] = {}
             for user_id, video_id in database.execute(
@@ -1547,7 +1347,6 @@ class NormalizedSqliteRepository:
             room["participant_ids"] = members_by_room.get(room["id"], [])
             room["last_read_by"] = reads_by_room.get(room["id"], {})
         return {
-            "accounts": accounts,
             "users": users,
             "friendships": friendships,
             "rooms": rooms,

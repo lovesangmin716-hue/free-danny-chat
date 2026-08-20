@@ -3,8 +3,6 @@
 import { beginAuthRequest, demoLoginButton, googleButtonContainer, googleLoginButton, kakaoLoginButton, loginForm, loginPassword, loginUsername, registerCoreHooks, rememberSession, requestAction, setAuthRequestBusy, setAuthStatus, setProviderStatus, showAuth, state } from "./core.js";
 import { startApp } from "./app.js";
 
-const signupBanner = document.getElementById("signup-banner");
-
 // Authentication providers, signup, login, logout, and phone verification.
 function setAuthMode(mode) {
   setAuthStatus("SNS 로그인 또는 기존 계정 로그인을 선택해 주세요.");
@@ -17,7 +15,6 @@ async function loadProviders() {
       policy: "join",
     });
     state.providers = data.providers || {};
-    signupBanner.classList.toggle("hidden", data.local_signup_enabled === false);
     const googleEnabled = Boolean(state.providers.google?.enabled);
     const kakaoEnabled = Boolean(state.providers.kakao?.enabled);
     const demoEnabled = Boolean(state.providers.demo?.enabled);

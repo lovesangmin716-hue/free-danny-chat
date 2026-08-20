@@ -10,97 +10,14 @@ alter table public.app_state enable row level security;
 
 -- Normalized application storage. app_state remains temporarily as a rollback
 -- source while the row-level migration is verified.
-create table if not exists public.accounts (
-  id text primary key,
-  status text not null default 'active',
-  data jsonb not null
-);
-
 create table if not exists public.users (
   id text primary key,
-  account_id text references public.accounts(id) on delete cascade,
   username text not null unique,
   friend_code text not null unique,
   revision bigint not null default 1,
   data jsonb not null
 );
 alter table public.users add column if not exists revision bigint not null default 1;
-alter table public.users add column if not exists account_id text;
-
-insert into public.accounts(id, status, data)
-select
-  coalesce(data->>'account_id', 'account_' || id),
-  'active',
-  jsonb_build_object(
-    'id', coalesce(data->>'account_id', 'account_' || id),
-    'auth_provider', coalesce(data->>'auth_provider', 'local'),
-    'provider_user_id', coalesce(data->>'provider_user_id', ''),
-    'password_salt', coalesce(data->>'password_salt', ''),
-    'password_hash', coalesce(data->>'password_hash', ''),
-    'phone', coalesce(data->>'phone', ''),
-    'age_group', coalesce(data->>'age_group', ''),
-    'gender', coalesce(data->>'gender', ''),
-    'created_at', coalesce(data->>'created_at', timezone('utc', now())::text),
-    'status', 'active'
-  )
-from public.users
-where account_id is null
-   or not (data ? 'account_id')
-   or data ?| array['password_salt', 'password_hash', 'phone', 'age_group', 'gender']
-on conflict (id) do update set
-  data=public.accounts.data || excluded.data;
-
-update public.users set
-  account_id=coalesce(account_id, data->>'account_id', 'account_' || id),
-  data=jsonb_set(
-    data - 'password_salt' - 'password_hash' - 'phone' - 'age_group' - 'gender',
-    '{account_id}',
-    to_jsonb(coalesce(account_id, data->>'account_id', 'account_' || id))
-  )
-where account_id is null
-   or not (data ? 'account_id')
-   or data ?| array['password_salt', 'password_hash', 'phone', 'age_group', 'gender'];
-
-alter table public.users alter column account_id set not null;
-do $$ begin
-  if not exists(select 1 from pg_constraint where conname='users_account_id_fkey') then
-    alter table public.users add constraint users_account_id_fkey
-      foreign key(account_id) references public.accounts(id) on delete cascade;
-  end if;
-end $$;
-
-do $$
-declare over_limit_account text;
-begin
-  select account_id into over_limit_account
-  from public.users
-  group by account_id
-  having count(*) > 3
-  limit 1;
-  if over_limit_account is not null then
-    raise exception 'account identity limit already exceeded for account %', over_limit_account;
-  end if;
-end;
-$$;
-
-create or replace function public.colorless_enforce_identity_limit()
-returns trigger language plpgsql set search_path = public as $$
-begin
-  if tg_op = 'UPDATE' and new.account_id = old.account_id then
-    return new;
-  end if;
-  perform pg_advisory_xact_lock(hashtextextended(new.account_id, 0));
-  if (select count(*) from users where account_id=new.account_id and id <> new.id) >= 3 then
-    raise exception 'account identity limit exceeded';
-  end if;
-  return new;
-end;
-$$;
-drop trigger if exists users_account_identity_limit on public.users;
-create trigger users_account_identity_limit
-before insert or update of account_id on public.users
-for each row execute function public.colorless_enforce_identity_limit();
-create index if not exists users_account_idx on public.users(account_id, id);
 
 create table if not exists public.profile_art (
   user_id text primary key references public.users(id) on delete cascade,
@@ -139,13 +56,8 @@ create table if not exists public.social_accounts (
   provider text not null,
   provider_user_id text not null,
   user_id text not null references public.users(id) on delete cascade,
-  account_id text references public.accounts(id) on delete cascade,
   primary key (provider, provider_user_id)
 );
-alter table public.social_accounts add column if not exists account_id text references public.accounts(id) on delete cascade;
-update public.social_accounts set account_id=users.account_id
-from public.users where social_accounts.user_id=users.id and social_accounts.account_id is null;
-alter table public.social_accounts alter column account_id set not null;
 
 create table if not exists public.friendships (
   user_low_id text not null references public.users(id) on delete cascade,
@@ -214,17 +126,9 @@ create table if not exists public.read_positions (
 create table if not exists public.sessions (
   token_hash text primary key,
   user_id text not null references public.users(id) on delete cascade,
-  account_id text references public.accounts(id) on delete cascade,
-  active_user_id text references public.users(id) on delete cascade,
   created_at double precision not null,
   expires_at double precision not null
 );
-alter table public.sessions add column if not exists account_id text references public.accounts(id) on delete cascade;
-alter table public.sessions add column if not exists active_user_id text references public.users(id) on delete cascade;
-update public.sessions set account_id=users.account_id, active_user_id=users.id
-from public.users where sessions.user_id=users.id and (sessions.account_id is null or sessions.active_user_id is null);
-alter table public.sessions alter column account_id set not null;
-alter table public.sessions alter column active_user_id set not null;
 create index if not exists sessions_expires_idx on public.sessions(expires_at);
 
 create table if not exists public.shorts_feeds (
@@ -292,7 +196,6 @@ create table if not exists public.presence_leases (
 create index if not exists presence_leases_expiry_idx on public.presence_leases(expires_at);
 create index if not exists presence_leases_user_expiry_idx on public.presence_leases(username, expires_at);
 
-alter table public.accounts enable row level security;
 alter table public.users enable row level security;
 alter table public.profile_art enable row level security;
 alter table public.app_migrations enable row level security;
@@ -316,14 +219,14 @@ returns bigint language plpgsql security definer set search_path = public as $$
 declare expected_revision bigint := coalesce((user_data->>'_revision')::bigint, 0); new_revision bigint;
 begin
   if expected_revision = 0 then
-    insert into users(id, account_id, username, friend_code, revision, data)
+    insert into users(id, username, friend_code, revision, data)
     values (
-      user_data->>'id', user_data->>'account_id', user_data->>'username', user_data->>'friend_code',
+      user_data->>'id', user_data->>'username', user_data->>'friend_code',
       1, user_data || jsonb_build_object('_revision', 1)
     ) on conflict(id) do nothing returning revision into new_revision;
   else
     update users set
-      account_id=user_data->>'account_id', username=user_data->>'username', friend_code=user_data->>'friend_code',
+      username=user_data->>'username', friend_code=user_data->>'friend_code',
       revision=revision+1,
       data=user_data || jsonb_build_object('_revision', revision+1)
     where id=user_data->>'id' and revision=expected_revision
@@ -332,9 +235,9 @@ begin
   if new_revision is null then return null; end if;
   delete from social_accounts where user_id = user_data->>'id';
   if coalesce(user_data->>'provider_user_id', '') <> '' then
-    insert into social_accounts(provider, provider_user_id, user_id, account_id)
-    values (coalesce(user_data->>'auth_provider', 'local'), user_data->>'provider_user_id', user_data->>'id', user_data->>'account_id')
-    on conflict (provider, provider_user_id) do update set user_id = excluded.user_id, account_id=excluded.account_id;
+    insert into social_accounts(provider, provider_user_id, user_id)
+    values (coalesce(user_data->>'auth_provider', 'local'), user_data->>'provider_user_id', user_data->>'id')
+    on conflict (provider, provider_user_id) do update set user_id = excluded.user_id;
   end if;
   return new_revision;
 end;
@@ -451,58 +354,6 @@ begin
   select users.username into result from sessions join users on users.id=sessions.user_id
   where sessions.token_hash=session_token_hash;
   return result;
-end;
-$$;
-
-create or replace function public.colorless_create_account_session(
-  session_token_hash text, session_account_id text, session_active_user_id text,
-  created_epoch double precision, expires_epoch double precision, max_session_count integer
-) returns void language plpgsql security definer set search_path = public as $$
-begin
-  if not exists(select 1 from users where id=session_active_user_id and account_id=session_account_id) then
-    raise exception 'identity is not owned by account';
-  end if;
-  delete from sessions where expires_at <= created_epoch;
-  insert into sessions(token_hash, user_id, account_id, active_user_id, created_at, expires_at)
-  values (session_token_hash, session_active_user_id, session_account_id, session_active_user_id, created_epoch, expires_epoch)
-  on conflict (token_hash) do update set
-    user_id=excluded.user_id, account_id=excluded.account_id, active_user_id=excluded.active_user_id,
-    created_at=excluded.created_at, expires_at=excluded.expires_at;
-  delete from sessions where token_hash in (
-    select token_hash from sessions order by created_at
-    limit greatest(0, (select count(*) from sessions) - max_session_count)
-  );
-end;
-$$;
-
-create or replace function public.colorless_account_session_username(session_token_hash text, now_epoch double precision)
-returns text language plpgsql security definer set search_path = public as $$
-declare result text;
-begin
-  delete from sessions where expires_at <= now_epoch;
-  select users.username into result
-  from sessions
-  join accounts on accounts.id=sessions.account_id and accounts.status='active'
-  join users on users.id=sessions.active_user_id and users.account_id=accounts.id
-  where sessions.token_hash=session_token_hash and coalesce(users.data->>'disabled_at', '')='';
-  return result;
-end;
-$$;
-
-create or replace function public.colorless_switch_session_identity(
-  session_token_hash text, session_account_id text, target_user_id text
-) returns boolean language plpgsql security definer set search_path = public as $$
-declare changed_count integer;
-begin
-  update sessions set user_id=target_user_id, active_user_id=target_user_id
-  where token_hash=session_token_hash and account_id=session_account_id
-    and exists(
-      select 1 from users
-      where id=target_user_id and account_id=session_account_id
-        and coalesce(data->>'disabled_at', '')=''
-    );
-  get diagnostics changed_count = row_count;
-  return changed_count = 1;
 end;
 $$;
 
@@ -681,7 +532,6 @@ $$;
 create or replace function public.colorless_storage_counts()
 returns jsonb language sql security definer set search_path = public as $$
   select jsonb_build_object(
-    'accounts', (select count(*) from accounts),
     'users', (select count(*) from users),
     'profile_art', (select count(*) from profile_art),
     'friendships', (select count(*) from friendships),
@@ -698,36 +548,15 @@ returns jsonb language sql security definer set search_path = public as $$
   );
 $$;
 
-create or replace function public.colorless_account_identity_integrity()
-returns jsonb language sql security definer set search_path = public as $$
-  select jsonb_build_object(
-    'users_without_account', (select count(*) from users where account_id is null),
-    'accounts_over_identity_limit', (
-      select count(*) from (
-        select account_id from users group by account_id having count(*) > 3
-      ) over_limit
-    ),
-    'sessions_without_account_identity', (
-      select count(*) from sessions where account_id is null or active_user_id is null
-    ),
-    'sessions_with_foreign_identity', (
-      select count(*)
-      from sessions
-      left join users on users.id=sessions.active_user_id and users.account_id=sessions.account_id
-      where users.id is null
-    )
-  );
-$$;
-
 revoke all on table
-  public.app_migrations, public.accounts, public.users, public.profile_art, public.social_accounts, public.friendships,
+  public.app_migrations, public.users, public.profile_art, public.social_accounts, public.friendships,
   public.rooms, public.room_members, public.messages, public.read_positions,
   public.sessions, public.shorts_feeds, public.shorts_seen, public.shorts_catalog,
   public.shorts_collection_state,
   public.realtime_events, public.presence_leases
 from anon, authenticated;
 grant select, insert, update, delete on table
-  public.app_migrations, public.accounts, public.users, public.profile_art, public.social_accounts, public.friendships,
+  public.app_migrations, public.users, public.profile_art, public.social_accounts, public.friendships,
   public.rooms, public.room_members, public.messages, public.read_positions,
   public.sessions, public.shorts_feeds, public.shorts_seen, public.shorts_catalog,
   public.shorts_collection_state,
@@ -736,15 +565,11 @@ to service_role;
 grant usage, select on sequence public.messages_sequence_seq, public.realtime_events_sequence_seq to service_role;
 
 revoke execute on function public.colorless_sync_user(jsonb) from public, anon, authenticated;
-revoke execute on function public.colorless_enforce_identity_limit() from public, anon, authenticated;
 revoke execute on function public.colorless_sync_room(jsonb) from public, anon, authenticated;
 revoke execute on function public.colorless_insert_message(jsonb, text, jsonb, integer) from public, anon, authenticated;
 revoke execute on function public.colorless_latest_messages(text[]) from public, anon, authenticated;
 revoke execute on function public.colorless_create_session(text, text, double precision, double precision, integer) from public, anon, authenticated;
 revoke execute on function public.colorless_session_username(text, double precision) from public, anon, authenticated;
-revoke execute on function public.colorless_create_account_session(text, text, text, double precision, double precision, integer) from public, anon, authenticated;
-revoke execute on function public.colorless_account_session_username(text, double precision) from public, anon, authenticated;
-revoke execute on function public.colorless_switch_session_identity(text, text, text) from public, anon, authenticated;
 revoke execute on function public.colorless_save_shorts_feed(text, text[], text) from public, anon, authenticated;
 revoke execute on function public.colorless_acquire_shorts_collection(text, double precision, integer, integer, integer) from public, anon, authenticated;
 revoke execute on function public.colorless_finish_shorts_collection(text, double precision, integer, boolean, text, integer) from public, anon, authenticated;
@@ -755,7 +580,6 @@ revoke execute on function public.colorless_touch_presence(text, text, text, tex
 revoke execute on function public.colorless_disconnect_presence(text, text) from public, anon, authenticated;
 revoke execute on function public.colorless_cleanup_presence() from public, anon, authenticated;
 revoke execute on function public.colorless_storage_counts() from public, anon, authenticated;
-revoke execute on function public.colorless_account_identity_integrity() from public, anon, authenticated;
 
 grant execute on function public.colorless_sync_user(jsonb) to service_role;
 grant execute on function public.colorless_sync_room(jsonb) to service_role;
@@ -763,9 +587,6 @@ grant execute on function public.colorless_insert_message(jsonb, text, jsonb, in
 grant execute on function public.colorless_latest_messages(text[]) to service_role;
 grant execute on function public.colorless_create_session(text, text, double precision, double precision, integer) to service_role;
 grant execute on function public.colorless_session_username(text, double precision) to service_role;
-grant execute on function public.colorless_create_account_session(text, text, text, double precision, double precision, integer) to service_role;
-grant execute on function public.colorless_account_session_username(text, double precision) to service_role;
-grant execute on function public.colorless_switch_session_identity(text, text, text) to service_role;
 grant execute on function public.colorless_save_shorts_feed(text, text[], text) to service_role;
 grant execute on function public.colorless_acquire_shorts_collection(text, double precision, integer, integer, integer) to service_role;
 grant execute on function public.colorless_finish_shorts_collection(text, double precision, integer, boolean, text, integer) to service_role;
@@ -776,7 +597,6 @@ grant execute on function public.colorless_touch_presence(text, text, text, text
 grant execute on function public.colorless_disconnect_presence(text, text) to service_role;
 grant execute on function public.colorless_cleanup_presence() to service_role;
 grant execute on function public.colorless_storage_counts() to service_role;
-grant execute on function public.colorless_account_identity_integrity() to service_role;
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values (
