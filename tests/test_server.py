@@ -180,7 +180,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
         attachment_script = (server.ASSETS_DIR / "js" / "attachments.js").read_text(encoding="utf-8")
         bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
 
-        self.assertIn('window.matchMedia?.("(pointer: fine)").matches', attachment_script)
+        self.assertIn('["camera", "file", "voice", "pdf", "photo"]', attachment_script)
         self.assertIn('openAttachmentPicker(kind = "all")', attachment_script)
         self.assertIn('"image/*,application/pdf"', attachment_script)
         self.assertIn('chatRoom.addEventListener("paste", handlePastedChatAttachment)', bootstrap_script)
@@ -196,10 +196,14 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("microphone=(self)", permissions_policy)
         self.assertIn('accept="image/*,application/pdf"', index_html)
         self.assertNotIn('accept="audio/', index_html)
+        self.assertIn('class="attachment-guide-label" data-kind="voice"', index_html)
+        self.assertNotIn('id="chat-voice-button"', index_html)
         self.assertIn("navigator.mediaDevices.getUserMedia", voice_script)
         self.assertIn("new MediaRecorder", voice_script)
         self.assertIn('{ source: "voice-recorder", durationMs }', voice_script)
+        self.assertIn('ColorlessPlatform.decorateIconButton(chatAttachmentButton, recording ? "square" : "paperclip"', voice_script)
         self.assertIn('source: options.source || "file-picker"', attachment_script)
+        self.assertIn('if (kind === "voice") toggleVoiceRecording()', (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8"))
         self.assertIn('attachment.kind === "voice"', chat_script)
         self.assertIn('audio.setAttribute("controlslist", "nodownload noplaybackrate")', chat_script)
 
