@@ -604,7 +604,10 @@ values (
   'chat-uploads',
   false,
   8388608,
-  array['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf']
+  array[
+    'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'image/heif', 'image/avif',
+    'application/pdf', 'audio/webm', 'audio/mp4', 'audio/ogg'
+  ]
 )
 on conflict (id) do update set
   public = excluded.public,

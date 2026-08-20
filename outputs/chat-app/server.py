@@ -241,6 +241,7 @@ SUPABASE_STATE_TABLE = "app_state"
 SUPABASE_STATE_ID = "primary"
 SUPABASE_UPLOAD_BUCKET = "chat-uploads"
 SUPABASE_ENABLED = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
+UPLOAD_BUCKET_CONFIGURED = not SUPABASE_ENABLED
 UPLOAD_GRANT_TTL_SECONDS = max(60, min(30 * 60, int(os.getenv("UPLOAD_GRANT_TTL_SECONDS", "600"))))
 DOWNLOAD_URL_TTL_SECONDS = max(15, min(5 * 60, int(os.getenv("DOWNLOAD_URL_TTL_SECONDS", "60"))))
 INSTANCE_ID = os.getenv("INSTANCE_ID", "").strip() or f"instance-{secrets.token_hex(8)}"
@@ -1265,6 +1266,27 @@ def supabase_headers(content_type: str | None = None) -> dict[str, str]:
 
 def supabase_object_url(filename: str) -> str:
     return f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_UPLOAD_BUCKET}/{quote(filename)}"
+
+
+def configure_supabase_upload_bucket() -> None:
+    global UPLOAD_BUCKET_CONFIGURED
+    if not SUPABASE_ENABLED:
+        UPLOAD_BUCKET_CONFIGURED = True
+        return
+    payload = {
+        "id": SUPABASE_UPLOAD_BUCKET,
+        "name": SUPABASE_UPLOAD_BUCKET,
+        "public": False,
+        "file_size_limit": MAX_ATTACHMENT_BYTES,
+        "allowed_mime_types": list(ATTACHMENT_TYPES),
+    }
+    fetch_json(
+        f"{SUPABASE_URL}/storage/v1/bucket/{quote(SUPABASE_UPLOAD_BUCKET)}",
+        method="PUT",
+        headers=supabase_headers("application/json"),
+        data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+    )
+    UPLOAD_BUCKET_CONFIGURED = True
 
 
 def supabase_signed_upload_url(filename: str) -> str:
@@ -5056,6 +5078,7 @@ class ChatHandler(BaseHTTPRequestHandler):
         checks = {
             "database": not database_error and database_latency_ms < 2_000,
             "migration": migration_ready,
+            "upload_bucket": UPLOAD_BUCKET_CONFIGURED,
             "persistence_queue": not persistence_error and persistence_lag <= 100 and pending_parts <= 1_000,
             "event_outbox": event_outbox_pending < 8_000,
             "request_capacity": request_metrics["active"] < self.server.max_request_threads,
@@ -6927,6 +6950,7 @@ class ChatServer(ThreadingHTTPServer):
 
 
 if __name__ == "__main__":
+    configure_supabase_upload_bucket()
     SHORTS_COLLECTOR.start()
     server = ChatServer((HOST, PORT), ChatHandler)
     print(f"{APP_NAME} running at http://{HOST}:{PORT}")
