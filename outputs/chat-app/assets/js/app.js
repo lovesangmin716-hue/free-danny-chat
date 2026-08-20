@@ -5,28 +5,44 @@ function renderMessenger() {
   const user = state.messenger.user || state.session?.user;
   appScreen.classList.remove("guest-mode");
   appScreen.classList.toggle("shorts-mode", state.activeList === "shorts");
-  appTitle.textContent = state.activeList === "friends" ? "친구" : "채팅";
+  appTitle.textContent = ({ chats: "채팅", friends: "친구", shorts: "쇼츠", my: "MY" })[state.activeList] || "채팅";
   openLoginButton.classList.add("hidden");
-  openStatusEmojiButton.classList.remove("hidden");
   renderStatusEmojiControl();
-  openProfileButton.classList.remove("hidden");
-  openDirectoryButton.classList.remove("hidden");
+  openDirectoryButton.classList.toggle("hidden", state.activeList !== "friends");
   openNewChatButton.classList.toggle("hidden", state.activeList !== "chats");
-  logoutButton.classList.remove("hidden");
   chatsTab.classList.toggle("active", state.activeList === "chats");
   friendsTab.classList.toggle("active", state.activeList === "friends");
   shortsTab.classList.toggle("active", state.activeList === "shorts");
+  myTab.classList.toggle("active", state.activeList === "my");
   shortsSoundToggle.classList.toggle("hidden", state.activeList !== "shorts");
   chatList.classList.toggle("hidden", state.activeList !== "chats");
   friendList.classList.toggle("hidden", state.activeList !== "friends");
   shortsView.classList.toggle("hidden", state.activeList !== "shorts");
+  myView.classList.toggle("hidden", state.activeList !== "my");
   if (state.activeList === "chats") renderChats();
   if (state.activeList === "friends") renderFriends();
   if (state.activeList === "shorts") {
     renderShorts();
   }
+  if (state.activeList === "my") renderMy();
   renderShortShareBar();
+  shortShareBar.classList.toggle("hidden", state.activeList === "my");
   if (!directorySheet.classList.contains("hidden")) renderDirectory();
+}
+
+function renderMy() {
+  const user = state.messenger.user || state.session?.user;
+  if (!user) return;
+  myProfileAvatar.replaceChildren(createAvatar(
+    getDisplayName(user),
+    user.profile_pixels,
+    null,
+    user.status_message,
+    user.profile_thumbnail_url || user.profile_image_url,
+  ));
+  myDisplayName.textContent = getDisplayName(user);
+  myFriendCode.textContent = user.friend_code ? `친구 ID · ${user.friend_code}` : "친구 ID 없음";
+  renderStatusEmojiControl();
 }
 
 function mergeEntitiesById(current, incoming, reset = false) {
@@ -190,7 +206,7 @@ async function startApp() {
   try {
     registerRealtimeHandlers();
     await loadMessenger();
-    if (!state.statusPromptShown) {
+    if (!state.statusPromptShown && !savedStatusEmoji()) {
       state.statusPromptShown = true;
       openStatusEmojiPicker(null);
     }

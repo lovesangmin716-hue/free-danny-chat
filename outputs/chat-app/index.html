@@ -272,7 +272,7 @@
         border-top: 1px solid var(--black);
         display: grid;
         flex: 0 0 auto;
-        grid-template-columns: repeat(3, 1fr) 48px;
+        grid-template-columns: repeat(4, 1fr) 48px;
       }
 
       .list-tabs button {
@@ -292,7 +292,7 @@
       .list-tabs button:last-child { border-right: 0; }
       .list-tabs button.active { background: var(--black); color: var(--white); }
       .shorts-sound-toggle { font-size: 16px; min-width: 48px; padding: 0; }
-      .app:not(.shorts-mode) .list-tabs { grid-template-columns: repeat(3, 1fr); }
+      .app:not(.shorts-mode) .list-tabs { grid-template-columns: repeat(4, 1fr); }
       .app.shorts-mode .shorts-sound-toggle { background: var(--black); color: var(--white); }
 
       .list-content {
@@ -304,6 +304,19 @@
 
       .chat-list, .friend-list { padding: 0; }
       .empty-list-action { display: block; margin: 12px auto 0; }
+
+      .my-view { min-height: 100%; padding: 18px; }
+      .my-card { border: 1px solid var(--black); display: grid; gap: 14px; padding: 20px; }
+      .my-profile-summary { align-items: center; display: grid; gap: 14px; grid-template-columns: 76px minmax(0, 1fr); }
+      .my-profile-avatar .avatar { height: 76px; width: 76px; }
+      .my-profile-copy { display: grid; gap: 4px; min-width: 0; }
+      .my-profile-copy strong { font-size: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .my-profile-copy span { color: var(--gray); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .my-status-row { align-items: center; border-block: 1px solid var(--light-gray); display: flex; justify-content: space-between; padding: 14px 0; }
+      .my-status-copy { display: grid; gap: 3px; }
+      .my-status-copy span { color: var(--gray); font-size: 12px; }
+      .my-actions { display: grid; gap: 8px; }
+      .my-actions button { width: 100%; }
 
       .shorts-view {
         height: 100%;
@@ -560,8 +573,8 @@
       .custom-palette-color { height: 34px; min-height: 34px; padding: 0; width: 34px; }
       .custom-palette-color.active { outline: 3px solid var(--black); outline-offset: 2px; }
       .palette-picker { border-top: 1px solid var(--black); margin-top: 12px; padding-top: 12px; }
-      .header-status-button { align-items: center; display: inline-flex; font-size: 22px; justify-content: center; min-height: 44px; min-width: 44px; padding: 6px; }
-      .header-status-button:disabled { cursor: default; opacity: 1; }
+      .header-status-button { align-items: center; background: transparent; border: 0; box-shadow: none; color: inherit; display: inline-flex; font-size: 38px; justify-content: center; min-height: 56px; min-width: 56px; padding: 0; }
+      .header-status-button:hover:not(:disabled) { box-shadow: none; transform: none; }
       .status-emoji-picker { align-items: center; display: flex; flex-direction: column; height: min(46vh, 360px); margin: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: min(19vh, 140px) 0; scroll-snap-type: y mandatory; scrollbar-width: none; }
       .status-emoji-picker::-webkit-scrollbar { display: none; }
       .status-emoji-button, .status-emoji-add { align-items: center; background: transparent; border: 0; box-shadow: none; color: var(--black); display: flex; flex: 0 0 152px; font-size: 88px; justify-content: center; min-height: 152px; padding: 0; scroll-snap-align: center; width: 100%; }
@@ -611,6 +624,11 @@
       .message-bubble { background: #f1f1f1; border: 1px solid var(--black); line-height: 1.45; padding: 10px 12px; transition: transform 90ms ease-out; white-space: pre-wrap; word-break: break-word; }
       .message-row.mine .message-bubble { background: var(--black); color: var(--white); }
       .message-row.showing-readers .message-bubble { transform: translateX(-8px); }
+      .message-row.search-target .message-bubble { animation: search-message-flash 1.8s ease-out; }
+      @keyframes search-message-flash {
+        0%, 35% { box-shadow: 0 0 0 4px #ffd900; }
+        100% { box-shadow: 0 0 0 0 transparent; }
+      }
       .message-attachment { display: grid; gap: 8px; }
       .message-image { display: block; height: auto; max-height: 300px; max-width: 100%; object-fit: contain; }
       .message-file { align-items: center; color: inherit; display: flex; font-weight: 700; gap: 8px; text-decoration: underline; }
@@ -832,11 +850,8 @@
         </div>
         <div class="app-actions">
           <button type="button" id="open-login-button">로그인</button>
-          <button type="button" class="header-status-button" id="open-status-emoji-button" aria-label="현재 상태">🙂</button>
-          <button type="button" class="friend-add-button" id="open-profile-button" data-icon="user" data-icon-only aria-label="프로필">프로필</button>
           <button type="button" class="friend-add-button" id="open-new-chat-button" data-icon="message-plus" data-icon-only aria-label="새 채팅">새 채팅</button>
           <button type="button" class="friend-add-button" id="open-directory-button" data-icon="user-plus" data-icon-only aria-label="친구 추가">친구 추가</button>
-          <button type="button" id="logout-button" data-icon="log-out" data-icon-only aria-label="로그아웃">로그아웃</button>
         </div>
       </header>
 
@@ -845,6 +860,28 @@
         <div class="friend-list hidden" id="friend-list"></div>
         <section class="shorts-view hidden" id="shorts-view" tabindex="0" aria-label="YouTube 쇼츠">
           <div class="shorts-feed" id="shorts-feed"></div>
+        </section>
+        <section class="my-view hidden" id="my-view" aria-label="MY">
+          <div class="my-card">
+            <div class="my-profile-summary">
+              <div class="my-profile-avatar" id="my-profile-avatar"></div>
+              <div class="my-profile-copy">
+                <strong id="my-display-name"></strong>
+                <span id="my-friend-code"></span>
+              </div>
+            </div>
+            <div class="my-status-row">
+              <div class="my-status-copy">
+                <strong>활동 이모티콘</strong>
+                <span>누르면 현재 감정을 변경할 수 있어요.</span>
+              </div>
+              <button type="button" class="header-status-button" id="open-status-emoji-button" aria-label="현재 상태">🙂</button>
+            </div>
+            <div class="my-actions">
+              <button type="button" class="secondary-button" id="open-profile-button" data-icon="user" aria-label="개인정보 수정">개인정보 수정</button>
+              <button type="button" id="logout-button" data-icon="log-out" aria-label="로그아웃">로그아웃</button>
+            </div>
+          </div>
         </section>
       </section>
       <p class="app-status" id="app-status" role="status" aria-live="polite">채팅 목록을 불러오는 중이에요.</p>
@@ -946,6 +983,7 @@
         <button type="button" class="active" id="chats-tab" data-icon="message-circle" aria-label="채팅">채팅</button>
         <button type="button" id="friends-tab" data-icon="users" aria-label="친구">친구</button>
         <button type="button" id="shorts-tab" data-icon="play" aria-label="쇼츠">쇼츠</button>
+        <button type="button" id="my-tab" data-icon="user" aria-label="MY">MY</button>
         <button type="button" class="shorts-sound-toggle" id="shorts-sound-toggle" data-icon="volume-x" data-icon-only aria-label="쇼츠 소리 켜기">쇼츠 소리 켜기</button>
       </nav>
 

@@ -151,6 +151,7 @@ document.addEventListener("visibilitychange", updatePresence);
 chatsTab.addEventListener("click", () => setActiveList("chats"));
 friendsTab.addEventListener("click", () => setActiveList("friends"));
 shortsTab.addEventListener("click", () => setActiveList("shorts"));
+myTab.addEventListener("click", () => setActiveList("my"));
 chatList.addEventListener("scroll", () => {
   if (chatList.scrollTop + chatList.clientHeight >= chatList.scrollHeight - 160) {
     void loadRoomsPage({ render: true }).catch(() => {});
@@ -181,10 +182,14 @@ window.addEventListener("resize", () => {
 }, { passive: true });
 document.addEventListener("visibilitychange", handleShortVisibilityChange);
 window.addEventListener("message", handleShortPlayerMessage);
-openDirectoryButton.addEventListener("click", openDirectory);
+openDirectoryButton.addEventListener("click", () => {
+  if (state.activeList === "friends") openDirectory();
+});
 closeDirectoryButton.addEventListener("click", closeDirectory);
 friendCodeAddButton.addEventListener("click", () => addFriend(friendCodeInput.value));
-openNewChatButton.addEventListener("click", openNewChat);
+openNewChatButton.addEventListener("click", () => {
+  if (state.activeList === "chats") openNewChat();
+});
 closeNewChatButton.addEventListener("click", closeNewChat);
 newChatGroupName.addEventListener("input", syncNewChatCreateButton);
 newChatSearch.addEventListener("input", renderNewChatMemberList);
@@ -200,6 +205,7 @@ friendCodeInput.addEventListener("keydown", (event) => {
   }
 });
 openProfileButton.addEventListener("click", () => void openProfileEditor());
+openStatusEmojiButton.addEventListener("click", () => openStatusEmojiPicker(openStatusEmojiButton));
 statusEmojiSheet.addEventListener("click", (event) => {
   if (event.target !== statusEmojiSheet) return;
   showStatusEmojiRequirement();

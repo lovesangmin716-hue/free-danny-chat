@@ -3095,6 +3095,7 @@ class StateStore:
         *,
         limit: int,
         before: str = "",
+        around: str = "",
     ) -> dict | None:
         with self.lock:
             user = self._users_by_username.get(username)
@@ -3102,6 +3103,27 @@ class StateStore:
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None
             all_messages = self._room_messages_locked(room_id)
+            if around:
+                target_index = next(
+                    (index for index, message in enumerate(all_messages) if message.get("id") == around),
+                    -1,
+                )
+                if target_index >= 0:
+                    page_start = max(0, target_index - (limit // 2))
+                    page_end = min(len(all_messages), page_start + limit)
+                    page_start = max(0, page_end - limit)
+                    messages = all_messages[page_start:page_end]
+                    page_messages = self._messages_with_read_state_locked(
+                        room,
+                        user,
+                        messages,
+                        all_messages=all_messages,
+                    )
+                    return {
+                        "items": page_messages,
+                        "next_cursor": messages[0]["id"] if page_start > 0 and page_messages else "",
+                        "around": around,
+                    }
             if before:
                 page_end = next(
                     (index for index, message in enumerate(all_messages) if message.get("id") == before),
@@ -3124,6 +3146,82 @@ class StateStore:
                 "items": page_messages,
                 "next_cursor": messages[0]["id"] if has_more and page_messages else "",
             }
+
+    def search_messages(self, username: str, query: str, *, limit: int = 50) -> dict | None:
+        normalized_query = query.strip().casefold()
+        if not normalized_query:
+            return {"items": []}
+        with self.lock:
+            user = self._users_by_username.get(username)
+            if user is None:
+                return None
+            rooms = [
+                room
+                for room_id in self._room_ids_by_user.get(user["id"], set())
+                if (room := self._rooms_by_id.get(room_id)) is not None
+                and room.get("kind") in {"direct", "group"}
+                and self._can_access_room_locked(room, user)
+            ]
+            rooms_by_id = {room["id"]: room for room in rooms}
+
+            def searchable_room_copy(room: dict) -> str:
+                values = [room.get("name", "")]
+                for participant_id in room.get("participant_ids", []):
+                    participant = self._users_by_id.get(participant_id)
+                    if participant is None:
+                        continue
+                    values.extend((
+                        participant.get("display_name", ""),
+                        participant.get("username", ""),
+                        participant.get("friend_code", ""),
+                    ))
+                return " ".join(str(value) for value in values if value).casefold()
+
+            matching_room_ids = [
+                room["id"] for room in rooms if normalized_query in searchable_room_copy(room)
+            ][:limit]
+            accessible_room_ids = list(rooms_by_id)
+        message_limit = max(0, limit - len(matching_room_ids))
+        matching_messages = self.repository.search_messages(
+            accessible_room_ids,
+            query.strip(),
+            limit=message_limit,
+        ) if message_limit else []
+        result_room_ids = list(dict.fromkeys(
+            matching_room_ids + [str(message.get("room_id", "")) for message in matching_messages]
+        ))
+        latest_messages = self.repository.latest_messages_for_rooms(result_room_ids)
+        with self.lock:
+            user = self._users_by_username.get(username)
+            if user is None:
+                return None
+            rooms_by_id = {
+                room_id: room
+                for room_id in result_room_ids
+                if (room := self._rooms_by_id.get(room_id)) is not None
+                and self._can_access_room_locked(room, user)
+            }
+            room_summaries = {
+                room_id: self._room_summary(
+                    rooms_by_id[room_id],
+                    user,
+                    latest_message=latest_messages.get(room_id),
+                    latest_message_loaded=True,
+                )
+                for room_id in result_room_ids
+                if room_id in rooms_by_id
+            }
+        items = [
+            {"kind": "room", "room": room_summaries[room_id]}
+            for room_id in matching_room_ids
+            if room_id in room_summaries
+        ]
+        items.extend(
+            {"kind": "message", "room": room_summaries[room_id], "message": message}
+            for message in matching_messages
+            if (room_id := str(message.get("room_id", ""))) in room_summaries
+        )
+        return {"items": items[:limit]}
 
     def initial_message_read_state(self, room_id: str, username: str, message: dict) -> dict:
         with self.lock:
@@ -4526,6 +4624,12 @@ class ChatHandler(BaseHTTPRequestHandler):
                 return
             self.send_conditional_json(STORE.get_sync_page(user["username"], after_revision=after_revision, limit=limit))
             return
+        if path == "/messages/search":
+            user = self.require_auth()
+            if user is None:
+                return
+            self.serve_message_search(query, user)
+            return
         if path == "/messages":
             user = self.require_auth()
             if user is None:
@@ -5018,13 +5122,19 @@ class ChatHandler(BaseHTTPRequestHandler):
         user = self.current_user()
         limit_value = query.get("limit", [""])[0].strip()
         before = query.get("before", [""])[0].strip()
-        if limit_value or before:
+        around = query.get("around", [""])[0].strip()
+        if limit_value or before or around:
             try:
                 limit = int(limit_value or DEFAULT_MESSAGES_PAGE_SIZE)
             except ValueError:
                 self.send_json({"error": "올바른 메시지 개수를 입력해 주세요."}, HTTPStatus.BAD_REQUEST)
                 return
-            if not 1 <= limit <= MAX_MESSAGES_PAGE_SIZE or (before and not MESSAGE_ID_PATTERN.fullmatch(before)):
+            if (
+                not 1 <= limit <= MAX_MESSAGES_PAGE_SIZE
+                or (before and not MESSAGE_ID_PATTERN.fullmatch(before))
+                or (around and not MESSAGE_ID_PATTERN.fullmatch(around))
+                or (before and around)
+            ):
                 self.send_json({"error": "올바른 메시지 커서를 입력해 주세요."}, HTTPStatus.BAD_REQUEST)
                 return
             messages = STORE.get_messages_page(
@@ -5032,6 +5142,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                 user["username"],
                 limit=limit,
                 before=before,
+                around=around,
             ) if user else None
         else:
             messages = STORE.get_messages(room_id, user["username"]) if user else None
@@ -5039,6 +5150,22 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "채팅방을 찾을 수 없습니다."}, HTTPStatus.NOT_FOUND)
             return
         self.send_json(messages, HTTPStatus.OK)
+
+    def serve_message_search(self, query: dict[str, list[str]], user: dict) -> None:
+        search_query = query.get("q", [""])[0].strip()
+        try:
+            limit = int(query.get("limit", ["50"])[0])
+        except (TypeError, ValueError):
+            self.send_json({"error": "올바른 검색 개수를 입력해 주세요."}, HTTPStatus.BAD_REQUEST)
+            return
+        if not search_query or len(search_query) > 100 or not 1 <= limit <= 50:
+            self.send_json({"error": "검색어는 1~100자로 입력해 주세요."}, HTTPStatus.BAD_REQUEST)
+            return
+        results = STORE.search_messages(user["username"], search_query, limit=limit)
+        if results is None:
+            self.send_json({"error": "사용자를 찾을 수 없습니다."}, HTTPStatus.NOT_FOUND)
+            return
+        self.send_json(results, HTTPStatus.OK)
 
     def serve_events(self, user: dict, query: dict[str, list[str]] | None = None) -> None:
         if not SSE_CONNECTION_SLOTS.acquire(blocking=False):

@@ -11,7 +11,12 @@ const initialState = {
     chats: { mode: "idle", query: "", filter: "all", selection: [] },
     friends: { mode: "idle", query: "", filter: "all", selection: [] },
     shorts: { mode: "idle", query: "", filter: "all", selection: [] },
+    my: { mode: "idle", query: "", filter: "all", selection: [] },
   },
+  chatSearchResults: [],
+  chatSearchLoading: false,
+  chatSearchRequestId: 0,
+  chatSearchTimer: null,
   newChatOriginTab: "",
   shortMessageNotice: null,
   shortMessageTimer: null,
@@ -211,9 +216,14 @@ const appTitle = document.getElementById("app-title");
 const chatsTab = document.getElementById("chats-tab");
 const friendsTab = document.getElementById("friends-tab");
 const shortsTab = document.getElementById("shorts-tab");
+const myTab = document.getElementById("my-tab");
 const shortsSoundToggle = document.getElementById("shorts-sound-toggle");
 const chatList = document.getElementById("chat-list");
 const friendList = document.getElementById("friend-list");
+const myView = document.getElementById("my-view");
+const myProfileAvatar = document.getElementById("my-profile-avatar");
+const myDisplayName = document.getElementById("my-display-name");
+const myFriendCode = document.getElementById("my-friend-code");
 const chatRoom = document.getElementById("chat-room");
 const closeChatRoomButton = document.getElementById("close-chat-room");
 const chatRoomAvatar = document.getElementById("chat-room-avatar");
@@ -349,8 +359,8 @@ function savedStatusEmoji() {
 function renderStatusEmojiControl() {
   const emoji = savedStatusEmoji();
   openStatusEmojiButton.textContent = emoji || "🙂";
-  openStatusEmojiButton.disabled = true;
-  openStatusEmojiButton.setAttribute("aria-label", emoji ? `현재 상태 ${emoji}` : "선택한 상태 없음");
+  openStatusEmojiButton.disabled = false;
+  openStatusEmojiButton.setAttribute("aria-label", emoji ? `현재 상태 ${emoji}. 변경하기` : "상태 이모티콘 선택하기");
 }
 
 function openStatusEmojiPicker(opener = openStatusEmojiButton) {

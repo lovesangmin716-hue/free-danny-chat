@@ -432,13 +432,14 @@ async function updatePresence() {
   }
 }
 
-async function loadChatMessages({ markRead = true, scrollToBottom = false } = {}) {
+async function loadChatMessages({ markRead = true, scrollToBottom = false, aroundMessageId = "" } = {}) {
   if (!state.selectedRoomId) return;
   const roomId = state.selectedRoomId;
   try {
+    const aroundQuery = aroundMessageId ? `&around=${encodeURIComponent(aroundMessageId)}` : "";
     const payload = await requestAction(
       "messages.load",
-      `/messages?room_id=${encodeURIComponent(roomId)}&limit=30`,
+      `/messages?room_id=${encodeURIComponent(roomId)}&limit=30${aroundQuery}`,
     );
     if (state.selectedRoomId !== roomId) return;
     const messages = Array.isArray(payload) ? payload : (payload.items || []);
@@ -455,6 +456,15 @@ async function loadChatMessages({ markRead = true, scrollToBottom = false } = {}
     setChatMessages(messages);
     state.messagesNextCursor = Array.isArray(payload) ? "" : (payload.next_cursor || "");
     renderChatRoom({ scrollToBottom });
+    if (aroundMessageId) {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const target = state.messageNodes.get(aroundMessageId);
+        if (!target) return;
+        target.scrollIntoView({ block: "center", behavior: "smooth" });
+        target.classList.add("search-target");
+        window.setTimeout(() => target.classList.remove("search-target"), 1900);
+      }));
+    }
     if (markRead && state.selectedRoomId === roomId) {
       void api("/rooms/read", {
         method: "POST",
@@ -497,7 +507,7 @@ async function loadRoomMembers(roomId, { reset = true } = {}) {
   }
 }
 
-async function openChatRoom(roomId) {
+async function openChatRoom(roomId, { aroundMessageId = "", focusInput = true } = {}) {
   state.selectedRoomId = roomId;
   setChatMessages([]);
   state.messagesNextCursor = "";
@@ -508,9 +518,14 @@ async function openChatRoom(roomId) {
   await Promise.all([
     updatePresence(),
     loadRoomMembers(roomId),
-    loadChatMessages({ scrollToBottom: true }),
+    loadChatMessages({ scrollToBottom: !aroundMessageId, aroundMessageId }),
   ]);
-  chatMessageInput.focus({ preventScroll: true });
+  if (focusInput) chatMessageInput.focus({ preventScroll: true });
+}
+
+async function openChatRoomAtMessage(room, messageId) {
+  if (!state.roomById.has(room.id)) upsertMessengerRoom(room);
+  await openChatRoom(room.id, { aroundMessageId: messageId, focusInput: false });
 }
 
 function closeChatRoom() {

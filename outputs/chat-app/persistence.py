@@ -263,6 +263,31 @@ class NormalizedSupabaseRepository:
         rows = self.rows("messages", query)
         return [dict(row["data"]) for row in reversed(rows)]
 
+    def search_messages(self, room_ids: list[str], query: str, *, limit: int = 50) -> list[dict]:
+        if not room_ids or not query:
+            return []
+        safe_query = query.replace("\\", " ").replace(",", " ").replace("*", " ").strip()
+        if not safe_query:
+            return []
+        matches = []
+        for offset in range(0, len(room_ids), 100):
+            room_batch = room_ids[offset:offset + 100]
+            rows = self.rows(
+                "messages",
+                {
+                    "select": "data,created_at",
+                    "room_id": f"in.({','.join(room_batch)})",
+                    "data->>text": f"ilike.*{safe_query}*",
+                    "order": "created_at.desc",
+                    "limit": str(limit),
+                },
+            )
+            matches.extend(
+                dict(row["data"]) for row in rows if isinstance(row.get("data"), dict)
+            )
+        matches.sort(key=lambda message: str(message.get("timestamp", "")), reverse=True)
+        return matches[:limit]
+
     def latest_message(self, room_id: str) -> dict | None:
         messages = self.list_messages(room_id, limit=1)
         return messages[-1] if messages else None
@@ -1350,6 +1375,26 @@ class NormalizedSqliteRepository:
                     (room_id, limit),
                 ).fetchall()
         return [self.decode(row[0]) for row in reversed(rows)]
+
+    def search_messages(self, room_ids: list[str], query: str, *, limit: int = 50) -> list[dict]:
+        if not room_ids or not query:
+            return []
+        escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        matches = []
+        with self.connection() as database:
+            for offset in range(0, len(room_ids), 800):
+                room_batch = room_ids[offset:offset + 800]
+                placeholders = ",".join("?" for _ in room_batch)
+                rows = database.execute(
+                    "SELECT data_json FROM messages "
+                    f"WHERE room_id IN ({placeholders}) "
+                    "AND json_extract(data_json, '$.text') LIKE ? ESCAPE '\\' COLLATE NOCASE "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (*room_batch, f"%{escaped_query}%", limit),
+                ).fetchall()
+                matches.extend(self.decode(row[0]) for row in rows)
+        matches.sort(key=lambda message: str(message.get("timestamp", "")), reverse=True)
+        return matches[:limit]
 
     def latest_message(self, room_id: str) -> dict | None:
         messages = self.list_messages(room_id, limit=1)

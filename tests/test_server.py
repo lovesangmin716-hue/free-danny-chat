@@ -405,7 +405,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
         start_app = re.search(r"async function startApp\(\) \{(.*?)\n\}", app_script, re.DOTALL)
         self.assertIsNotNone(start_app)
-        self.assertIn("if (!state.statusPromptShown)", start_app.group(1))
+        self.assertIn("if (!state.statusPromptShown && !savedStatusEmoji())", start_app.group(1))
         self.assertIn("openStatusEmojiPicker(null)", start_app.group(1))
         self.assertIn('id="open-status-emoji-button"', index_html)
         self.assertIn('aria-labelledby="status-emoji-title"', index_html)
@@ -415,8 +415,8 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('id="status-emoji-required"', index_html)
         self.assertIn('placeholder="이모티콘 1개"', index_html)
         self.assertIn("state.selectedStatusEmoji = savedStatusEmoji()", core_script)
-        self.assertIn("openStatusEmojiButton.disabled = true", core_script)
-        self.assertNotIn('openStatusEmojiButton.addEventListener("click"', bootstrap_script)
+        self.assertIn("openStatusEmojiButton.disabled = false", core_script)
+        self.assertIn('openStatusEmojiButton.addEventListener("click"', bootstrap_script)
         self.assertIn("if (segments.length !== 1) return", core_script)
         self.assertIn("statusEmojiPicker.appendChild(profileStatusEmoji)", core_script)
         self.assertIn("function openCustomStatusEmojiInput()", core_script)
@@ -466,6 +466,29 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("selectedShareRoomIds", shorts_script)
         self.assertIn("Promise.all(rooms.map", shorts_script)
         self.assertIn('shortShareBar.setAttribute("aria-label", "새 메시지 빠른 답장")', shorts_script)
+
+    def test_my_tab_owns_profile_status_and_logout_while_lists_own_search(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        app_script = (server.ASSETS_DIR / "js" / "app.js").read_text(encoding="utf-8")
+        action_bar_script = (server.ASSETS_DIR / "js" / "action-bar.js").read_text(encoding="utf-8")
+        messenger_script = (server.ASSETS_DIR / "js" / "messenger.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="my-tab"', index_html)
+        self.assertIn('id="my-view"', index_html)
+        my_view = re.search(r'<section class="my-view.*?</section>', index_html, re.DOTALL)
+        self.assertIsNotNone(my_view)
+        self.assertIn('id="open-status-emoji-button"', my_view.group(0))
+        self.assertIn('id="open-profile-button"', my_view.group(0))
+        self.assertIn('id="logout-button"', my_view.group(0))
+        header = re.search(r'<header class="app-header">.*?</header>', index_html, re.DOTALL)
+        self.assertIsNotNone(header)
+        self.assertNotIn('id="logout-button"', header.group(0))
+        self.assertIn('openDirectoryButton.classList.toggle("hidden", state.activeList !== "friends")', app_script)
+        self.assertIn('input.placeholder = "사람 또는 주고받은 대화 검색"', action_bar_script)
+        self.assertIn('input.placeholder = "친구 이름 또는 ID 검색"', action_bar_script)
+        self.assertIn("scheduleChatSearch(input.value)", action_bar_script)
+        self.assertIn("function renderChatSearchResults", messenger_script)
+        self.assertIn("openChatRoomAtMessage", messenger_script)
 
     def test_desktop_sheets_stay_in_the_left_content_pane_and_actions_are_not_duplicated(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -2592,6 +2615,43 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertEqual(older["items"][0]["text"], "message-0")
         self.assertEqual(older["next_cursor"], "")
         self.assertEqual(self.store.state["messages"].get(self.room_id, []), [])
+
+    def test_message_search_finds_room_people_content_and_returns_target_window(self) -> None:
+        self.store.update_profile("bob", "Robert", "😀", self.bob["friend_code"], None)
+        messages = []
+        for index in range(40):
+            result = self.store.add_message(
+                self.room_id,
+                "alice" if index % 2 == 0 else "bob",
+                "needle in history" if index == 7 else f"ordinary-{index}",
+            )
+            self.assertIsNotNone(result)
+            assert result is not None
+            messages.append(result[0])
+
+        content_results = self.store.search_messages("alice", "needle", limit=10)
+        self.assertIsNotNone(content_results)
+        assert content_results is not None
+        content_item = next(item for item in content_results["items"] if item["kind"] == "message")
+        self.assertEqual(content_item["room"]["id"], self.room_id)
+        self.assertEqual(content_item["message"]["id"], messages[7]["id"])
+
+        person_results = self.store.search_messages("alice", "Robert", limit=10)
+        self.assertIsNotNone(person_results)
+        assert person_results is not None
+        self.assertTrue(any(item["kind"] == "room" and item["room"]["id"] == self.room_id for item in person_results["items"]))
+        self.assertEqual(self.store.search_messages("eve", "needle", limit=10), {"items": []})
+
+        around = self.store.get_messages_page(
+            self.room_id,
+            "alice",
+            limit=10,
+            around=messages[7]["id"],
+        )
+        self.assertIsNotNone(around)
+        assert around is not None
+        self.assertIn(messages[7]["id"], {message["id"] for message in around["items"]})
+        self.assertEqual(around["around"], messages[7]["id"])
 
     def test_shorts_history_is_bounded_and_persisted(self) -> None:
         seen_ids = [f"video-{index}" for index in range(600)]
