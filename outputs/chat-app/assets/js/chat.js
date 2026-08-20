@@ -3,6 +3,10 @@
 // Message state, incremental rendering, pagination, retries, and sending.
 const MESSAGE_TIME_CLUSTER_MS = 5 * 60 * 1000;
 const MESSAGE_READ_SWIPE_THRESHOLD = 34;
+const MESSAGE_ERASE_TURN_DISTANCE = 18;
+const MESSAGE_ERASE_REQUIRED_TURNS = 4;
+const MESSAGE_ERASE_REQUIRED_TRAVEL = 150;
+const MESSAGE_ERASE_MAX_DURATION_MS = 3000;
 let messageReadSwipe = null;
 let suppressMessageClick = false;
 
@@ -255,31 +259,81 @@ function beginMessageReadSwipe(event) {
     message,
     row,
     revealed: false,
+    canErase: message.username === state.messenger.user?.username,
+    startedAt: performance.now(),
+    lastX: event.clientX,
+    directionAnchorX: event.clientX,
+    direction: 0,
+    turns: 0,
+    travel: 0,
+    erasing: false,
+    deleting: false,
   };
   row.setPointerCapture?.(event.pointerId);
 }
 
 function updateMessageReadSwipe(event) {
   const swipe = messageReadSwipe;
-  if (!swipe || swipe.pointerId !== event.pointerId || swipe.revealed) return;
+  if (!swipe || swipe.pointerId !== event.pointerId || swipe.deleting) return;
   const deltaX = event.clientX - swipe.startX;
   const deltaY = event.clientY - swipe.startY;
-  if (deltaX > -MESSAGE_READ_SWIPE_THRESHOLD || Math.abs(deltaX) <= Math.abs(deltaY) * 1.15) return;
+  const horizontal = Math.abs(deltaX) > Math.abs(deltaY) * 1.15;
+  if (!horizontal) return;
   event.preventDefault();
-  swipe.revealed = true;
-  swipe.row.classList.add("showing-readers");
-  openMessageReadMenu(swipe.message, swipe.row);
+  if (!swipe.revealed && deltaX <= -MESSAGE_READ_SWIPE_THRESHOLD) {
+    swipe.revealed = true;
+    swipe.row.classList.add("showing-readers");
+    openMessageReadMenu(swipe.message, swipe.row);
+  }
+
+  if (!swipe.canErase) return;
+  swipe.travel += Math.abs(event.clientX - swipe.lastX);
+  swipe.lastX = event.clientX;
+  const directionDelta = event.clientX - swipe.directionAnchorX;
+  if (Math.abs(directionDelta) >= MESSAGE_ERASE_TURN_DISTANCE) {
+    const nextDirection = Math.sign(directionDelta);
+    if (swipe.direction && nextDirection !== swipe.direction) swipe.turns += 1;
+    swipe.direction = nextDirection;
+    swipe.directionAnchorX = event.clientX;
+  }
+  if (swipe.turns > 0) {
+    swipe.erasing = true;
+    swipe.row.classList.add("erasing");
+    swipe.row.classList.remove("showing-readers");
+    closeMessageReadMenu();
+    const turnProgress = swipe.turns / MESSAGE_ERASE_REQUIRED_TURNS;
+    const travelProgress = swipe.travel / MESSAGE_ERASE_REQUIRED_TRAVEL;
+    const eraseProgress = Math.min(1, Math.min(turnProgress, travelProgress));
+    swipe.row.style.setProperty("--erase-progress", String(eraseProgress));
+    swipe.row.style.setProperty("--erase-opacity", String(1 - (eraseProgress * 0.62)));
+    swipe.row.style.setProperty("--erase-offset", `${(eraseProgress - 0.5) * 8}px`);
+  }
+  if (
+    swipe.turns >= MESSAGE_ERASE_REQUIRED_TURNS
+    && swipe.travel >= MESSAGE_ERASE_REQUIRED_TRAVEL
+    && performance.now() - swipe.startedAt <= MESSAGE_ERASE_MAX_DURATION_MS
+  ) {
+    swipe.deleting = true;
+    swipe.row.classList.add("erase-committing");
+    void deleteChatMessage(swipe.message, swipe.row);
+  }
 }
 
 function finishMessageReadSwipe(event) {
   const swipe = messageReadSwipe;
   if (!swipe || (event?.pointerId !== undefined && swipe.pointerId !== event.pointerId)) return;
-  if (swipe.revealed) {
+  if (swipe.revealed || swipe.erasing) {
     suppressMessageClick = true;
     window.setTimeout(() => { suppressMessageClick = false; }, 0);
   }
   messageReadSwipe = null;
   swipe.row.classList.remove("showing-readers");
+  if (!swipe.deleting) {
+    swipe.row.classList.remove("erasing");
+    swipe.row.style.removeProperty("--erase-progress");
+    swipe.row.style.removeProperty("--erase-opacity");
+    swipe.row.style.removeProperty("--erase-offset");
+  }
   if (swipe.row.hasPointerCapture?.(swipe.pointerId)) swipe.row.releasePointerCapture(swipe.pointerId);
   closeMessageReadMenu();
 }
@@ -349,6 +403,39 @@ function replaceChatMessageState(messageId, message) {
   state.messageIndexes.set(message.id, index);
   state.messageRevision += 1;
   return true;
+}
+
+function removeChatMessageState(messageId) {
+  const index = state.messageIndexes.get(messageId);
+  if (index === undefined) return false;
+  state.messages.splice(index, 1);
+  state.messageNodes.delete(messageId);
+  rebuildMessageIndexes();
+  state.messageRevision += 1;
+  return true;
+}
+
+async function deleteChatMessage(message, row) {
+  const roomId = state.selectedRoomId;
+  try {
+    const payload = await requestAction("messages.delete", "/messages/delete", {
+      method: "POST",
+      body: JSON.stringify({ roomId, messageId: message.id }),
+    });
+    if (payload.room) upsertRoomAfterMessageDeletion(payload.room);
+    if (state.selectedRoomId === roomId && removeChatMessageState(message.id)) {
+      renderAllChatMessages();
+    }
+    if (state.activeList !== "shorts") renderChats();
+    renderShortShareBar();
+    setAppStatus("메시지를 지웠어요.", "success");
+  } catch (error) {
+    row.classList.remove("erasing", "erase-committing");
+    row.style.removeProperty("--erase-progress");
+    row.style.removeProperty("--erase-opacity");
+    row.style.removeProperty("--erase-offset");
+    setAppStatus(error.message, "error");
+  }
 }
 
 function renderAllChatMessages({ scrollToBottom = false, preserveScrollHeight = 0 } = {}) {

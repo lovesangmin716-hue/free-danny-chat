@@ -27,6 +27,7 @@ function renderMessenger() {
     renderShorts();
   }
   if (state.activeList === "my") renderMy();
+  syncWorkModeVisibility();
   renderShortShareBar();
   shortShareBar.classList.toggle("hidden", state.activeList === "my");
   if (!directorySheet.classList.contains("hidden")) renderDirectory();
@@ -45,6 +46,7 @@ function renderMy() {
   myDisplayName.textContent = getDisplayName(user);
   myFriendCode.textContent = user.friend_code ? `친구 ID · ${user.friend_code}` : "친구 ID 없음";
   renderStatusEmojiControl();
+  renderWorkModeControl();
 }
 
 function mergeEntitiesById(current, incoming, reset = false) {

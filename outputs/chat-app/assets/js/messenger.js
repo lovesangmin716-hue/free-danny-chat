@@ -232,6 +232,17 @@ function upsertMessengerRoom(incomingRoom) {
   return room;
 }
 
+function upsertRoomAfterMessageDeletion(incomingRoom) {
+  if (!incomingRoom?.id) return null;
+  const existing = state.roomById.get(incomingRoom.id);
+  return upsertMessengerRoom({
+    ...incomingRoom,
+    name: existing?.name || incomingRoom.name,
+    peer: existing?.peer || incomingRoom.peer,
+    unread_count: existing?.unread_count ?? incomingRoom.unread_count ?? 0,
+  });
+}
+
 function removeMessengerRoom(roomId) {
   const previousLength = state.messenger.rooms.length;
   state.messenger.rooms = state.messenger.rooms.filter((room) => room.id !== roomId);
@@ -344,7 +355,12 @@ function registerRealtimeHandlers() {
     if (!isIncoming) return;
     let room;
     appStore.transact("realtime.message-created", () => {
-      room = upsertMessengerRoom(payload.room);
+      const existingRoom = state.roomById.get(payload.roomId);
+      room = upsertMessengerRoom({
+        ...payload.room,
+        name: existingRoom?.name || payload.room?.name,
+        peer: existingRoom?.peer || payload.room?.peer,
+      });
       state.lastSeenRoomMessageIds[payload.roomId] = payload.message?.id || "";
       if (payload.roomId === state.selectedRoomId && payload.message?.id) {
         const visibleMessage = addMessageReader(
@@ -355,6 +371,7 @@ function registerRealtimeHandlers() {
         if (appendChatMessageState(visibleMessage)) appendChatMessageNode(visibleMessage, true);
       }
     }, { event: payload.type });
+    showWorkModeMessage(room, payload.message, payload.sender);
     if (payload.roomId === state.selectedRoomId && payload.message?.id) {
       scheduleRoomRead(payload.roomId);
     } else if (!isShortsView) {
@@ -362,6 +379,24 @@ function registerRealtimeHandlers() {
     }
     if (!state.shortInlineReply && room) showShortMessageNotice(room, payload.message);
     else if (!state.shortInlineReply) renderShortShareBar();
+  });
+  realtimeEvents.register("message_deleted", async (payload, { isShortsView }) => {
+    recordSyncRevision(payload.revision);
+    appStore.transact("realtime.message-deleted", () => {
+      if (payload.room) upsertRoomAfterMessageDeletion(payload.room);
+      const latestMessageId = payload.room?.last_message?.id || "";
+      state.lastSeenRoomMessageIds[payload.roomId] = latestMessageId;
+      if (payload.roomId === state.selectedRoomId && payload.messageId) {
+        removeChatMessageState(payload.messageId);
+      }
+    }, { event: payload.type });
+    if (state.workModeMessage?.message?.id === payload.messageId) dismissWorkModeMessage();
+    if (payload.roomId === state.selectedRoomId) renderAllChatMessages();
+    try {
+      await loadRoomsPage({ reset: true, render: false });
+    } catch (_) {
+    }
+    renderRealtimeLists(isShortsView);
   });
   realtimeEvents.register("room_read", (payload) => {
     recordSyncRevision(payload.revision);
