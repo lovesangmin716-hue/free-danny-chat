@@ -14,7 +14,11 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: outputs/chat-app/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - run: pip install -r outputs/chat-app/requirements.txt
+      - run: python tests/js_syntax.py
       - run: python tests/static_budget.py
       - run: python -m unittest discover -s tests -p 'test_*.py'
       - run: python tests/operations_load.py --profile smoke

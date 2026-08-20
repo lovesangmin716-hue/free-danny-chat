@@ -220,10 +220,11 @@ Render Blueprint는 `REQUIRE_SUPABASE=true`로 실행됩니다. Supabase 환경 
 
 ## 개발 확인
 
-서버 테스트는 Python 표준 라이브러리의 `unittest`로 실행하며 Brotli 의존성은 requirements 파일에서 설치합니다.
+서버 테스트는 Python 표준 라이브러리의 `unittest`로 실행하며 Brotli 의존성은 requirements 파일에서 설치합니다. 브라우저 JavaScript 문법 검사는 Node.js 22 이상을 사용합니다.
 
 ```bash
 python -m unittest discover -s tests -v
+python tests/js_syntax.py
 python tests/static_budget.py
 python tests/multi_instance.py
 python tests/bootstrap_scale.py --count 1000 --iterations 20

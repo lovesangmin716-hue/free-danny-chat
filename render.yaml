@@ -38,6 +38,8 @@ services:
         value: "1800"
       - key: SHORTS_DAILY_QUOTA_BUDGET
         value: "5000"
+      - key: YOUTUBE_API_KEY
+        sync: false
       - key: REQUIRE_SUPABASE
         value: "true"
       - key: SUPABASE_URL
