@@ -448,8 +448,8 @@ async function loadChatMessages({ markRead = true, scrollToBottom = false, aroun
     const aroundQuery = aroundMessageId ? `&around=${encodeURIComponent(aroundMessageId)}` : "";
     const payload = await requestAction(
       "messages.load",
-/messages?room_id=${encodeURIComponent(roomId)}&limit=${CHAT_MESSAGE_PAGE_SIZE}${aroundQuery},
-{ signal: controller.signal },
+      `/messages?room_id=${encodeURIComponent(roomId)}&limit=${CHAT_MESSAGE_PAGE_SIZE}${aroundQuery}`,
+      { signal: controller.signal },
     );
     if (state.selectedRoomId !== roomId || state.messagesLoadEpoch !== loadEpoch) return;
     const messages = Array.isArray(payload) ? payload : (payload.items || []);
