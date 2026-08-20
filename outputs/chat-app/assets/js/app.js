@@ -8,6 +8,7 @@ function renderMessenger() {
   appTitle.textContent = ({ chats: "채팅", friends: "친구", shorts: "쇼츠", my: "MY" })[state.activeList] || "채팅";
   openLoginButton.classList.add("hidden");
   renderStatusEmojiControl();
+  renderHeaderSearch();
   openDirectoryButton.classList.toggle("hidden", state.activeList !== "friends");
   openNewChatButton.classList.toggle("hidden", state.activeList !== "chats");
   chatsTab.classList.toggle("active", state.activeList === "chats");

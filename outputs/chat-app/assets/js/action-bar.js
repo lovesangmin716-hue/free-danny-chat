@@ -27,40 +27,63 @@ function resetActionBarControls(label) {
   shortShareSend.disabled = false;
 }
 
+function renderHeaderSearch({ focus = false } = {}) {
+  const context = activeActionBarState();
+  const searchable = state.activeList === "chats" || state.activeList === "friends";
+  const searching = searchable && context?.mode === "composing";
+  openListSearchButton.classList.toggle("hidden", !searchable || searching);
+  appTitle.classList.toggle("hidden", searching);
+  headerSearch.classList.toggle("hidden", !searching);
+  appHeader.classList.toggle("searching", searching);
+  if (!searching) return;
+  headerSearchInput.placeholder = state.activeList === "chats"
+    ? "사람 또는 주고받은 대화 검색"
+    : "친구 이름 또는 ID 검색";
+  headerSearchInput.setAttribute("aria-label", state.activeList === "chats" ? "채팅 검색" : "친구 검색");
+  if (headerSearchInput.value !== context.query) headerSearchInput.value = context.query;
+  if (focus) requestAnimationFrame(() => headerSearchInput.focus({ preventScroll: true }));
+}
+
+function openListSearch() {
+  if (state.activeList !== "chats" && state.activeList !== "friends") return;
+  const context = activeActionBarState();
+  context.mode = "composing";
+  context.selection = [];
+  renderHeaderSearch({ focus: true });
+  renderShortShareBar(true);
+}
+
+function closeListSearch() {
+  const context = activeActionBarState();
+  if (!context) return;
+  context.mode = "idle";
+  context.query = "";
+  context.selection = [];
+  if (state.activeList === "chats") {
+    resetChatSearch();
+    renderChats();
+  } else if (state.activeList === "friends") {
+    renderFriends();
+  }
+  renderHeaderSearch();
+  renderShortShareBar(true);
+}
+
+function updateHeaderSearch() {
+  const context = activeActionBarState();
+  if (!context || context.mode !== "composing") return;
+  context.query = headerSearchInput.value;
+  if (state.activeList === "chats") {
+    renderChats();
+    scheduleChatSearch(headerSearchInput.value);
+  } else if (state.activeList === "friends") {
+    renderFriends();
+  }
+}
+
 function renderChatActionBar() {
   const context = state.actionBarByTab.chats;
   resetActionBarControls("채팅 작업");
-  if (context.mode === "composing") {
-    const input = document.createElement("input");
-    input.type = "search";
-    input.className = "context-search";
-    input.placeholder = "사람 또는 주고받은 대화 검색";
-    input.setAttribute("aria-label", "채팅 검색");
-    input.value = context.query;
-    input.addEventListener("input", () => {
-      context.query = input.value;
-      renderChats();
-      scheduleChatSearch(input.value);
-    });
-    input.addEventListener("keydown", (event) => {
-      if (event.key !== "Escape") return;
-      context.query = "";
-      context.mode = "idle";
-      resetChatSearch();
-      renderChats();
-      renderShortShareBar(true);
-    });
-    shortShareList.appendChild(input);
-    shortShareSend.classList.remove("hidden");
-    ColorlessPlatform.decorateIconButton(shortShareSend, "x", { label: "검색 닫기", iconOnly: true });
-    requestAnimationFrame(() => input.focus());
-    return;
-  }
-
-  shortShareList.appendChild(createContextAction("검색", "search", () => {
-    context.mode = "composing";
-    renderShortShareBar(true);
-  }));
   const unreadCount = state.messenger.rooms.filter((room) => room.unread_count > 0).length;
   shortShareList.appendChild(createContextAction(
     `안 읽음 ${unreadCount}`,
@@ -85,30 +108,6 @@ function renderChatActionBar() {
 function renderFriendActionBar() {
   const context = state.actionBarByTab.friends;
   resetActionBarControls("친구 작업");
-  if (context.mode === "composing") {
-    const input = document.createElement("input");
-    input.type = "search";
-    input.className = "context-search";
-    input.placeholder = "친구 이름 또는 ID 검색";
-    input.setAttribute("aria-label", "친구 검색");
-    input.value = context.query;
-    input.addEventListener("input", () => {
-      context.query = input.value;
-      renderFriends();
-    });
-    input.addEventListener("keydown", (event) => {
-      if (event.key !== "Escape") return;
-      context.query = "";
-      context.mode = "idle";
-      renderFriends();
-      renderShortShareBar(true);
-    });
-    shortShareList.appendChild(input);
-    shortShareSend.classList.remove("hidden");
-    ColorlessPlatform.decorateIconButton(shortShareSend, "x", { label: "검색 닫기", iconOnly: true });
-    requestAnimationFrame(() => input.focus());
-    return;
-  }
   const selectedId = context.selection[0];
   const selected = state.messenger.friends.find((friend) => friend.id === selectedId);
   if (context.mode === "selecting" && selected) {
@@ -126,12 +125,10 @@ function renderFriendActionBar() {
     return;
   }
 
-  context.mode = "idle";
-  context.selection = [];
-  shortShareList.appendChild(createContextAction("검색", "search", () => {
-    context.mode = "composing";
-    renderShortShareBar(true);
-  }));
+  if (context.mode !== "composing") {
+    context.mode = "idle";
+    context.selection = [];
+  }
   const onlineFriends = state.messenger.friends.filter((friend) => friend.presence?.online);
   const online = document.createElement("span");
   online.className = "context-summary";
@@ -150,7 +147,10 @@ function renderFriendActionBar() {
 function selectFriendForActionBar(friendId) {
   const context = state.actionBarByTab.friends;
   context.mode = "selecting";
+  context.query = "";
   context.selection = [friendId];
+  renderFriends();
+  renderHeaderSearch();
   renderShortShareBar(true);
 }
 
@@ -160,21 +160,6 @@ async function handleContextActionPrimary() {
     return;
   }
   const context = activeActionBarState();
-  if (state.activeList === "chats" && context.mode === "composing") {
-    context.mode = "idle";
-    context.query = "";
-    resetChatSearch();
-    renderChats();
-    renderShortShareBar(true);
-    return;
-  }
-  if (state.activeList === "friends" && context.mode === "composing") {
-    context.mode = "idle";
-    context.query = "";
-    renderFriends();
-    renderShortShareBar(true);
-    return;
-  }
   if (state.activeList === "friends" && context.mode === "selecting" && context.selection[0]) {
     const friendId = context.selection[0];
     context.mode = "idle";

@@ -379,6 +379,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("function decorateIconButton", icons_script)
         self.assertIn('classList.add("ui-icon")', icons_script)
         for button_id in (
+            "open-list-search-button",
             "open-profile-button",
             "open-new-chat-button",
             "open-directory-button",
@@ -484,9 +485,12 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIsNotNone(header)
         self.assertNotIn('id="logout-button"', header.group(0))
         self.assertIn('openDirectoryButton.classList.toggle("hidden", state.activeList !== "friends")', app_script)
-        self.assertIn('input.placeholder = "사람 또는 주고받은 대화 검색"', action_bar_script)
-        self.assertIn('input.placeholder = "친구 이름 또는 ID 검색"', action_bar_script)
-        self.assertIn("scheduleChatSearch(input.value)", action_bar_script)
+        self.assertIn('id="open-list-search-button"', header.group(0))
+        self.assertLess(header.group(0).index('id="open-list-search-button"'), header.group(0).index('id="open-new-chat-button"'))
+        self.assertLess(header.group(0).index('id="open-list-search-button"'), header.group(0).index('id="open-directory-button"'))
+        self.assertIn('? "사람 또는 주고받은 대화 검색"', action_bar_script)
+        self.assertIn(': "친구 이름 또는 ID 검색"', action_bar_script)
+        self.assertIn("scheduleChatSearch(headerSearchInput.value)", action_bar_script)
         self.assertIn("function renderChatSearchResults", messenger_script)
         self.assertIn("openChatRoomAtMessage", messenger_script)
 
@@ -499,7 +503,8 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("grid-row: 2 / 5", index_html)
         self.assertNotIn('createContextAction("새 채팅", "message-plus", openNewChat)', action_bar_script)
         self.assertNotIn('createContextAction("친구 추가", "user-plus", openDirectory)', action_bar_script)
-        self.assertIn('createContextAction("검색", "search"', action_bar_script)
+        self.assertNotIn('createContextAction("검색", "search"', action_bar_script)
+        self.assertIn('id="header-search-input"', index_html)
 
     def test_two_hundred_shorts_use_a_fixed_virtual_dom_window(self) -> None:
         core_script = (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8")

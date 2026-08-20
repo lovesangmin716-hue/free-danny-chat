@@ -152,6 +152,14 @@ chatsTab.addEventListener("click", () => setActiveList("chats"));
 friendsTab.addEventListener("click", () => setActiveList("friends"));
 shortsTab.addEventListener("click", () => setActiveList("shorts"));
 myTab.addEventListener("click", () => setActiveList("my"));
+openListSearchButton.addEventListener("click", openListSearch);
+closeListSearchButton.addEventListener("click", closeListSearch);
+headerSearchInput.addEventListener("input", updateHeaderSearch);
+headerSearchInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  event.preventDefault();
+  closeListSearch();
+});
 chatList.addEventListener("scroll", () => {
   if (chatList.scrollTop + chatList.clientHeight >= chatList.scrollHeight - 160) {
     void loadRoomsPage({ render: true }).catch(() => {});
