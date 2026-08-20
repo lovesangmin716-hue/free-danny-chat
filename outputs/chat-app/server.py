@@ -3868,6 +3868,80 @@ class StateStore:
                 self._save_locked("rooms", f"messages:{room_id}")
             return message, self._room_summary(room), True
 
+    def delete_message(
+        self,
+        room_id: str,
+        username: str,
+        message_id: str,
+    ) -> tuple[dict | None, dict | None, str | None]:
+        with self.lock:
+            room = self._rooms_by_id.get(room_id)
+            user = self._users_by_username.get(username)
+            if room is None or user is None or not self._can_access_room_locked(room, user):
+                return None, None, "not_found"
+
+            messages = self._room_messages_locked(room_id)
+            message_index = next(
+                (index for index, message in enumerate(messages) if message.get("id") == message_id),
+                -1,
+            )
+            if message_index < 0:
+                return None, None, "not_found"
+            message = messages[message_index]
+            if message.get("username") != username:
+                return None, None, "forbidden"
+
+            remaining_messages = messages[:message_index] + messages[message_index + 1:]
+            previous_message_id = (
+                str(remaining_messages[message_index - 1].get("id", ""))
+                if message_index > 0 else ""
+            )
+            last_read_by = room.setdefault("last_read_by", {})
+            for reader_id, last_read_message_id in list(last_read_by.items()):
+                if str(last_read_message_id) != message_id:
+                    continue
+                if previous_message_id:
+                    last_read_by[reader_id] = previous_message_id
+                else:
+                    last_read_by.pop(reader_id, None)
+
+            if self.repository is not None:
+                if not self.repository.delete_message(room_id, message_id, user["id"]):
+                    return None, None, "not_found"
+            else:
+                stored_messages = self.state["messages"].setdefault(room_id, [])
+                stored_messages[:] = [candidate for candidate in stored_messages if candidate.get("id") != message_id]
+
+            client_message_id = str(message.get("client_message_id", ""))
+            if client_message_id:
+                self._messages_by_client_id.pop((room_id, username, client_message_id), None)
+
+            attachment = message.get("attachment")
+            if isinstance(attachment, dict):
+                filename = Path(str(attachment.get("url", ""))).name
+                if filename and not any(
+                    Path(str(candidate.get("attachment", {}).get("url", ""))).name == filename
+                    for candidate in remaining_messages
+                    if isinstance(candidate.get("attachment"), dict)
+                ):
+                    rooms = self._attachment_rooms.get(filename)
+                    if rooms is not None:
+                        rooms.discard(room_id)
+                        if not rooms:
+                            self._attachment_rooms.pop(filename, None)
+
+            latest_message = remaining_messages[-1] if remaining_messages else None
+            room["updated_at"] = (
+                str(latest_message.get("timestamp", ""))
+                if latest_message is not None else str(room.get("created_at", ""))
+            )
+            if self.repository is not None:
+                self.repository.sync_room(room)
+                self._save_locked("rooms")
+            else:
+                self._save_locked("rooms", f"messages:{room_id}")
+            return message, self._room_summary(room), None
+
 
 def push_event(event: dict, recipients: set[str]) -> None:
     if not recipients:
@@ -4207,11 +4281,46 @@ class ApplicationServices:
             UPLOAD_GRANTS.consume(Path(attachment["url"]).name, user["username"])
         if not created:
             return CommandOutcome(visible_message)
-        event = {"type": "message_created", "roomId": room_id, "room": room, "message": message}
+        sender_public = self.store.get_user_public(message["username"]) or {}
+        event = {
+            "type": "message_created",
+            "roomId": room_id,
+            "room": room,
+            "message": message,
+            "sender": {
+                key: sender_public[key]
+                for key in (
+                    "id", "username", "display_name", "status_message",
+                    "profile_image_url", "profile_thumbnail_url", "profile_art_version",
+                )
+                if key in sender_public
+            },
+        }
         return CommandOutcome(
             visible_message,
             HTTPStatus.CREATED,
             [(event, self.store.room_event_recipients(room_id))],
+        )
+
+    def delete_message(self, user: dict, payload: dict) -> CommandOutcome:
+        room_id = str(payload.get("roomId", "")).strip()
+        message_id = str(payload.get("messageId", "")).strip()
+        if not ROOM_ID_PATTERN.fullmatch(room_id) or not MESSAGE_ID_PATTERN.fullmatch(message_id):
+            raise CommandFailure("올바른 메시지를 선택해 주세요.")
+        message, room, error = self.store.delete_message(room_id, user["username"], message_id)
+        if error == "forbidden":
+            raise CommandFailure("본인이 보낸 메시지만 지울 수 있습니다.", HTTPStatus.FORBIDDEN)
+        if error or message is None or room is None:
+            raise CommandFailure("메시지를 찾을 수 없습니다.", HTTPStatus.NOT_FOUND)
+        event = {
+            "type": "message_deleted",
+            "roomId": room_id,
+            "messageId": message_id,
+            "room": room,
+        }
+        return CommandOutcome(
+            {"deleted": True, "roomId": room_id, "messageId": message_id, "room": room},
+            events=[(event, self.store.room_event_recipients(room_id))],
         )
 
     def mark_room_read(self, user: dict, payload: dict) -> CommandOutcome:
@@ -4830,6 +4939,12 @@ class ChatHandler(BaseHTTPRequestHandler):
             if user is None:
                 return
             self.create_message(user)
+            return
+        if path == "/messages/delete":
+            user = self.require_auth()
+            if user is None:
+                return
+            self.delete_message(user)
             return
         if path == "/uploads":
             user = self.require_auth()
@@ -6089,6 +6204,9 @@ class ChatHandler(BaseHTTPRequestHandler):
         self.run_json_command(
             lambda payload: APPLICATION.create_message(user, payload, self.message_attachment)
         )
+
+    def delete_message(self, user: dict) -> None:
+        self.run_json_command(lambda payload: APPLICATION.delete_message(user, payload))
 
     def upload_attachment(self, user: dict) -> None:
         self.close_connection = True

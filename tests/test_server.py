@@ -55,6 +55,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
                 "assets/js/attachments.js",
                 "assets/js/room-settings.js",
                 "assets/js/chat.js",
+                "assets/js/work-mode.js",
                 "assets/js/shorts.js",
                 "assets/js/action-bar.js",
                 "assets/js/app.js",
@@ -1983,6 +1984,19 @@ class StateStoreTestCase(unittest.TestCase):
             {reader["username"] for reader in message_outcome.data["unread_by"]},
             {"bob", "eve"},
         )
+        self.assertEqual(message_outcome.events[0][0]["sender"]["username"], "alice")
+        self.assertIn("profile_thumbnail_url", message_outcome.events[0][0]["sender"])
+
+        delete_outcome = services.delete_message(
+            self.alice,
+            {
+                "roomId": group_outcome.data["room"]["id"],
+                "messageId": message_outcome.data["id"],
+            },
+        )
+        self.assertTrue(delete_outcome.data["deleted"])
+        self.assertEqual(delete_outcome.events[0][0]["type"], "message_deleted")
+        self.assertEqual(delete_outcome.events[0][0]["messageId"], message_outcome.data["id"])
 
         presence_outcome = services.update_presence(
             "activity-token",
@@ -2241,6 +2255,37 @@ class StateStoreTestCase(unittest.TestCase):
             ["alice"],
         )
         self.assertEqual(received_messages[-1]["unread_by"], [])
+
+    def test_delete_message_requires_sender_and_rewinds_deleted_read_position(self) -> None:
+        first_result = self.store.add_message(self.room_id, "alice", "first")
+        second_result = self.store.add_message(self.room_id, "alice", "second")
+        self.assertIsNotNone(first_result)
+        self.assertIsNotNone(second_result)
+        assert first_result is not None and second_result is not None
+        first_message = first_result[0]
+        second_message = second_result[0]
+
+        _, changed = self.store.mark_room_read(self.room_id, "bob")
+        self.assertTrue(changed)
+        deleted, room, error = self.store.delete_message(
+            self.room_id,
+            "alice",
+            second_message["id"],
+        )
+
+        self.assertIsNone(error)
+        self.assertEqual(deleted["id"], second_message["id"])
+        self.assertEqual(room["last_message"]["id"], first_message["id"])
+        remaining = self.store.get_messages(self.room_id, "alice") or []
+        self.assertEqual([message["id"] for message in remaining], [first_message["id"]])
+        self.assertEqual(
+            [reader["username"] for reader in remaining[0]["read_by"]],
+            ["bob"],
+        )
+
+        _, _, forbidden = self.store.delete_message(self.room_id, "bob", first_message["id"])
+        self.assertEqual(forbidden, "forbidden")
+        self.assertEqual(len(self.store.get_messages(self.room_id, "alice") or []), 1)
 
     def test_group_room_requires_friends_and_enforces_membership(self) -> None:
         group, error = self.store.create_group_room(

@@ -253,6 +253,22 @@ class NormalizedSupabaseRepository:
         rows = self.rows("messages", {"select": "data", "room_id": f"eq.{room_id}", "sender_id": f"eq.{sender_id}", "client_message_id": f"eq.{client_message_id}", "limit": "1"})
         return dict(rows[0]["data"]) if rows else None
 
+    def delete_message(self, room_id: str, message_id: str, sender_id: str) -> bool:
+        query = urlencode(
+            {
+                "room_id": f"eq.{room_id}",
+                "id": f"eq.{message_id}",
+                "sender_id": f"eq.{sender_id}",
+                "select": "id",
+            }
+        )
+        deleted = self.transport(
+            f"/rest/v1/messages?{query}",
+            method="DELETE",
+            prefer="return=representation",
+        )
+        return isinstance(deleted, list) and bool(deleted)
+
     def list_messages(self, room_id: str, *, limit: int = 200, before: str = "") -> list[dict]:
         query = {"select": "sequence,data", "room_id": f"eq.{room_id}", "order": "sequence.desc", "limit": str(limit)}
         if before:
@@ -1354,6 +1370,14 @@ class NormalizedSqliteRepository:
                 (room_id, sender_id, client_message_id),
             ).fetchone()
         return self.decode(row[0]) if row else None
+
+    def delete_message(self, room_id: str, message_id: str, sender_id: str) -> bool:
+        with self.connection() as database:
+            cursor = database.execute(
+                "DELETE FROM messages WHERE room_id=? AND id=? AND sender_id=?",
+                (room_id, message_id, sender_id),
+            )
+        return cursor.rowcount == 1
 
     def list_messages(self, room_id: str, *, limit: int = 200, before: str = "") -> list[dict]:
         with self.connection() as database:

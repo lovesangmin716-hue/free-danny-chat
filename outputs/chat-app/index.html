@@ -12,17 +12,18 @@
     <script defer src="assets/js/platform/events.js?v=e67ecd100954"></script>
     <script defer src="assets/js/platform/icons.js?v=10894f1a61f3"></script>
     <script defer src="assets/js/platform/image-processing.js?v=c3632b3197bf"></script>
-    <script defer src="assets/js/core.js?v=4bfbb50117d8"></script>
+    <script defer src="assets/js/core.js?v=5ee75eb6dde4"></script>
     <script defer src="assets/js/profile.js?v=01b28035904d"></script>
-    <script defer src="assets/js/messenger.js?v=c565bc2c3e0f"></script>
+    <script defer src="assets/js/messenger.js?v=6e59bd2ebf2c"></script>
     <script defer src="assets/js/attachments.js?v=0c018e271851"></script>
     <script defer src="assets/js/room-settings.js?v=d602bb96b2da"></script>
-    <script defer src="assets/js/chat.js?v=126558da08e4"></script>
+    <script defer src="assets/js/chat.js?v=bfe91b648f97"></script>
+    <script defer src="assets/js/work-mode.js?v=cc2b3459b45b"></script>
     <script defer src="assets/js/shorts.js?v=0b732c851324"></script>
     <script defer src="assets/js/action-bar.js?v=f5c052bc212e"></script>
-    <script defer src="assets/js/app.js?v=989fe43f9645"></script>
+    <script defer src="assets/js/app.js?v=416c45980581"></script>
     <script defer src="assets/js/auth.js?v=84a7ef3fc787"></script>
-    <script defer src="assets/js/bootstrap.js?v=b8511a9859cc"></script>
+    <script defer src="assets/js/bootstrap.js?v=69cfb094c8c0"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -319,8 +320,30 @@
       .my-status-row { align-items: center; border-block: 1px solid var(--light-gray); display: flex; justify-content: space-between; padding: 14px 0; }
       .my-status-copy { display: grid; gap: 3px; }
       .my-status-copy span { color: var(--gray); font-size: 12px; }
+      .my-work-mode-row { align-items: center; border-bottom: 1px solid var(--light-gray); display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr) auto; padding: 0 0 14px; }
+      .my-work-mode-copy { display: grid; gap: 3px; }
+      .my-work-mode-copy span { color: var(--gray); font-size: 12px; line-height: 1.45; }
+      .my-work-mode-toggle { min-width: 86px; }
       .my-actions { display: grid; gap: 8px; }
       .my-actions button { width: 100%; }
+      body.work-mode-active { overflow: hidden; }
+      .work-mode-screen { background: var(--white); display: grid; inset: 0; padding: clamp(28px, 7vw, 96px); place-items: center; position: fixed; z-index: 200; }
+      .work-mode-screen.hidden { display: none; }
+      .work-mode-message { cursor: pointer; display: grid; gap: 26px; max-width: 760px; width: 100%; }
+      .work-mode-sender { align-items: center; display: grid; gap: 16px; grid-template-columns: 72px minmax(0, 1fr); }
+      .work-mode-avatar .avatar { height: 72px; width: 72px; }
+      .work-mode-sender-copy { display: grid; gap: 5px; min-width: 0; }
+      .work-mode-sender-copy strong { font-size: clamp(20px, 3vw, 30px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .work-mode-sender-copy span { color: var(--gray); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .work-mode-copy { font-size: clamp(28px, 5vw, 56px); font-weight: 700; letter-spacing: -.035em; line-height: 1.28; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+      .work-mode-time { color: var(--gray); font-size: 13px; }
+      .work-mode-reply { bottom: clamp(24px, 5vw, 64px); display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) auto; left: clamp(28px, 7vw, 96px); position: fixed; right: clamp(28px, 7vw, 96px); }
+      .work-mode-reply.hidden { display: none; }
+      .work-mode-reply input { background: transparent; border: 0; border-bottom: 1px solid var(--black); border-radius: 0; font-size: 20px; min-height: 54px; outline: 0; padding: 8px 2px; }
+      .work-mode-reply input:focus { border-bottom-width: 2px; }
+      .work-mode-reply button { min-width: 76px; }
+      .work-mode-feedback { bottom: 12px; color: var(--gray); font-size: 12px; left: 0; margin: 0; position: fixed; right: 0; text-align: center; }
+      .work-mode-hint { color: var(--gray); font-size: 11px; margin: 0; position: fixed; right: 18px; top: 14px; }
 
       .shorts-view {
         height: 100%;
@@ -645,9 +668,12 @@
       .message-row.pending .message-bubble { opacity: 0.72; }
       .message-row.failed .message-bubble { border-style: dashed; }
       .message-sender { color: var(--gray); font-size: 11px; font-weight: 700; }
-      .message-bubble { background: #f1f1f1; border: 1px solid var(--black); line-height: 1.45; padding: 10px 12px; transition: transform 90ms ease-out; white-space: pre-wrap; word-break: break-word; }
+      .message-bubble { background: #f1f1f1; border: 1px solid var(--black); line-height: 1.45; padding: 10px 12px; position: relative; transition: filter 100ms ease-out, opacity 100ms ease-out, transform 90ms ease-out; white-space: pre-wrap; word-break: break-word; }
       .message-row.mine .message-bubble { background: var(--black); color: var(--white); }
       .message-row.showing-readers .message-bubble { transform: translateX(-8px); }
+      .message-row.erasing .message-bubble { filter: grayscale(1); opacity: var(--erase-opacity, 1); transform: translateX(var(--erase-offset, 0)); }
+      .message-row.erasing .message-bubble::after { background: repeating-linear-gradient(-12deg, transparent 0 5px, var(--white) 6px 9px, transparent 10px 14px); content: ""; inset: 0; opacity: var(--erase-progress, 0); pointer-events: none; position: absolute; }
+      .message-row.erase-committing { opacity: 0; transform: scale(.96); transition: opacity 150ms ease-out, transform 150ms ease-out; }
       .message-row.search-target .message-bubble { animation: search-message-flash 1.8s ease-out; }
       @keyframes search-message-flash {
         0%, 35% { box-shadow: 0 0 0 4px #ffd900; }
@@ -906,6 +932,13 @@
               </div>
               <button type="button" class="header-status-button" id="open-status-emoji-button" aria-label="현재 상태">🙂</button>
             </div>
+            <div class="my-work-mode-row">
+              <div class="my-work-mode-copy">
+                <strong>Work mode</strong>
+                <span>새 메시지만 크게 보고 키보드로 바로 답장합니다. Alt+W로 전환할 수 있어요.</span>
+              </div>
+              <button type="button" class="secondary-button my-work-mode-toggle" id="work-mode-toggle" aria-pressed="false">켜기</button>
+            </div>
             <div class="my-actions">
               <button type="button" class="secondary-button" id="open-profile-button" data-icon="user" aria-label="개인정보 수정">개인정보 수정</button>
               <button type="button" id="logout-button" data-icon="log-out" aria-label="로그아웃">로그아웃</button>
@@ -1015,6 +1048,27 @@
         <button type="button" id="my-tab" data-icon="user" aria-label="MY">MY</button>
         <button type="button" class="shorts-sound-toggle" id="shorts-sound-toggle" data-icon="volume-x" data-icon-only aria-label="쇼츠 소리 켜기">쇼츠 소리 켜기</button>
       </nav>
+
+      <section class="work-mode-screen hidden" id="work-mode-screen" tabindex="-1" aria-label="Work mode" aria-hidden="true">
+        <article class="work-mode-message hidden" id="work-mode-message" aria-live="assertive">
+          <div class="work-mode-sender">
+            <div class="work-mode-avatar" id="work-mode-avatar"></div>
+            <div class="work-mode-sender-copy">
+              <strong id="work-mode-sender-name"></strong>
+              <span id="work-mode-room-name"></span>
+            </div>
+          </div>
+          <p class="work-mode-copy" id="work-mode-copy"></p>
+          <time class="work-mode-time" id="work-mode-time"></time>
+        </article>
+        <form class="work-mode-reply hidden" id="work-mode-reply-form">
+          <label class="sr-only" for="work-mode-reply-input">바로 답장</label>
+          <input id="work-mode-reply-input" maxlength="300" autocomplete="off" placeholder="답장 입력 후 Enter" />
+          <button type="submit">보내기</button>
+        </form>
+        <p class="work-mode-feedback" id="work-mode-feedback" role="status" aria-live="polite"></p>
+        <p class="work-mode-hint">Alt+W 종료 · Esc 메시지 숨김</p>
+      </section>
 
       <div class="sheet-backdrop hidden" id="directory-sheet" role="dialog" aria-modal="true" aria-labelledby="directory-title">
         <section class="user-sheet">

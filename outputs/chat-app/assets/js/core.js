@@ -22,6 +22,9 @@ const initialState = {
   shortMessageTimer: null,
   shortMessagePaused: false,
   shortInlineReply: null,
+  workModeEnabled: localStorage.getItem("colorless-work-mode") === "on",
+  workModeMessage: null,
+  workModeSending: false,
   shortsMessagesEnabled: localStorage.getItem("colorless-shorts-messages") !== "off",
   selectedRoomId: "",
   messages: [],
@@ -637,6 +640,7 @@ function showAuth(mode = "login") {
   state.isGuest = false;
   authScreen.classList.remove("hidden");
   appScreen.classList.add("hidden");
+  if (typeof syncWorkModeVisibility === "function") syncWorkModeVisibility();
   directorySheet.classList.add("hidden");
   setAuthMode(mode);
 }
