@@ -12,8 +12,8 @@
     <script defer src="assets/js/platform/events.js?v=e67ecd100954"></script>
     <script defer src="assets/js/platform/icons.js?v=10894f1a61f3"></script>
     <script defer src="assets/js/platform/image-processing.js?v=c3632b3197bf"></script>
-    <script defer src="assets/js/core.js?v=39628a345fa2"></script>
-    <script defer src="assets/js/profile.js?v=94132f3ffcbb"></script>
+    <script defer src="assets/js/core.js?v=4bfbb50117d8"></script>
+    <script defer src="assets/js/profile.js?v=4767b5a5bcda"></script>
     <script defer src="assets/js/messenger.js?v=c565bc2c3e0f"></script>
     <script defer src="assets/js/attachments.js?v=0c018e271851"></script>
     <script defer src="assets/js/room-settings.js?v=d602bb96b2da"></script>
@@ -22,7 +22,7 @@
     <script defer src="assets/js/action-bar.js?v=f5c052bc212e"></script>
     <script defer src="assets/js/app.js?v=989fe43f9645"></script>
     <script defer src="assets/js/auth.js?v=84a7ef3fc787"></script>
-    <script defer src="assets/js/bootstrap.js?v=acc9a3669f1e"></script>
+    <script defer src="assets/js/bootstrap.js?v=b8511a9859cc"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -1075,11 +1075,11 @@
             <section class="profile-photo-editor" aria-labelledby="profile-photo-title">
               <div class="profile-photo-preview" id="profile-photo-preview"></div>
               <div>
-                <strong id="profile-photo-title">프로필 사진</strong>
-                <p class="profile-photo-copy">사진의 크기와 위치를 직접 맞춘 뒤 1024×1024 WebP로 저장합니다.</p>
+                <strong id="profile-photo-title">사진으로 픽셀 프로필 만들기</strong>
+                <p class="profile-photo-copy">사진의 크기와 위치를 맞추면 32×32 픽셀 편집기로 변환합니다. 변환 후 직접 수정할 수 있어요.</p>
                 <div class="profile-photo-actions">
                   <button type="button" class="secondary-button" id="select-profile-photo-button">사진 선택</button>
-                  <button type="button" class="secondary-button" id="remove-profile-photo-button">사진 제거</button>
+                  <button type="button" class="secondary-button" id="remove-profile-photo-button">픽셀 초기화</button>
                 </div>
                 <input type="file" id="profile-photo-input" accept="image/jpeg,image/png,image/webp,image/avif,image/heic,image/heif" hidden />
               </div>
@@ -1090,10 +1090,10 @@
                   <input type="range" id="profile-photo-zoom" min="50" max="300" value="100" step="1" />
                   <output id="profile-photo-zoom-value" for="profile-photo-zoom">100%</output>
                 </label>
-                <p class="profile-photo-crop-help">사진을 드래그해 위치를 맞추세요. 방향키로도 이동할 수 있습니다.</p>
+                <p class="profile-photo-crop-help">32×32로 만들 영역을 맞추세요. 사진을 드래그하거나 방향키로 이동할 수 있습니다.</p>
                 <div class="profile-photo-crop-actions">
                   <button type="button" class="secondary-button" id="cancel-profile-photo-button">취소</button>
-                  <button type="button" id="save-profile-photo-button">이대로 저장</button>
+                  <button type="button" id="save-profile-photo-button">32×32 픽셀로 변환</button>
                 </div>
               </div>
             </section>

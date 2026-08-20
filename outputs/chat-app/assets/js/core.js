@@ -71,12 +71,11 @@ const initialState = {
   roomMembersLoading: new Set(),
   lastSeenRoomMessageIds: {},
   profilePixels: "",
-  profileImageUrl: "",
-  profileImagePreviewUrl: "",
+  profilePixelsDirty: false,
+  profileEditorLoadId: 0,
   profileImagePreparing: false,
   profileImageSelectionId: 0,
   profileCropImage: null,
-  profileCropSourceBlob: null,
   profileCropOpen: false,
   profileCropZoomPercent: 100,
   profileCropOffsetX: 0,
@@ -630,11 +629,9 @@ function showAuth(mode = "login") {
   ColorlessImageProcessing.cancel("room-image");
   state.roomImageProcessing = false;
   state.profileImagePreparing = false;
-  state.profileImageUrl = "";
   state.statusPromptShown = false;
   closeStatusEmojiPicker({ restoreFocus: false });
   setAuthRequestBusy(false);
-  revokeProfileImagePreview();
   resetProfileImageCrop();
   state.session = null;
   state.isGuest = false;

@@ -292,10 +292,11 @@ profilePhotoCropCanvas.addEventListener("keydown", (event) => {
   moveProfileCrop(offsetX, offsetY);
 });
 cancelProfilePhotoButton.addEventListener("click", cancelProfileImageCrop);
-saveProfilePhotoButton.addEventListener("click", () => void saveCroppedProfileImage());
-removeProfilePhotoButton.addEventListener("click", () => void removeProfileImage());
+saveProfilePhotoButton.addEventListener("click", convertCroppedProfileImageToPixels);
+removeProfilePhotoButton.addEventListener("click", clearProfilePixels);
 clearProfileButton.addEventListener("click", () => {
   state.profilePixels = blankProfilePixels();
+  state.profilePixelsDirty = true;
   state.lastPixelTapIndex = -1;
   buildProfileEditor();
   renderProfileImagePreview();

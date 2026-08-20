@@ -623,6 +623,23 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("() => void openProfileEditor()", bootstrap_script)
         self.assertNotIn("pixels.join", (server.ASSETS_DIR / "js" / "core.js").read_text(encoding="utf-8"))
 
+    def test_profile_photo_import_converts_into_the_single_pixel_profile_system(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        profile_script = (server.ASSETS_DIR / "js" / "profile.js").read_text(encoding="utf-8")
+        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+
+        self.assertIn("사진으로 픽셀 프로필 만들기", index_html)
+        self.assertIn("32×32 픽셀로 변환", index_html)
+        self.assertIn("function convertCroppedProfileImageToPixels", profile_script)
+        self.assertIn("createImageCanvas(PIXEL_SIDE, PIXEL_SIDE)", profile_script)
+        self.assertIn("context.getImageData(0, 0, PIXEL_SIDE, PIXEL_SIDE)", profile_script)
+        self.assertIn("state.profilePixels = normalizeProfilePixels(pixels)", profile_script)
+        self.assertIn("state.profilePixelsDirty = true", profile_script)
+        self.assertNotIn('requestAction("profile.upload-image"', profile_script)
+        self.assertNotIn("application/x-colorless-profile-bundle", profile_script)
+        self.assertIn('requestAction("profile.remove-legacy-image"', profile_script)
+        self.assertIn("convertCroppedProfileImageToPixels", bootstrap_script)
+
     def test_presence_events_patch_indexed_rows_on_one_animation_frame(self) -> None:
         messenger_script = (server.ASSETS_DIR / "js" / "messenger.js").read_text(encoding="utf-8")
 
