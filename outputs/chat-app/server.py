@@ -5416,7 +5416,10 @@ class ChatHandler(BaseHTTPRequestHandler):
 
         with SHORTS_FEED_LOCK:
             seen_ids, saved_cursor = STORE.get_shorts_feed(user["username"])
-        cursor = saved_cursor if refresh and not requested_cursor else requested_cursor
+        if refresh and not requested_cursor:
+            seen_ids = []
+            saved_cursor = ""
+        cursor = requested_cursor or (saved_cursor if not refresh else "")
         if cursor and not re.fullmatch(r"catalog:\d{1,9}", cursor):
             cursor = ""
         offset = int(cursor.removeprefix("catalog:")) if cursor else 0
@@ -5428,6 +5431,7 @@ class ChatHandler(BaseHTTPRequestHandler):
         next_offset = offset
 
         # Scan bounded catalog pages to skip this user's seen rows without copying the catalog.
+        reached_catalog_end = False
         for _ in range(5):
             candidates = STORE.repository.list_shorts_catalog(
                 limit=SHORTS_CATALOG_SCAN_SIZE,
@@ -5435,12 +5439,15 @@ class ChatHandler(BaseHTTPRequestHandler):
             )
             if not candidates:
                 next_offset = 0
+                reached_catalog_end = True
                 break
             newest_catalog_at = max(
                 newest_catalog_at,
                 max(float(candidate.get("last_seen_at", 0)) for candidate in candidates),
             )
+            consumed = 0
             for candidate in candidates:
+                consumed += 1
                 if candidate["id"] in recent_set:
                     continue
                 items.append({
@@ -5451,16 +5458,41 @@ class ChatHandler(BaseHTTPRequestHandler):
                 stale_hit = stale_hit or float(candidate.get("expires_at", 0)) <= now
                 if len(items) >= SHORTS_CATALOG_PAGE_SIZE:
                     break
-            next_offset += len(candidates)
-            if len(items) >= SHORTS_CATALOG_PAGE_SIZE or len(candidates) < SHORTS_CATALOG_SCAN_SIZE:
-                if len(candidates) < SHORTS_CATALOG_SCAN_SIZE:
+            next_offset += consumed
+            if len(items) >= SHORTS_CATALOG_PAGE_SIZE:
+                break
+            if len(candidates) < SHORTS_CATALOG_SCAN_SIZE:
+                if consumed >= len(candidates):
                     next_offset = 0
+                    reached_catalog_end = True
                 break
 
         catalog_hit = bool(items)
         emergency_hit = False
+        cycled = False
+        if not items and reached_catalog_end:
+            candidates = STORE.repository.list_shorts_catalog(limit=SHORTS_CATALOG_PAGE_SIZE, offset=0)
+            if candidates:
+                items = [
+                    {
+                        "id": candidate["id"],
+                        "title": candidate.get("title", "YouTube 쇼츠"),
+                        "channel_title": candidate.get("channel_title", "YouTube"),
+                    }
+                    for candidate in candidates
+                ]
+                newest_catalog_at = max(float(candidate.get("last_seen_at", 0)) for candidate in candidates)
+                stale_hit = any(float(candidate.get("expires_at", 0)) <= now for candidate in candidates)
+                next_offset = len(candidates) if len(candidates) >= SHORTS_CATALOG_PAGE_SIZE else 0
+                seen_ids = []
+                catalog_hit = True
+                cycled = True
         if not items:
             items = [item for item in EMERGENCY_SHORTS if item["id"] not in recent_set]
+            if not items:
+                items = list(EMERGENCY_SHORTS)
+                seen_ids = []
+                cycled = bool(items)
             emergency_hit = bool(items)
         next_cursor = f"catalog:{next_offset}"
         with SHORTS_FEED_LOCK:
@@ -5477,6 +5509,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                 "items": items,
                 "next_cursor": next_cursor,
                 "retry_after": 3 if not items else 0,
+                "cycled": cycled,
                 "catalog": {
                     "stale": stale_hit,
                     "age_seconds": round(max(0.0, now - newest_catalog_at), 3) if newest_catalog_at else None,

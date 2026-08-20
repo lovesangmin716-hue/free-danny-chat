@@ -17,12 +17,12 @@
     <script defer src="assets/js/messenger.js?v=dd91338428e7"></script>
     <script defer src="assets/js/attachments.js?v=0c018e271851"></script>
     <script defer src="assets/js/room-settings.js?v=d602bb96b2da"></script>
-    <script defer src="assets/js/chat.js?v=55c513186801"></script>
-    <script defer src="assets/js/shorts.js?v=5c639ddc68ed"></script>
+    <script defer src="assets/js/chat.js?v=f943674aacd5"></script>
+    <script defer src="assets/js/shorts.js?v=0b732c851324"></script>
     <script defer src="assets/js/action-bar.js?v=021a9bcbe046"></script>
     <script defer src="assets/js/app.js?v=eb8c4ed27a7a"></script>
     <script defer src="assets/js/auth.js?v=84a7ef3fc787"></script>
-    <script defer src="assets/js/bootstrap.js?v=e7acfcdbc14d"></script>
+    <script defer src="assets/js/bootstrap.js?v=bc26af70b9a1"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -658,6 +658,7 @@
         .auth-header p { color: var(--white); font-size: 17px; }
         .auth-scroll { justify-content: center; padding: 42px 48px; }
         .app {
+          --desktop-header-height: 88px;
           display: grid;
           grid-template-areas:
             "header chat"
@@ -666,13 +667,13 @@
             "actions chat"
             "tabs chat";
           grid-template-columns: minmax(340px, 430px) minmax(0, 1fr);
-          grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+          grid-template-rows: var(--desktop-header-height) minmax(0, 1fr) auto auto auto;
           height: min(900px, calc(100dvh - 48px));
           min-height: min(640px, calc(100dvh - 48px));
           width: min(100%, 1180px);
           border: 1px solid var(--black);
         }
-        .app-header { align-items: center; grid-area: header; padding: 20px 22px; }
+        .app-header { align-items: center; box-sizing: border-box; grid-area: header; height: var(--desktop-header-height); padding: 20px 22px; }
         .app-header h1 { font-size: 32px; }
         .list-content { grid-area: list; }
         .chat-list, .friend-list { border: 0; margin: 0; max-width: none; min-height: 100%; }
@@ -696,6 +697,7 @@
         .desktop-chat-empty p { line-height: 1.55; margin: 0; }
         .app:has(.chat-room:not(.hidden)) .desktop-chat-empty { display: none; }
         .chat-room {
+          --chat-header-height: var(--desktop-header-height);
           border-left: 1px solid var(--black);
           grid-area: chat;
           inset: auto;

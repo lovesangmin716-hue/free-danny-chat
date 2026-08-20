@@ -1,7 +1,17 @@
 "use strict";
 
 // Message state, incremental rendering, pagination, retries, and sending.
-function createChatMessageRow(message) {
+const MESSAGE_TIME_CLUSTER_MS = 5 * 60 * 1000;
+
+function shouldShowMessageTime(message, nextMessage) {
+  if (!nextMessage || nextMessage.username !== message.username) return true;
+  const timestamp = Date.parse(message.timestamp);
+  const nextTimestamp = Date.parse(nextMessage.timestamp);
+  if (!Number.isFinite(timestamp) || !Number.isFinite(nextTimestamp) || nextTimestamp < timestamp) return true;
+  return nextTimestamp - timestamp > MESSAGE_TIME_CLUSTER_MS;
+}
+
+function createChatMessageRow(message, nextMessage = null) {
   const mine = message.username === state.messenger.user?.username;
   const row = document.createElement("article");
   row.className = `message-row ${mine ? "mine" : "theirs"}${message.pending ? " pending" : ""}${message.failed ? " failed" : ""}`;
@@ -58,9 +68,19 @@ function createChatMessageRow(message) {
   }
   const time = document.createElement("time");
   time.textContent = formatTime(message.timestamp);
+  time.classList.toggle("hidden", !shouldShowMessageTime(message, nextMessage));
   meta.appendChild(time);
   row.append(bubble, meta);
   return row;
+}
+
+function syncMessageTimeVisibility(messageIndex) {
+  if (!Number.isInteger(messageIndex) || messageIndex < 0 || messageIndex >= state.messages.length) return;
+  const message = state.messages[messageIndex];
+  const row = state.messageNodes.get(message.id);
+  const time = row?.querySelector("time");
+  if (!time) return;
+  time.classList.toggle("hidden", !shouldShowMessageTime(message, state.messages[messageIndex + 1]));
 }
 
 function closeMessageReadMenu() {
@@ -136,8 +156,9 @@ function renderAllChatMessages({ scrollToBottom = false, preserveScrollHeight = 
     chatMessageList.appendChild(empty);
   } else {
     const fragment = document.createDocumentFragment();
-    for (const message of state.messages) {
-      const row = createChatMessageRow(message);
+    for (let index = 0; index < state.messages.length; index += 1) {
+      const message = state.messages[index];
+      const row = createChatMessageRow(message, state.messages[index + 1]);
       state.messageNodes.set(message.id, row);
       fragment.appendChild(row);
     }
@@ -165,6 +186,7 @@ function appendChatMessageNode(message, scrollToBottom = false) {
   const row = createChatMessageRow(message);
   state.messageNodes.set(message.id, row);
   chatMessageList.appendChild(row);
+  syncMessageTimeVisibility(state.messages.length - 2);
   state.renderedMessageRevision = state.messageRevision;
   state.renderedMessageRoomId = state.selectedRoomId;
   if (scrollToBottom) chatMessageList.scrollTop = chatMessageList.scrollHeight;
@@ -176,10 +198,15 @@ function replaceChatMessageNode(messageId, message) {
     renderAllChatMessages();
     return;
   }
-  const nextRow = createChatMessageRow(message);
+  const messageIndex = state.messageIndexes.get(message.id);
+  const nextRow = createChatMessageRow(
+    message,
+    Number.isInteger(messageIndex) ? state.messages[messageIndex + 1] : null,
+  );
   currentRow.replaceWith(nextRow);
   state.messageNodes.delete(messageId);
   state.messageNodes.set(message.id, nextRow);
+  syncMessageTimeVisibility(messageIndex - 1);
   state.renderedMessageRevision = state.messageRevision;
 }
 

@@ -174,6 +174,7 @@ window.addEventListener("resize", () => {
   });
 }, { passive: true });
 document.addEventListener("visibilitychange", handleShortVisibilityChange);
+window.addEventListener("message", handleShortPlayerMessage);
 openDirectoryButton.addEventListener("click", openDirectory);
 closeDirectoryButton.addEventListener("click", closeDirectory);
 friendCodeAddButton.addEventListener("click", () => addFriend(friendCodeInput.value));

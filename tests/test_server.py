@@ -315,11 +315,28 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("def stream_request_body_to_file", server_script)
         self.assertIn('self.send_header("Accept-Ranges", "bytes")', server_script)
 
-    def test_shorts_embed_starts_muted_playback_without_waiting_for_player_commands(self) -> None:
+    def test_shorts_players_wait_for_readiness_and_preload_adjacent_cards(self) -> None:
         shorts_script = (server.ASSETS_DIR / "js" / "shorts.js").read_text(encoding="utf-8")
+        bootstrap_script = (server.ASSETS_DIR / "js" / "bootstrap.js").read_text(encoding="utf-8")
+        server_script = SERVER_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("?autoplay=1&mute=1&playsinline=1", shorts_script)
-        self.assertIn('sendShortPlayerCommand(frame, "playVideo")', shorts_script)
+        self.assertIn("?autoplay=0&mute=1&playsinline=1", shorts_script)
+        self.assertIn('payload?.event !== "onReady"', shorts_script)
+        self.assertIn("if (distance > 1)", shorts_script)
+        self.assertIn('window.addEventListener("message", handleShortPlayerMessage)', bootstrap_script)
+        self.assertIn("payload.cycled", shorts_script)
+        self.assertIn('"cycled": cycled', server_script)
+
+    def test_desktop_headers_share_one_height_and_message_times_cluster_for_five_minutes(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        chat_script = (server.ASSETS_DIR / "js" / "chat.js").read_text(encoding="utf-8")
+
+        self.assertIn("--desktop-header-height: 88px", index_html)
+        self.assertIn("--chat-header-height: var(--desktop-header-height)", index_html)
+        self.assertIn("const MESSAGE_TIME_CLUSTER_MS = 5 * 60 * 1000", chat_script)
+        self.assertIn("nextMessage.username !== message.username", chat_script)
+        self.assertIn("nextTimestamp - timestamp > MESSAGE_TIME_CLUSTER_MS", chat_script)
+        self.assertIn("syncMessageTimeVisibility(state.messages.length - 2)", chat_script)
 
     def test_supabase_requests_use_persistent_connection_pools(self) -> None:
         server_script = SERVER_PATH.read_text(encoding="utf-8")
@@ -445,8 +462,8 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("function scheduleShortScrollSnap", shorts_script)
         self.assertIn("frame.tabIndex = -1", shorts_script)
         self.assertIn("overflow-anchor: none", index_html)
-        self.assertIn("const shouldLoad = cardIndex === state.youtube.activeIndex", shorts_script)
-        self.assertNotIn("cardIndex === state.youtube.activeIndex + 1", shorts_script)
+        self.assertIn("const distance = Math.abs(cardIndex - state.youtube.activeIndex)", shorts_script)
+        self.assertIn("if (distance > 1)", shorts_script)
         self.assertIn("releaseAllShortFrames", shorts_script)
         self.assertIn('document.addEventListener("visibilitychange", handleShortVisibilityChange)', bootstrap_script)
         self.assertIn('state.activeList === "shorts" && listName !== "shorts"', app_script)
