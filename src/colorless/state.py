@@ -1459,6 +1459,19 @@ class StateStore:
 
     def get_sync_page(self, username: str, *, after_revision: int, limit: int) -> dict:
         current_revision = self.current_sync_revision()
+        oldest_revision = (
+            self.repository.oldest_event_sequence() if self.repository is not None else 0
+        )
+        reset_required = bool(
+            after_revision and oldest_revision and after_revision < oldest_revision - 1
+        )
+        if reset_required:
+            return {
+                "events": [],
+                "revision": current_revision,
+                "has_more": False,
+                "reset_required": True,
+            }
         events = (
             self.repository.events_for_user_after(username, after_revision, limit=limit + 1)
             if self.repository is not None else []
@@ -1474,6 +1487,7 @@ class StateStore:
             "events": compact_events,
             "revision": max(after_revision, next_revision),
             "has_more": has_more,
+            "reset_required": False,
         }
 
     def _messages_with_read_state_locked(
@@ -2419,7 +2433,9 @@ class StateStore:
                             self._attachment_rooms.pop(removed_filename, None)
             room["updated_at"] = message["timestamp"]
             if self.repository is not None:
-                if not self.repository.insert_message(message, user["id"], room, MAX_MESSAGES_PER_ROOM):
+                # Normalized storage keeps the complete durable history. The
+                # in-process list above is only a bounded compatibility cache.
+                if not self.repository.insert_message(message, user["id"], room, 0):
                     room_messages.pop()
                     existing_message = self.repository.message_by_client_id(room_id, user["id"], client_message_id) if client_message_id else None
                     if existing_message is not None:

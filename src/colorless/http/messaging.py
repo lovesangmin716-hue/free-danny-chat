@@ -169,15 +169,30 @@ class MessagingRoutesMixin:
             self.wfile.write(f"data: {self.context.json.dumps(hello, ensure_ascii=False)}\n\n".encode("utf-8"))
             self.wfile.flush()
 
-            if last_sent_revision:
-                for event in self.context.EVENT_BROKER.replay(user["username"], last_sent_revision):
-                    revision = int(event.get("revision", 0))
-                    if revision <= last_sent_revision:
-                        continue
-                    payload = self.context.json.dumps(event, ensure_ascii=False)
-                    self.wfile.write(f"id: {revision}\ndata: {payload}\n\n".encode("utf-8"))
-                    self.wfile.flush()
-                    last_sent_revision = revision
+            if last_sent_revision and self.context.EVENT_BROKER.replay_expired(last_sent_revision):
+                last_sent_revision = self.context.EVENT_BROKER.latest_revision()
+                reset_event = {
+                    "type": "sync_required",
+                    "reason": "event_history_expired",
+                    "revision": last_sent_revision,
+                }
+                payload = self.context.json.dumps(reset_event, ensure_ascii=False)
+                self.wfile.write(
+                    f"id: {last_sent_revision}\ndata: {payload}\n\n".encode("utf-8")
+                )
+                self.wfile.flush()
+            elif last_sent_revision:
+                for replayed in self.context.EVENT_BROKER.replay_batches(
+                    user["username"], last_sent_revision, limit=500
+                ):
+                    for event in replayed:
+                        revision = int(event.get("revision", 0))
+                        if revision <= last_sent_revision:
+                            continue
+                        payload = self.context.json.dumps(event, ensure_ascii=False)
+                        self.wfile.write(f"id: {revision}\ndata: {payload}\n\n".encode("utf-8"))
+                        self.wfile.flush()
+                        last_sent_revision = revision
 
             while True:
                 if self.context.SESSIONS.get_username(token) != user["username"]:

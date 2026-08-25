@@ -2314,6 +2314,30 @@ class MultiInstanceConsistencyTestCase(unittest.TestCase):
                 broker_a.close()
                 broker_b.close()
 
+    def test_replay_batches_do_not_stop_at_first_500_events(self) -> None:
+        events = [
+            {"event_id": f"event-{revision}", "revision": revision}
+            for revision in range(1, 1002)
+        ]
+
+        class ReplayRepository:
+            @staticmethod
+            def events_for_user_after(username, after_sequence, *, limit=500):
+                del username
+                return [
+                    event for event in events if event["revision"] > after_sequence
+                ][:limit]
+
+        broker = object.__new__(server.DurableEventBroker)
+        broker.repository = ReplayRepository()
+        batches = list(broker.replay_batches("alice", 0, limit=500))
+
+        self.assertEqual([len(batch) for batch in batches], [500, 500, 1])
+        self.assertEqual(
+            [event["revision"] for batch in batches for event in batch],
+            list(range(1, 1002)),
+        )
+
     def test_publish_failure_is_retried_from_local_outbox(self) -> None:
         with tempfile.TemporaryDirectory(prefix="colorless-outbox-") as temp_dir:
             repository = server.NormalizedSqliteRepository(Path(temp_dir) / "shared.sqlite3")
@@ -3175,6 +3199,31 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertEqual(older["items"][0]["text"], "message-0")
         self.assertEqual(older["next_cursor"], "")
         self.assertEqual(self.store.state["messages"].get(self.room_id, []), [])
+
+    def test_normalized_message_history_is_not_pruned_at_page_limit(self) -> None:
+        for index in range(server.MAX_MESSAGES_PER_ROOM + 25):
+            self.store.add_message(self.room_id, "alice", f"retained-{index}")
+
+        retained = self.store.repository.list_messages(
+            self.room_id, limit=server.MAX_MESSAGES_PER_ROOM + 25
+        )
+        self.assertEqual(len(retained), server.MAX_MESSAGES_PER_ROOM + 25)
+        self.assertEqual(retained[0]["text"], "retained-0")
+        self.assertEqual(retained[-1]["text"], "retained-224")
+
+    def test_sync_requires_reset_when_cursor_predates_retained_events(self) -> None:
+        for index in range(100):
+            self.store.repository.publish_event(
+                {"type": "room_updated", "event_id": f"retained-event-{index}"},
+                {"alice"},
+                "retention-test",
+                retention=5,
+            )
+
+        sync = self.store.get_sync_page("alice", after_revision=1, limit=10)
+        self.assertTrue(sync["reset_required"])
+        self.assertEqual(sync["events"], [])
+        self.assertFalse(sync["has_more"])
 
     def test_message_pages_compute_read_state_without_loading_full_history(self) -> None:
         for index in range(80):

@@ -6,7 +6,7 @@ import { addMessageReader, appendChatMessageNode, appendChatMessageState, applyM
 import { dismissWorkModeMessage, showWorkModeMessage, workModeMessage } from "./work-mode.js";
 import { renderShortShareBar, showShortMessageNotice } from "./shorts.js";
 import { renderFriendActionBar, selectFriendForActionBar } from "./action-bar.js";
-import { addFriend, loadFriendsPage, loadRoomsPage, openNewChat, recordSyncRevision, startLiveSync, stopLiveSync, syncLiveState } from "./app.js";
+import { addFriend, loadFriendsPage, loadMessenger, loadRoomsPage, openNewChat, recordSyncRevision, startLiveSync, stopLiveSync, syncLiveState } from "./app.js";
 import { ColorlessPlatform } from "./platform/index.js";
 
 // Room, friend, presence, directory, and realtime synchronization behavior.
@@ -366,6 +366,10 @@ function registerRealtimeHandlers() {
   realtimeHandlersRegistered = true;
 
   realtimeEvents.register("hello", () => updatePresence());
+  realtimeEvents.register("sync_required", async (payload) => {
+    recordSyncRevision(payload.revision);
+    await loadMessenger();
+  });
   realtimeEvents.register("message_created", async (payload, { isShortsView }) => {
     recordSyncRevision(payload.revision);
     const isIncoming = payload.message?.username !== state.messenger.user?.username;

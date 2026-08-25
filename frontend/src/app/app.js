@@ -272,6 +272,10 @@ async function syncLiveState() {
         "messenger.sync",
         `/sync?after_revision=${encodeURIComponent(state.syncRevision)}&limit=200`,
       );
+      if (payload.reset_required) {
+        await loadMessenger();
+        break;
+      }
       for (const event of payload.events || []) {
         await realtimeEvents.dispatch(event, { isShortsView });
         recordSyncRevision(event.revision);
