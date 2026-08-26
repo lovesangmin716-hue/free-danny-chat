@@ -517,7 +517,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
             self.assertIn("aria-label=", button.group(0))
         self.assertNotIn('shortShareSend.textContent = ">"', shorts_script)
 
-    def test_status_emoji_picker_is_mandatory_once_and_accepts_only_one_emoji(self) -> None:
+    def test_status_emoji_picker_is_optional_after_login_and_accepts_only_one_emoji(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         core_script = (FRONTEND_APP_DIR / "core.js").read_text(encoding="utf-8")
         app_script = (FRONTEND_APP_DIR / "app.js").read_text(encoding="utf-8")
@@ -528,8 +528,8 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
         start_app = re.search(r"async function startApp\(\) \{(.*?)\n\}", app_script, re.DOTALL)
         self.assertIsNotNone(start_app)
-        self.assertIn("if (!state.statusPromptShown && !savedStatusEmoji())", start_app.group(1))
-        self.assertIn("openStatusEmojiPicker(null)", start_app.group(1))
+        self.assertNotIn("openStatusEmojiPicker", start_app.group(1))
+        self.assertNotIn("statusPromptShown", core_script)
         self.assertIn('id="open-status-emoji-button"', index_html)
         self.assertIn('aria-labelledby="status-emoji-title"', index_html)
         self.assertIn('aria-describedby="status-emoji-description"', index_html)
@@ -560,6 +560,19 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertEqual(server.saved_activity_emoji("🇰🇷"), "🇰🇷")
         self.assertEqual(server.saved_activity_emoji("hello 😀"), "")
         self.assertEqual(server.saved_activity_emoji("😀😃"), "")
+
+    def test_login_form_prevents_mobile_username_rewriting_and_requires_credentials(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        username_input = re.search(r'<input(?=[^>]*id="login-username")[^>]*>', index_html)
+        password_input = re.search(r'<input(?=[^>]*id="login-password")[^>]*>', index_html)
+
+        self.assertIsNotNone(username_input)
+        self.assertIsNotNone(password_input)
+        self.assertIn('autocapitalize="none"', username_input.group(0))
+        self.assertIn('autocorrect="off"', username_input.group(0))
+        self.assertIn('spellcheck="false"', username_input.group(0))
+        self.assertIn("required", username_input.group(0))
+        self.assertIn("required", password_input.group(0))
 
     def test_mobile_header_keeps_title_on_one_line(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")

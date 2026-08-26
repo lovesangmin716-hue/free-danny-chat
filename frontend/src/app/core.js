@@ -126,7 +126,6 @@ selectedProfileColor: "#000000",
 selectedProfilePalette: "default",
   customPalette: [],
   selectedStatusEmoji: "",
-  statusPromptShown: false,
   statusPickerTouched: false,
   statusPickerTimer: null,
   statusPickerOpener: null,
@@ -675,7 +674,6 @@ function showAuth(mode = "login") {
   ColorlessImageProcessing.cancel("room-image");
   state.roomImageProcessing = false;
   state.profileImagePreparing = false;
-  state.statusPromptShown = false;
   closeStatusEmojiPicker({ restoreFocus: false });
   setAuthRequestBusy(false);
   coreHooks.resetProfileImageCrop?.();
