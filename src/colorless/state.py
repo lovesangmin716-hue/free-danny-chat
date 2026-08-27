@@ -2307,6 +2307,7 @@ class StateStore:
         status_message: str = "",
     ) -> dict:
         with self.lock:
+            created = False
             account = self._accounts_by_social_key.get((provider, provider_user_id))
             user = None
             if account is not None:
@@ -2314,6 +2315,7 @@ class StateStore:
             if user is None:
                 user = self._users_by_social_key.get((provider, provider_user_id))
             if user is None:
+                created = True
                 username = self._unique_username_locked(nickname, provider, provider_user_id)
                 account = {
                     "id": new_id("account"),
@@ -2351,13 +2353,12 @@ class StateStore:
                 self._register_user_locked(user)
             else:
                 account = self._accounts_by_id.get(user["account_id"])
-                if status_message:
-                    user["status_message"] = status_message[:40]
-            if self.repository is not None:
+            if self.repository is not None and created:
                 if account is not None:
                     self.repository.sync_account(account)
                 self.repository.sync_user(user)
-            self._save_locked("accounts", "users")
+            if created:
+                self._save_locked("accounts", "users")
             return self._user_public(user)
 
     def authenticate_user(self, username: str, password: str) -> dict | None:

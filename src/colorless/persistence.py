@@ -22,7 +22,7 @@ from .profile_art import (
 SCHEMA_VERSION = 1
 
 SUPABASE_HTTP_CLIENT = httpx.Client(
-    timeout=httpx.Timeout(30.0, connect=10.0),
+    timeout=httpx.Timeout(8.0, connect=3.0),
     limits=httpx.Limits(max_connections=64, max_keepalive_connections=24, keepalive_expiry=30.0),
     follow_redirects=True,
 )
