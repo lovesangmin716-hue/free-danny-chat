@@ -84,7 +84,7 @@ CONTENT_SECURITY_POLICY = "; ".join(
         "object-src 'none'",
         "frame-ancestors 'none'",
         "script-src 'self' https://accounts.google.com",
-        "style-src 'self' 'unsafe-inline'",
+        "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style",
         f"img-src 'self' data: blob: {SUPABASE_STORAGE_ORIGIN}".rstrip(),
         "font-src 'self'",
         f"connect-src 'self' https://accounts.google.com https://www.googleapis.com {SUPABASE_STORAGE_ORIGIN}".rstrip(),

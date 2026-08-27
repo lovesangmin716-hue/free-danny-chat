@@ -120,6 +120,17 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertLess(production_entrypoint.stat().st_size, source_bytes)
         self.assertLess(len(server.ASSET_GZIP_CONTENT[production_entrypoint.resolve()]), production_entrypoint.stat().st_size)
 
+    def test_google_identity_button_is_retryable_and_fedcm_ready(self) -> None:
+        auth_js = (FRONTEND_APP_DIR / "auth.js").read_text(encoding="utf-8")
+
+        self.assertIn('const GOOGLE_IDENTITY_SCRIPT_URL = "https://accounts.google.com/gsi/client"', auth_js)
+        self.assertIn("window.googleIdentityLibraryPromise = null", auth_js)
+        self.assertIn('googleButtonContainer.classList.remove("hidden")', auth_js)
+        self.assertIn('ux_mode: "popup"', auth_js)
+        self.assertIn("use_fedcm_for_button: true", auth_js)
+        self.assertIn("window.googleIdentityClientId !== state.providers.google.client_id", auth_js)
+        self.assertNotIn('googleButtonContainer.querySelector("div")?.click()', auth_js)
+
     def test_production_font_artifact_uses_one_preloaded_woff2(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         font_files = [path for path in (server.ASSETS_DIR / "fonts").iterdir() if path.is_file()]
@@ -912,6 +923,50 @@ class AuthenticationHttpIntegrationTestCase(unittest.TestCase):
     def test_google_oauth_state_is_browser_bound_and_single_use(self) -> None:
         self.assert_oauth_state_is_browser_bound("google")
 
+    def test_google_identity_credential_creates_an_immediate_session(self) -> None:
+        google_sub = f"google-credential-{time.time_ns()}"
+        http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
+        server_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+        server_thread.start()
+        connection = http.client.HTTPConnection("127.0.0.1", http_server.server_address[1], timeout=5)
+        try:
+            with (
+                mock.patch.object(server, "GOOGLE_CLIENT_ID", "google-client.apps.googleusercontent.com"),
+                mock.patch.object(
+                    server.ChatHandler,
+                    "verify_google_id_token",
+                    return_value={"sub": google_sub, "name": "Google Credential User"},
+                ) as verify_token,
+            ):
+                body = json.dumps({"credential": "signed-google-id-token"}).encode("utf-8")
+                connection.request(
+                    "POST",
+                    "/auth/google/credential",
+                    body=body,
+                    headers={"Content-Type": "application/json", "Content-Length": str(len(body))},
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read())
+                session_cookie = response.getheader("Set-Cookie", "").split(";", 1)[0]
+
+                self.assertEqual(response.status, 200)
+                self.assertTrue(payload["authenticated"])
+                self.assertEqual(payload["user"]["display_name"], "Google Credential User")
+                self.assertTrue(session_cookie.startswith(f"{server.SESSION_COOKIE_NAME}="))
+                verify_token.assert_called_once_with("signed-google-id-token")
+
+                connection.request("GET", "/session", headers={"Cookie": session_cookie})
+                session_response = connection.getresponse()
+                session_payload = json.loads(session_response.read())
+                self.assertEqual(session_response.status, 200)
+                self.assertTrue(session_payload["authenticated"])
+                self.assertEqual(session_payload["user"]["id"], payload["user"]["id"])
+        finally:
+            connection.close()
+            http_server.shutdown()
+            http_server.server_close()
+            server_thread.join(timeout=5)
+
     def test_kakao_oauth_state_is_browser_bound_and_single_use(self) -> None:
         self.assert_oauth_state_is_browser_bound("kakao")
 
@@ -1244,6 +1299,7 @@ class AuthenticationHttpIntegrationTestCase(unittest.TestCase):
                     self.assertIn("default-src 'self'", csp)
                     self.assertIn("frame-ancestors 'none'", csp)
                     self.assertIn("https://accounts.google.com", csp)
+                    self.assertIn("style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style", csp)
                     self.assertIn("https://www.youtube-nocookie.com", csp)
                     self.assertNotIn("*", csp)
                     if path == "/auth/providers":
