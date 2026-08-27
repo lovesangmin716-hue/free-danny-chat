@@ -1,6 +1,6 @@
 "use strict";
 
-import { beginAuthRequest, demoLoginButton, googleButtonContainer, googleLoginButton, kakaoLoginButton, loginForm, loginPassword, loginUsername, registerCoreHooks, rememberSession, requestAction, setAuthRequestBusy, setAuthStatus, setProviderStatus, showAuth, state } from "./core.js";
+import { beginAuthRequest, demoLoginButton, googleLoginButton, kakaoLoginButton, loginForm, loginPassword, loginUsername, registerCoreHooks, rememberSession, requestAction, setAuthRequestBusy, setAuthStatus, setProviderStatus, showAuth, state } from "./core.js";
 import { startApp } from "./app.js";
 
 const signupBanner = document.getElementById("signup-banner");
@@ -28,8 +28,7 @@ async function loadProviders() {
     demoLoginButton.disabled = !demoEnabled;
 
     if (googleEnabled) {
-      await renderGoogleButton();
-      setProviderStatus("");
+      setProviderStatus("구글 로그인이 준비됐어요.", "success");
     } else if (kakaoEnabled) {
       setProviderStatus("카카오 로그인이 준비됐어요.", "success");
     } else {
@@ -122,70 +121,12 @@ function loadGoogleIdentityLibrary() {
   return window.googleIdentityLibraryPromise;
 }
 
-async function handleGoogleCredential(response) {
-  if (!response.credential) {
-    setAuthStatus("구글 인증 정보를 받지 못했어요.", "error");
-    return;
-  }
-  if (!beginAuthRequest("구글 계정으로 로그인하고 있어요.")) return;
-  try {
-    rememberSession(await requestAction("auth.google", "/auth/google/credential", {
-      method: "POST",
-      body: JSON.stringify({ credential: response.credential }),
-    }));
-    await startApp();
-  } catch (error) {
-    setAuthStatus(error.message, "error");
-  } finally {
-    setAuthRequestBusy(false);
-  }
-}
-
-async function startGoogleLogin() {
+function startGoogleLogin() {
   if (!state.providers.google?.enabled) {
     setAuthStatus("구글 로그인은 앱 키를 연결한 뒤 사용할 수 있어요.", "error");
     return;
   }
-  try {
-    await renderGoogleButton();
-    setProviderStatus("표시된 Google 로그인 버튼을 눌러 주세요.");
-  } catch (error) {
-    setAuthStatus(error.message, "error");
-  }
-}
-
-async function renderGoogleButton() {
-  if (!state.providers.google?.enabled || googleButtonContainer.childElementCount) {
-    return;
-  }
-  await loadGoogleIdentityLibrary();
-  googleButtonContainer.classList.remove("hidden");
-  try {
-    if (window.googleIdentityClientId !== state.providers.google.client_id) {
-      window.google.accounts.id.initialize({
-        client_id: state.providers.google.client_id,
-        auto_select: false,
-        callback: handleGoogleCredential,
-        ux_mode: "popup",
-        use_fedcm_for_button: true,
-        button_auto_select: false,
-      });
-      window.googleIdentityClientId = state.providers.google.client_id;
-    }
-    window.google.accounts.id.renderButton(googleButtonContainer, {
-      theme: "outline",
-      size: "large",
-      text: "continue_with",
-      shape: "rectangular",
-      width: Math.floor(googleLoginButton.getBoundingClientRect().width || 320),
-    });
-    googleLoginButton.classList.add("hidden");
-  } catch (error) {
-    googleButtonContainer.replaceChildren();
-    googleButtonContainer.classList.add("hidden");
-    googleLoginButton.classList.remove("hidden");
-    throw error;
-  }
+  window.location.assign(state.providers.google.login_url || "/auth/google/start");
 }
 
 function startKakaoLogin() {

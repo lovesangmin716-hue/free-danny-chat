@@ -76,11 +76,11 @@ class AuthRoutesMixin:
                 nickname=nickname,
                 status_message="구글로 접속 중",
             )
+            token = self.context.SESSIONS.create(user["username"])
         except Exception:
             self.redirect_after_oauth("/?auth_error=google_login_failed")
             return
 
-        token = self.context.SESSIONS.create(user["username"])
         self.redirect_after_oauth("/", token)
 
     def google_id_token_login(self) -> None:

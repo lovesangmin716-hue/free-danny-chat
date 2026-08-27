@@ -120,16 +120,29 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertLess(production_entrypoint.stat().st_size, source_bytes)
         self.assertLess(len(server.ASSET_GZIP_CONTENT[production_entrypoint.resolve()]), production_entrypoint.stat().st_size)
 
-    def test_google_identity_button_is_retryable_and_fedcm_ready(self) -> None:
+    def test_google_login_uses_server_oauth_instead_of_credential_post(self) -> None:
         auth_js = (FRONTEND_APP_DIR / "auth.js").read_text(encoding="utf-8")
 
-        self.assertIn('const GOOGLE_IDENTITY_SCRIPT_URL = "https://accounts.google.com/gsi/client"', auth_js)
-        self.assertIn("window.googleIdentityLibraryPromise = null", auth_js)
-        self.assertIn('googleButtonContainer.classList.remove("hidden")', auth_js)
-        self.assertIn('ux_mode: "popup"', auth_js)
-        self.assertIn("use_fedcm_for_button: true", auth_js)
-        self.assertIn("window.googleIdentityClientId !== state.providers.google.client_id", auth_js)
-        self.assertNotIn('googleButtonContainer.querySelector("div")?.click()', auth_js)
+        self.assertIn('state.providers.google.login_url || "/auth/google/start"', auth_js)
+        self.assertNotIn('"/auth/google/credential"', auth_js)
+        self.assertNotIn("renderGoogleButton", auth_js)
+
+    def test_google_provider_requires_complete_oauth_configuration(self) -> None:
+        with (
+            mock.patch.object(server, "GOOGLE_CLIENT_ID", "google-client"),
+            mock.patch.object(server, "GOOGLE_CLIENT_SECRET", "google-secret"),
+        ):
+            google = server.social_provider_config("https://chat.example.com/auth/google/callback", "")["google"]
+            self.assertTrue(google["enabled"])
+            self.assertEqual(google["login_url"], "/auth/google/start")
+            self.assertEqual(google["mode"], "oauth")
+
+        with (
+            mock.patch.object(server, "GOOGLE_CLIENT_ID", "google-client"),
+            mock.patch.object(server, "GOOGLE_CLIENT_SECRET", ""),
+        ):
+            google = server.social_provider_config("https://chat.example.com/auth/google/callback", "")["google"]
+            self.assertFalse(google["enabled"])
 
     def test_production_font_artifact_uses_one_preloaded_woff2(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -906,6 +919,49 @@ class AuthenticationHttpIntegrationTestCase(unittest.TestCase):
 
     def test_google_oauth_state_is_browser_bound_and_single_use(self) -> None:
         self.assert_oauth_state_is_browser_bound("google")
+
+    def test_google_oauth_session_failure_redirects_instead_of_dropping_connection(self) -> None:
+        http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
+        server_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+        server_thread.start()
+        connection = http.client.HTTPConnection("127.0.0.1", http_server.server_address[1], timeout=5)
+        try:
+            with (
+                mock.patch.object(server, "GOOGLE_CLIENT_ID", "google-client"),
+                mock.patch.object(server, "GOOGLE_CLIENT_SECRET", "google-secret"),
+                mock.patch.object(server.ChatHandler, "request_google_token", return_value={"access_token": "mock-token"}),
+                mock.patch.object(
+                    server.ChatHandler,
+                    "request_google_user_profile",
+                    return_value={"sub": f"google-session-failure-{time.time_ns()}", "name": "Google Mock"},
+                ),
+                mock.patch.object(server.SESSIONS, "create", side_effect=TimeoutError("database timeout")),
+            ):
+                connection.request("GET", "/auth/google/start")
+                start_response = connection.getresponse()
+                start_response.read()
+                authorization_url = start_response.getheader("Location", "")
+                state = parse_qs(urlparse(authorization_url).query)["state"][0]
+                state_cookie = next(
+                    value.split(";", 1)[0]
+                    for key, value in start_response.getheaders()
+                    if key.lower() == "set-cookie"
+                )
+
+                connection.request(
+                    "GET",
+                    f"/auth/google/callback?{urlencode({'code': 'mock-code', 'state': state})}",
+                    headers={"Cookie": state_cookie},
+                )
+                callback_response = connection.getresponse()
+                callback_response.read()
+                self.assertEqual(callback_response.status, 302)
+                self.assertIn("auth_error=google_login_failed", callback_response.getheader("Location", ""))
+        finally:
+            connection.close()
+            http_server.shutdown()
+            http_server.server_close()
+            server_thread.join(timeout=5)
 
     def test_google_identity_credential_creates_an_immediate_session(self) -> None:
         google_sub = f"google-credential-{time.time_ns()}"
