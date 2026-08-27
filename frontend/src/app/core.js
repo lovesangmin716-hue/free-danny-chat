@@ -599,6 +599,7 @@ async function api(url, options = {}) {
 
 function rememberSession(session) {
   advanceAuthEpoch();
+  httpClient.clearCache();
   state.session = session;
   state.isGuest = false;
 }
@@ -632,6 +633,7 @@ function beginAuthRequest(message) {
 
 function showAuth(mode = "login") {
   advanceAuthEpoch();
+  httpClient.clearCache();
   if (state.eventSource) {
     state.eventSource.close();
     state.eventSource = null;

@@ -418,7 +418,10 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
         self.assertIn("authEpoch: 0", core_script)
         self.assertIn("function advanceAuthEpoch()", core_script)
-        self.assertIn("advanceAuthEpoch();\n  state.session = session;", core_script)
+        self.assertIn(
+            "advanceAuthEpoch();\n  httpClient.clearCache();\n  state.session = session;",
+            core_script,
+        )
         self.assertIn("advanceAuthEpoch();\n  setAuthRequestBusy(true, message);", core_script)
         self.assertIn("const authEpoch = state.authEpoch;", bootstrap_script)
         self.assertEqual(bootstrap_script.count("if (authEpoch !== state.authEpoch) return;"), 2)
@@ -1796,6 +1799,22 @@ class AttachmentTransferIntegrationTestCase(unittest.TestCase):
         self.assertEqual(status, 201, body)
         return json.loads(body.decode("utf-8"))["upload"]
 
+    def test_entity_page_etag_revalidation_returns_empty_304(self) -> None:
+        status, headers, body = self.request("GET", "/rooms?limit=30")
+        self.assertEqual(status, 200)
+        self.assertTrue(body)
+        etag = headers.get("ETag")
+        self.assertTrue(etag)
+
+        status, headers, body = self.request(
+            "GET",
+            "/rooms?limit=30",
+            headers={"If-None-Match": etag},
+        )
+        self.assertEqual(status, 304)
+        self.assertEqual(headers.get("ETag"), etag)
+        self.assertEqual(body, b"")
+
     def test_streamed_upload_is_verified_before_message_and_supports_ranges(self) -> None:
         payload = b"%PDF-1.7\n" + (b"streamed-attachment\n" * 4096)
         upload = self.grant(payload)
@@ -2483,6 +2502,72 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertEqual(len(page["items"]), 9)
         presence_for_users.assert_called_once()
         self.assertEqual(len(presence_for_users.call_args.args[0]), 9)
+
+    def test_room_page_releases_state_lock_during_repository_reads(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        original = self.store.repository.latest_messages_for_rooms
+        result = []
+
+        def slow_latest_messages(room_ids: list[str]) -> dict[str, dict]:
+            started.set()
+            self.assertTrue(release.wait(2))
+            return original(room_ids)
+
+        with mock.patch.object(
+            self.store.repository,
+            "latest_messages_for_rooms",
+            side_effect=slow_latest_messages,
+        ):
+            worker = threading.Thread(
+                target=lambda: result.append(self.store.get_rooms_page(self.alice, limit=20)),
+                daemon=True,
+            )
+            worker.start()
+            self.assertTrue(started.wait(1))
+            acquired = self.store.lock.acquire(blocking=False)
+            if acquired:
+                self.store.lock.release()
+            release.set()
+            worker.join(timeout=3)
+
+        self.assertTrue(acquired)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result[0]["items"][0]["id"], self.room_id)
+
+    def test_message_page_releases_state_lock_during_repository_reads(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        original = self.store.repository.list_messages_with_sequences
+        result = []
+
+        def slow_messages(room_id: str, *, limit: int = 200, before: str = "") -> list[dict]:
+            started.set()
+            self.assertTrue(release.wait(2))
+            return original(room_id, limit=limit, before=before)
+
+        with mock.patch.object(
+            self.store.repository,
+            "list_messages_with_sequences",
+            side_effect=slow_messages,
+        ):
+            worker = threading.Thread(
+                target=lambda: result.append(
+                    self.store.get_messages_page(self.room_id, "alice", limit=30)
+                ),
+                daemon=True,
+            )
+            worker.start()
+            self.assertTrue(started.wait(1))
+            acquired = self.store.lock.acquire(blocking=False)
+            if acquired:
+                self.store.lock.release()
+            release.set()
+            worker.join(timeout=3)
+
+        self.assertTrue(acquired)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result[0]["items"], [])
 
     def test_full_sse_queue_drops_and_disconnects_slow_subscriber(self) -> None:
         slow_subscriber: queue.Queue = queue.Queue(maxsize=1)

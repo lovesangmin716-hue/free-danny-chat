@@ -106,4 +106,6 @@ Windows 로컬 smoke fixture는 CI 변동성을 줄이기 위해 API 동시 요�
 | spike | 32 / 400 / 32 | availability pass, latency fail | 1,449.555ms | 1,531.125ms | 30.346ms | 0 |
 | sampled soak | 12 / 6,000 / 20 | availability pass, latency fail | 937.262ms | 998.615ms | 25.130ms | 0 |
 
+2026-08-27에 DB read를 전역 상태 lock 밖으로 이동한 뒤 같은 Windows 장비에서 load profile을 다시 실행했습니다. 300/300 응답과 모든 SLO가 통과했고 처리량은 51.889에서 58.843 req/s로 증가했습니다. 클라이언트 기준 message p95는 464.704ms에서 271.304ms, read p95는 386.125ms에서 326.976ms로 감소했으며 4xx/5xx/예외/queue drop은 모두 0이었습니다.
+
 Sampled soak는 224.833초 동안 26.686 req/s로 6,000/6,000 응답에 성공했고 4xx/5xx/예외/queue drop이 모두 0이었습니다. 이 로컬 SQLite 기준선은 지속 가용성을 확인했지만 후보 API latency SLO는 만족하지 못했습니다. 운영 승인용 soak는 staging에서 `--duration-seconds 7200`으로 다시 실행해야 합니다.

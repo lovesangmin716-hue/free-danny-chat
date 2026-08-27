@@ -1306,23 +1306,53 @@ class StateStore:
         }
 
     def get_messenger_bootstrap(self, user: dict) -> dict:
-        account = self._accounts_by_id.get(user.get("account_id", ""), {})
+        with self.lock:
+            account = self._accounts_by_id.get(user.get("account_id", ""), {})
         if account.get("auth_provider", user.get("auth_provider")) == "demo":
             self.seed_demo_network(user["username"])
         with self.lock:
             friend_ids = self._friend_ids_locked(user["id"])
-            raw_friends = [friend for friend_id in friend_ids if (friend := self._users_by_id.get(friend_id)) is not None]
+            raw_friends = [
+                copy.deepcopy(friend)
+                for friend_id in friend_ids
+                if (friend := self._users_by_id.get(friend_id)) is not None
+            ]
+            raw_rooms = [
+                copy.deepcopy(room)
+                for room_id in self._room_ids_by_user.get(user["id"], set())
+                if (room := self._rooms_by_id.get(room_id)) is not None
+                and room.get("kind") in {"direct", "group"}
+            ]
+            presence_users = {friend["username"]: friend for friend in raw_friends}
+            for room in raw_rooms:
+                if room.get("kind") != "direct":
+                    continue
+                for peer_id in room.get("participant_ids", []):
+                    if peer_id == user["id"]:
+                        continue
+                    peer = self._users_by_id.get(peer_id)
+                    if peer is not None:
+                        presence_users.setdefault(peer["username"], copy.deepcopy(peer))
+        presences = self._presences_for_users(list(presence_users.values()))
+        latest_messages = self.repository.latest_messages_for_rooms([room["id"] for room in raw_rooms])
+        with self.lock:
             friends = [self._user_public(friend) for friend in raw_friends]
             for friend, raw_friend in zip(friends, raw_friends):
-                friend["presence"] = self._presence_for_user(raw_friend)
-            rooms = []
-            for room_id in self._room_ids_by_user.get(user["id"], set()):
-                room = self._rooms_by_id.get(room_id)
-                if room is not None and room.get("kind") in {"direct", "group"}:
-                    rooms.append(self._room_summary(room, user))
+                friend["presence"] = presences[raw_friend["username"]]
+            rooms = [
+                self._room_summary(
+                    room,
+                    user,
+                    latest_message=latest_messages.get(room["id"]),
+                    latest_message_loaded=True,
+                    peer_presences=presences,
+                )
+                for room in raw_rooms
+            ]
+            public_user = self._user_public(user)
         return {
             "app_name": APP_NAME,
-            "user": self._user_public(user),
+            "user": public_user,
             "friends": sorted(friends, key=lambda friend: friend["username"].lower()),
             "discoverable_users": [],
             "rooms": sorted(rooms, key=lambda room: room["updated_at"], reverse=True),
@@ -1356,17 +1386,18 @@ class StateStore:
                 ]
             page = raw_friends[:limit + 1]
             has_more = len(page) > limit
-            page = page[:limit]
-            presences = self._presences_for_users(page)
+            page = [copy.deepcopy(friend) for friend in page[:limit]]
+            next_cursor = (
+                encode_page_cursor(page[-1]["username"].casefold(), page[-1]["id"])
+                if has_more and page else ""
+            )
+        presences = self._presences_for_users(page)
+        with self.lock:
             items = []
             for friend in page:
                 summary = self._user_list_summary(friend)
                 summary["presence"] = presences[friend["username"]]
                 items.append(summary)
-            next_cursor = (
-                encode_page_cursor(page[-1]["username"].casefold(), page[-1]["id"])
-                if has_more and page else ""
-            )
         return {"items": items, "next_cursor": next_cursor, "has_more": has_more}
 
     def get_rooms_page(
@@ -1394,16 +1425,21 @@ class StateStore:
                 ]
             page = rooms[:limit + 1]
             has_more = len(page) > limit
-            page = page[:limit]
-            latest_messages = self.repository.latest_messages_for_rooms([room["id"] for room in page])
+            page = [copy.deepcopy(room) for room in page[:limit]]
             peers = {
-                peer["id"]: peer
+                peer["id"]: copy.deepcopy(peer)
                 for room in page
                 if room.get("kind") == "direct"
                 for peer_id in room.get("participant_ids", [])
                 if peer_id != user["id"] and (peer := self._users_by_id.get(peer_id)) is not None
             }
-            peer_presences = self._presences_for_users(list(peers.values()))
+            next_cursor = (
+                encode_page_cursor(str(page[-1].get("updated_at", "")), page[-1]["id"])
+                if has_more and page else ""
+            )
+        latest_messages = self.repository.latest_messages_for_rooms([room["id"] for room in page])
+        peer_presences = self._presences_for_users(list(peers.values()))
+        with self.lock:
             items = [
                 self._room_summary(
                     room,
@@ -1415,10 +1451,6 @@ class StateStore:
                 )
                 for room in page
             ]
-            next_cursor = (
-                encode_page_cursor(str(page[-1].get("updated_at", "")), page[-1]["id"])
-                if has_more and page else ""
-            )
         return {"items": items, "next_cursor": next_cursor, "has_more": has_more}
 
     def get_room_members_page(
@@ -1511,6 +1543,7 @@ class StateStore:
         messages: list[dict],
         *,
         all_messages: list[dict] | None = None,
+        cursor_sequences: dict[str, int] | None = None,
     ) -> list[dict]:
         participant_ids = list(room.get("participant_ids", []))
         last_read_by = room.get("last_read_by", {})
@@ -1534,10 +1567,11 @@ class StateStore:
                 reader_id: str(last_read_by.get(reader_id, ""))
                 for reader_id in participant_ids
             }
-            cursor_sequences = self.repository.message_sequences(
-                room["id"],
-                list(reader_cursor_ids.values()),
-            )
+            if cursor_sequences is None:
+                cursor_sequences = self.repository.message_sequences(
+                    room["id"],
+                    list(reader_cursor_ids.values()),
+                )
             reader_sequences = {
                 reader_id: cursor_sequences.get(cursor_id, -1)
                 for reader_id, cursor_id in reader_cursor_ids.items()
@@ -1592,12 +1626,28 @@ class StateStore:
             room = self._rooms_by_id.get(room_id)
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None
-            messages = self._room_messages_locked(room_id)
+            if self.repository is None:
+                messages = list(self.state["messages"].get(room_id, []))[-MAX_MESSAGES_PER_ROOM:]
+                return self._messages_with_read_state_locked(
+                    room,
+                    user,
+                    messages,
+                    all_messages=messages,
+                )
+            room_snapshot = copy.deepcopy(room)
+        messages = self.repository.list_messages_with_sequences(room_id, limit=MAX_MESSAGES_PER_ROOM)
+        cursor_ids = [str(value) for value in room_snapshot.get("last_read_by", {}).values()]
+        cursor_sequences = self.repository.message_sequences(room_id, cursor_ids)
+        with self.lock:
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
+            if user is None or room is None or not self._can_access_room_locked(room, user):
+                return None
             return self._messages_with_read_state_locked(
                 room,
                 user,
                 messages,
-                all_messages=messages,
+                cursor_sequences=cursor_sequences,
             )
 
     def sent_message_with_read_state(
@@ -1652,37 +1702,90 @@ class StateStore:
             room = self._rooms_by_id.get(room_id)
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None
-            if around:
-                all_messages = self._room_messages_locked(room_id)
-                target_index = next(
-                    (index for index, message in enumerate(all_messages) if message.get("id") == around),
-                    -1,
+            if self.repository is None:
+                all_messages = list(self.state["messages"].get(room_id, []))
+                if around:
+                    target_index = next(
+                        (index for index, message in enumerate(all_messages) if message.get("id") == around),
+                        -1,
+                    )
+                    if target_index >= 0:
+                        page_start = max(0, target_index - (limit // 2))
+                        page_end = min(len(all_messages), page_start + limit)
+                        page_start = max(0, page_end - limit)
+                        messages = all_messages[page_start:page_end]
+                        page_messages = self._messages_with_read_state_locked(
+                            room,
+                            user,
+                            messages,
+                            all_messages=all_messages,
+                        )
+                        return {
+                            "items": page_messages,
+                            "next_cursor": messages[0]["id"] if page_start > 0 and page_messages else "",
+                            "around": around,
+                        }
+                messages = self._room_messages_locked(room_id, limit=limit + 1, before=before)
+                has_more = len(messages) > limit
+                if has_more:
+                    messages = messages[-limit:]
+                page_messages = self._messages_with_read_state_locked(
+                    room,
+                    user,
+                    messages,
+                    all_messages=all_messages,
                 )
-                if target_index >= 0:
-                    page_start = max(0, target_index - (limit // 2))
-                    page_end = min(len(all_messages), page_start + limit)
-                    page_start = max(0, page_end - limit)
-                    messages = all_messages[page_start:page_end]
+                return {
+                    "items": page_messages,
+                    "next_cursor": messages[0]["id"] if has_more and page_messages else "",
+                }
+            room_snapshot = copy.deepcopy(room)
+
+        if around:
+            all_messages = self.repository.list_messages(room_id, limit=MAX_MESSAGES_PER_ROOM)
+            target_index = next(
+                (index for index, message in enumerate(all_messages) if message.get("id") == around),
+                -1,
+            )
+            if target_index >= 0:
+                page_start = max(0, target_index - (limit // 2))
+                page_end = min(len(all_messages), page_start + limit)
+                page_start = max(0, page_end - limit)
+                messages = all_messages[page_start:page_end]
+                with self.lock:
+                    user = self._users_by_username.get(username)
+                    room = self._rooms_by_id.get(room_id)
+                    if user is None or room is None or not self._can_access_room_locked(room, user):
+                        return None
                     page_messages = self._messages_with_read_state_locked(
                         room,
                         user,
                         messages,
                         all_messages=all_messages,
                     )
-                    return {
-                        "items": page_messages,
-                        "next_cursor": messages[0]["id"] if page_start > 0 and page_messages else "",
-                        "around": around,
-                    }
-            messages = (
-                self.repository.list_messages_with_sequences(room_id, limit=limit + 1, before=before)
-                if self.repository is not None
-                else self._room_messages_locked(room_id, limit=limit + 1, before=before)
+                return {
+                    "items": page_messages,
+                    "next_cursor": messages[0]["id"] if page_start > 0 and page_messages else "",
+                    "around": around,
+                }
+
+        messages = self.repository.list_messages_with_sequences(room_id, limit=limit + 1, before=before)
+        has_more = len(messages) > limit
+        if has_more:
+            messages = messages[-limit:]
+        cursor_ids = [str(value) for value in room_snapshot.get("last_read_by", {}).values()]
+        cursor_sequences = self.repository.message_sequences(room_id, cursor_ids)
+        with self.lock:
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
+            if user is None or room is None or not self._can_access_room_locked(room, user):
+                return None
+            page_messages = self._messages_with_read_state_locked(
+                room,
+                user,
+                messages,
+                cursor_sequences=cursor_sequences,
             )
-            has_more = len(messages) > limit
-            if has_more:
-                messages = messages[-limit:]
-            page_messages = self._messages_with_read_state_locked(room, user, messages)
             return {
                 "items": page_messages,
                 "next_cursor": messages[0]["id"] if has_more and page_messages else "",

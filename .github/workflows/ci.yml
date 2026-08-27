@@ -25,6 +25,7 @@ jobs:
       - run: npm run build:check
         working-directory: frontend
       - run: python tests/js_syntax.py
+      - run: node tests/http_cache.mjs
       - run: python tests/static_budget.py
       - run: python tests/deploy_preflight.py
       - run: python -m unittest discover -s tests -p 'test_*.py'
