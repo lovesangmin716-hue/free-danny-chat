@@ -213,7 +213,7 @@ from .runtime import (
     UploadGrantStore,
 )
 from .cache import BoundedTTLCache
-from .integrations import OUTBOUND_HTTP_CLIENT, fetch_bytes, fetch_json, supabase_headers
+from .integrations import OUTBOUND_HTTP_CLIENT, fetch_bytes, fetch_json, supabase_headers, verify_google_id_token_credential
 from .shorts import (
     ShortsCatalogCollector,
     YoutubeCatalogError,

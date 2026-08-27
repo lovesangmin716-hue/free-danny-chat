@@ -117,17 +117,32 @@ class AuthRoutesMixin:
                 or str(profile_payload.get("email", "")).split("@")[0].strip()
                 or f"google_{google_sub[-6:]}"
             )
+        except ConnectionError:
+            self.google_login_error(
+                "구글 인증 서버 연결이 지연되고 있어요. 잠시 후 다시 시도해 주세요.",
+                self.context.HTTPStatus.SERVICE_UNAVAILABLE,
+                is_redirect_login,
+            )
+            return
+        except Exception:
+            self.google_login_error("구글 로그인 처리 중 문제가 생겼어요. 다시 시도해 주세요.", self.context.HTTPStatus.UNAUTHORIZED, is_redirect_login)
+            return
+
+        try:
             user = self.context.STORE.create_or_update_social_user(
                 "google",
                 google_sub,
                 nickname=nickname,
                 status_message="구글로 접속 중",
             )
+            token = self.context.SESSIONS.create(user["username"])
         except Exception:
-            self.google_login_error("구글 로그인 처리 중 문제가 생겼어요. 다시 시도해 주세요.", self.context.HTTPStatus.UNAUTHORIZED, is_redirect_login)
+            self.google_login_error(
+                "로그인 정보를 저장하는 데 시간이 걸리고 있어요. 잠시 후 다시 시도해 주세요.",
+                self.context.HTTPStatus.SERVICE_UNAVAILABLE,
+                is_redirect_login,
+            )
             return
-
-        token = self.context.SESSIONS.create(user["username"])
         if is_redirect_login:
             self.send_response(self.context.HTTPStatus.FOUND)
             self.send_header("Location", "/")
@@ -223,12 +238,7 @@ class AuthRoutesMixin:
         )
 
     def verify_google_id_token(self, credential: str) -> dict:
-        payload = self.context.fetch_json(f"https://oauth2.googleapis.com/tokeninfo?{self.context.urlencode({'id_token': credential})}")
-        if payload.get("aud") != self.context.GOOGLE_CLIENT_ID:
-            raise ValueError("구글 클라이언트 ID가 일치하지 않습니다.")
-        if payload.get("iss") not in {"accounts.google.com", "https://accounts.google.com"}:
-            raise ValueError("구글 토큰 발급자를 확인하지 못했습니다.")
-        return payload
+        return self.context.verify_google_id_token_credential(credential, self.context.GOOGLE_CLIENT_ID)
 
     def request_kakao_token(self, code: str) -> dict:
         payload = {

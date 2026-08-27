@@ -139,6 +139,8 @@ http://127.0.0.1:8765
 
 운영 환경에서는 실제 서비스 origin(스킴과 호스트만 포함, 경로와 끝 슬래시 제외)도 승인된 JavaScript 원본에 등록해야 합니다. 예를 들어 서비스가 `https://chat.example.com/`에서 열리면 `https://chat.example.com`을 등록합니다.
 
+브라우저가 전달한 Google ID 토큰은 서버에서 `google-auth`로 서명, audience, issuer, 만료 시간을 검증합니다. Google 공개 인증서는 응답의 `Cache-Control` 수명 동안 메모리에 보관하므로 로그인마다 `tokeninfo` API를 호출하지 않습니다. 인증서 또는 저장소 연결이 지연되면 프록시 502로 연결을 끊는 대신 제한 시간 안에 JSON 503 응답을 반환합니다.
+
 OAuth 코드 흐름을 사용할 때의 로컬 리디렉션 URI는 다음과 같습니다.
 
 ```text
