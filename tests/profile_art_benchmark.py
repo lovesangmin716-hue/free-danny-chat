@@ -63,17 +63,34 @@ def main() -> None:
         len(json.dumps(user, separators=(",", ":")).encode("utf-8"))
         for user in users
     )
+    avatar_metadata_storage = sum(
+        len(json.dumps({
+            "profile_thumbnail_url": user["profile_thumbnail_url"],
+            "profile_art_version": user["profile_art_version"],
+        }, separators=(",", ":")).encode("utf-8"))
+        for user in users
+    )
     legacy_pixels_json = len(json.dumps(["#123456"] * PIXEL_COUNT, separators=(",", ":")).encode("utf-8"))
     report = {
         "users": USER_COUNT,
         "compact_runtime_rss_delta_bytes": max(0, after - before),
         "compact_user_json_bytes": compact_storage,
+        "compact_user_json_bytes_per_user": compact_storage / USER_COUNT,
+        "avatar_metadata_bytes_per_user": avatar_metadata_storage / USER_COUNT,
         "legacy_pixel_json_bytes_estimate": legacy_pixels_json * USER_COUNT,
         "packed_art_bytes_if_all_nonblank": PACKED_BYTES_PER_ART * USER_COUNT,
         "blank_art_bytes": 0,
         "initial_list_pixel_arrays": 0,
     }
     print(json.dumps(report, indent=2))
+    passed = (
+        PACKED_BYTES_PER_ART <= 4 * 1024
+        and report["avatar_metadata_bytes_per_user"] <= 200
+        and report["packed_art_bytes_if_all_nonblank"] < report["legacy_pixel_json_bytes_estimate"]
+        and report["blank_art_bytes"] == 0
+        and report["initial_list_pixel_arrays"] == 0
+    )
+    raise SystemExit(0 if passed else 1)
 
 
 if __name__ == "__main__":

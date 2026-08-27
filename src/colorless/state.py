@@ -1046,6 +1046,7 @@ class StateStore:
         include_members: bool = True,
         latest_message: dict | None = None,
         latest_message_loaded: bool = False,
+        peer_presences: dict[str, dict] | None = None,
     ) -> dict:
         messages = [latest_message] if latest_message_loaded and latest_message is not None else (
             [] if latest_message_loaded else self._room_messages_locked(room["id"], limit=1)
@@ -1090,7 +1091,11 @@ class StateStore:
                 peer_public.pop("profile_pixels", None)
                 peer_public.pop("custom_palette", None)
                 summary["peer"] = peer_public
-                summary["peer"]["presence"] = self._presence_for_user(peer)
+                summary["peer"]["presence"] = (
+                    peer_presences.get(peer["username"])
+                    if peer_presences is not None
+                    else self._presence_for_user(peer)
+                ) or {"online": False, "active_room_ids": [], "emoji": ""}
         elif room.get("kind") == "group" and viewer is not None and include_members:
             summary["participants"] = [
                 {
@@ -1391,6 +1396,14 @@ class StateStore:
             has_more = len(page) > limit
             page = page[:limit]
             latest_messages = self.repository.latest_messages_for_rooms([room["id"] for room in page])
+            peers = {
+                peer["id"]: peer
+                for room in page
+                if room.get("kind") == "direct"
+                for peer_id in room.get("participant_ids", [])
+                if peer_id != user["id"] and (peer := self._users_by_id.get(peer_id)) is not None
+            }
+            peer_presences = self._presences_for_users(list(peers.values()))
             items = [
                 self._room_summary(
                     room,
@@ -1398,6 +1411,7 @@ class StateStore:
                     include_members=False,
                     latest_message=latest_messages.get(room["id"]),
                     latest_message_loaded=True,
+                    peer_presences=peer_presences,
                 )
                 for room in page
             ]

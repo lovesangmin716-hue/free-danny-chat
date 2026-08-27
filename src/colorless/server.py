@@ -364,7 +364,7 @@ def cleanup_expired_uploads() -> int:
             delete_upload_object(str(grant["filename"]))
             removed += 1
         except (ConnectionError, OSError, ValueError):
-            pass
+            UPLOAD_GRANTS.requeue_cleanup(grant)
     return removed
 
 

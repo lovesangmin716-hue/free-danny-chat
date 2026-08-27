@@ -1602,6 +1602,35 @@ class AttachmentGrantContractTestCase(unittest.TestCase):
         )
         self.assertTrue(grants.owns("upload_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.pdf", "alice"))
 
+    def test_expired_upload_remains_queued_after_access_cleanup(self) -> None:
+        grants = server.UploadGrantStore(ttl_seconds=-1)
+        filename = "upload_cccccccccccccccccccccccccccccccc.pdf"
+        grants.create_pending(
+            filename,
+            "alice",
+            name="expired.pdf",
+            content_type="application/pdf",
+            size=10,
+        )
+
+        self.assertIsNone(grants.get(filename, "alice"))
+        self.assertEqual([grant["filename"] for grant in grants.pop_expired()], [filename])
+        self.assertEqual(grants.pop_expired(), [])
+
+    def test_failed_orphan_cleanup_is_retried(self) -> None:
+        grants = server.UploadGrantStore(ttl_seconds=-1)
+        filename = "upload_dddddddddddddddddddddddddddddddd.pdf"
+        grants.create(filename, "alice")
+
+        with (
+            mock.patch.object(server, "UPLOAD_GRANTS", grants),
+            mock.patch.object(server, "delete_upload_object", side_effect=[OSError("temporary"), None]) as delete,
+        ):
+            self.assertEqual(server.cleanup_expired_uploads(), 0)
+            self.assertEqual(server.cleanup_expired_uploads(), 1)
+
+        self.assertEqual(delete.call_count, 2)
+
     def test_supabase_signed_urls_are_object_scoped_and_service_key_is_not_returned(self) -> None:
         filename = "upload_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.pdf"
         with (
@@ -2433,6 +2462,27 @@ class StateStoreTestCase(unittest.TestCase):
             with server.SUBSCRIBERS_LOCK:
                 server.SUBSCRIBERS.clear()
                 server.SUBSCRIBERS_BY_USERNAME.clear()
+
+    def test_room_page_batches_direct_peer_presence_lookup(self) -> None:
+        for index in range(8):
+            friend = self.store.create_or_update_social_user(
+                "demo", f"presence-page-{index}", nickname=f"presence{index}"
+            )
+            self.store.add_friend("alice", friend["id"])
+            room, _, error = self.store.create_or_get_direct_room("alice", friend["id"])
+            self.assertIsNone(error)
+            self.assertIsNotNone(room)
+
+        with mock.patch.object(
+            self.store.repository,
+            "presence_for_users",
+            wraps=self.store.repository.presence_for_users,
+        ) as presence_for_users:
+            page = self.store.get_rooms_page(self.alice, limit=20)
+
+        self.assertEqual(len(page["items"]), 9)
+        presence_for_users.assert_called_once()
+        self.assertEqual(len(presence_for_users.call_args.args[0]), 9)
 
     def test_full_sse_queue_drops_and_disconnects_slow_subscriber(self) -> None:
         slow_subscriber: queue.Queue = queue.Queue(maxsize=1)

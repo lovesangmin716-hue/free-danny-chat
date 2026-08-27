@@ -28,4 +28,7 @@ jobs:
       - run: python tests/static_budget.py
       - run: python tests/deploy_preflight.py
       - run: python -m unittest discover -s tests -p 'test_*.py'
+      - run: python tests/profile_art_benchmark.py
+      - run: python tests/bootstrap_scale.py --count 1000 --iterations 20
+      - run: python tests/multi_instance.py
       - run: python tests/operations_load.py --profile smoke
