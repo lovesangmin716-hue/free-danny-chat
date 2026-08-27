@@ -4,6 +4,8 @@ import { beginAuthRequest, demoLoginButton, googleButtonContainer, googleLoginBu
 import { startApp } from "./app.js";
 
 const signupBanner = document.getElementById("signup-banner");
+const GOOGLE_IDENTITY_SCRIPT_URL = "https://accounts.google.com/gsi/client";
+const GOOGLE_IDENTITY_LOAD_TIMEOUT_MS = 12000;
 
 // Authentication providers, signup, login, logout, and phone verification.
 function setAuthMode(mode) {
@@ -94,11 +96,27 @@ function loadGoogleIdentityLibrary() {
 
   window.googleIdentityLibraryPromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
+    script.src = GOOGLE_IDENTITY_SCRIPT_URL;
     script.async = true;
     script.defer = true;
-    script.onload = resolve;
-    script.onerror = () => reject(new Error("구글 로그인 도구를 불러오지 못했어요."));
+    const fail = (message) => {
+      window.clearTimeout(timeoutId);
+      script.remove();
+      window.googleIdentityLibraryPromise = null;
+      reject(new Error(message));
+    };
+    const timeoutId = window.setTimeout(() => {
+      fail("구글 로그인 도구 응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요.");
+    }, GOOGLE_IDENTITY_LOAD_TIMEOUT_MS);
+    script.onload = () => {
+      window.clearTimeout(timeoutId);
+      if (!window.google?.accounts?.id) {
+        fail("구글 로그인 도구를 초기화하지 못했어요. 잠시 후 다시 시도해 주세요.");
+        return;
+      }
+      resolve();
+    };
+    script.onerror = () => fail("구글 로그인 도구를 불러오지 못했어요. 네트워크 연결을 확인해 주세요.");
     document.head.appendChild(script);
   });
   return window.googleIdentityLibraryPromise;
@@ -130,7 +148,7 @@ async function startGoogleLogin() {
   }
   try {
     await renderGoogleButton();
-    googleButtonContainer.querySelector("div")?.click();
+    setProviderStatus("표시된 Google 로그인 버튼을 눌러 주세요.");
   } catch (error) {
     setAuthStatus(error.message, "error");
   }
@@ -141,20 +159,33 @@ async function renderGoogleButton() {
     return;
   }
   await loadGoogleIdentityLibrary();
-  window.google.accounts.id.initialize({
-    client_id: state.providers.google.client_id,
-    auto_select: false,
-    callback: handleGoogleCredential,
-  });
-  window.google.accounts.id.renderButton(googleButtonContainer, {
-    theme: "outline",
-    size: "large",
-    text: "continue_with",
-    shape: "rectangular",
-    width: Math.floor(googleLoginButton.getBoundingClientRect().width || 320),
-  });
-  googleLoginButton.classList.add("hidden");
   googleButtonContainer.classList.remove("hidden");
+  try {
+    if (window.googleIdentityClientId !== state.providers.google.client_id) {
+      window.google.accounts.id.initialize({
+        client_id: state.providers.google.client_id,
+        auto_select: false,
+        callback: handleGoogleCredential,
+        ux_mode: "popup",
+        use_fedcm_for_button: true,
+        button_auto_select: false,
+      });
+      window.googleIdentityClientId = state.providers.google.client_id;
+    }
+    window.google.accounts.id.renderButton(googleButtonContainer, {
+      theme: "outline",
+      size: "large",
+      text: "continue_with",
+      shape: "rectangular",
+      width: Math.floor(googleLoginButton.getBoundingClientRect().width || 320),
+    });
+    googleLoginButton.classList.add("hidden");
+  } catch (error) {
+    googleButtonContainer.replaceChildren();
+    googleButtonContainer.classList.add("hidden");
+    googleLoginButton.classList.remove("hidden");
+    throw error;
+  }
 }
 
 function startKakaoLogin() {

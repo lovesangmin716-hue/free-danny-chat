@@ -137,6 +137,8 @@ http://localhost:8765
 http://127.0.0.1:8765
 ```
 
+운영 환경에서는 실제 서비스 origin(스킴과 호스트만 포함, 경로와 끝 슬래시 제외)도 승인된 JavaScript 원본에 등록해야 합니다. 예를 들어 서비스가 `https://chat.example.com/`에서 열리면 `https://chat.example.com`을 등록합니다.
+
 OAuth 코드 흐름을 사용할 때의 로컬 리디렉션 URI는 다음과 같습니다.
 
 ```text
