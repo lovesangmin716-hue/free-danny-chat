@@ -137,6 +137,10 @@ http://localhost:8765
 http://127.0.0.1:8765
 ```
 
+운영 환경에서는 실제 서비스 origin(스킴과 호스트만 포함, 경로와 끝 슬래시 제외)도 승인된 JavaScript 원본에 등록해야 합니다. 예를 들어 서비스가 `https://chat.example.com/`에서 열리면 `https://chat.example.com`을 등록합니다.
+
+앱의 기본 Google 로그인은 서버 측 OAuth 코드 흐름을 사용합니다. 이전 클라이언트와의 호환을 위해 ID 토큰 endpoint도 유지하며, 이 경로에서는 `google-auth`로 서명, audience, issuer, 만료 시간을 검증합니다. Google 공개 인증서는 응답의 `Cache-Control` 수명 동안 메모리에 보관하므로 로그인마다 `tokeninfo` API를 호출하지 않습니다. 인증서 또는 저장소 연결이 지연되면 프록시 502로 연결을 끊는 대신 제한 시간 안에 JSON 503 응답을 반환합니다.
+
 OAuth 코드 흐름을 사용할 때의 로컬 리디렉션 URI는 다음과 같습니다.
 
 ```text
@@ -154,7 +158,7 @@ YouTube 호출은 사용자 `/youtube/shorts` 요청에서 실행되지 않습�
 | 변수 | 설명 |
 | --- | --- |
 | `KAKAO_REST_API_KEY` | Kakao 앱의 REST API 키 |
-| `KAKAO_CLIENT_SECRET` | 선택 사항. 활성화한 경우에만 설정 |
+| `KAKAO_CLIENT_SECRET` | Kakao REST API 키의 Client Secret. Kakao Developers에서 기능을 끈 경우에만 생략 가능 |
 | `KAKAO_REDIRECT_URI` | 선택 사항. 기본값은 `<PUBLIC_BASE_URL>/auth/kakao/callback` |
 
 Kakao Developers에 다음 로컬 리디렉션 URI를 등록합니다.
@@ -162,6 +166,8 @@ Kakao Developers에 다음 로컬 리디렉션 URI를 등록합니다.
 ```text
 http://localhost:8765/auth/kakao/callback
 ```
+
+운영 환경에서는 `<PUBLIC_BASE_URL>/auth/kakao/callback`을 Kakao Developers의 REST API 키 Redirect URI에 등록하고, Render에 `KAKAO_REST_API_KEY`를 반드시 설정해야 카카오 로그인 버튼이 활성화됩니다. Kakao REST API 키의 Client Secret 기능은 기본 활성화이므로, Kakao Developers에서 명시적으로 끄지 않았다면 발급된 값을 `KAKAO_CLIENT_SECRET`에도 설정합니다. Kakao 토큰·프로필 요청과 세션 저장이 실패하면 callback 연결을 끊지 않고 로그인 화면에 오류를 표시합니다.
 
 ### 개발용 인증
 

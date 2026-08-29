@@ -213,7 +213,7 @@ from .runtime import (
     UploadGrantStore,
 )
 from .cache import BoundedTTLCache
-from .integrations import OUTBOUND_HTTP_CLIENT, fetch_bytes, fetch_json, supabase_headers
+from .integrations import OUTBOUND_HTTP_CLIENT, fetch_bytes, fetch_json, supabase_headers, verify_google_id_token_credential
 from .shorts import (
     ShortsCatalogCollector,
     YoutubeCatalogError,
@@ -408,12 +408,12 @@ def social_provider_config(google_redirect_uri: str, kakao_redirect_uri: str) ->
     return {
         "google": {
             "name": "구글",
-            "enabled": bool(GOOGLE_CLIENT_ID),
-            "configured": bool(GOOGLE_CLIENT_ID),
+            "enabled": bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET),
+            "configured": bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET),
             "client_id": GOOGLE_CLIENT_ID,
-            "login_url": "/auth/google/credential",
+            "login_url": "/auth/google/start",
             "redirect_uri": google_redirect_uri,
-            "mode": "id_token",
+            "mode": "oauth",
         },
         "kakao": {
             "name": "카카오",

@@ -14,6 +14,46 @@ SPEC.loader.exec_module(deploy_preflight)
 
 
 class DeploymentPreflightTestCase(unittest.TestCase):
+    def test_environment_warns_when_kakao_login_would_be_disabled(self) -> None:
+        environment = {
+            "REQUIRE_SUPABASE": "true",
+            "PUBLIC_BASE_URL": "https://chat.example.com",
+            "SUPABASE_URL": "https://project.supabase.co",
+            "SUPABASE_SERVICE_ROLE_KEY": "service-role-key-long-enough",
+            "SOCIAL_DEMO_LOGIN_ENABLED": "false",
+            "LOCAL_SIGNUP_ENABLED": "false",
+            "PHONE_VERIFICATION_MODE": "prod",
+            "GOOGLE_CLIENT_ID": "google-client",
+            "GOOGLE_CLIENT_SECRET": "google-secret",
+        }
+        with mock.patch.dict(deploy_preflight.os.environ, environment, clear=True):
+            failures, warnings = deploy_preflight.validate_environment()
+
+        self.assertEqual(failures, [])
+        self.assertIn("KAKAO_REST_API_KEY is missing; Kakao login will be disabled.", warnings)
+
+    def test_environment_warns_when_kakao_client_secret_may_be_required(self) -> None:
+        environment = {
+            "REQUIRE_SUPABASE": "true",
+            "PUBLIC_BASE_URL": "https://chat.example.com",
+            "SUPABASE_URL": "https://project.supabase.co",
+            "SUPABASE_SERVICE_ROLE_KEY": "service-role-key-long-enough",
+            "SOCIAL_DEMO_LOGIN_ENABLED": "false",
+            "LOCAL_SIGNUP_ENABLED": "false",
+            "PHONE_VERIFICATION_MODE": "prod",
+            "GOOGLE_CLIENT_ID": "google-client",
+            "GOOGLE_CLIENT_SECRET": "google-secret",
+            "KAKAO_REST_API_KEY": "kakao-key",
+        }
+        with mock.patch.dict(deploy_preflight.os.environ, environment, clear=True):
+            failures, warnings = deploy_preflight.validate_environment()
+
+        self.assertEqual(failures, [])
+        self.assertIn(
+            "KAKAO_CLIENT_SECRET is missing; token issuance fails unless Client Secret is disabled in Kakao Developers.",
+            warnings,
+        )
+
     def test_remote_schema_integrity_accepts_a_migrated_database(self) -> None:
         responses = [
             [{"id": "account-1"}],

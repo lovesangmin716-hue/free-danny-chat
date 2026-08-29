@@ -35,7 +35,7 @@ SRC_DIR = REPO_ROOT / "src"
 FRONTEND_SOURCE_DIR = REPO_ROOT / "frontend" / "src"
 FRONTEND_APP_DIR = FRONTEND_SOURCE_DIR / "app"
 sys.path.insert(0, str(SRC_DIR))
-from colorless import observability, shorts
+from colorless import integrations, observability, shorts
 
 SERVER_PATH = SRC_DIR / "colorless" / "server.py"
 SPEC = importlib.util.spec_from_file_location("colorless._test_server", SERVER_PATH)
@@ -119,6 +119,32 @@ class StaticAppStructureTestCase(unittest.TestCase):
         production_entrypoint = server.ASSETS_DIR / "js" / "main.js"
         self.assertLess(production_entrypoint.stat().st_size, source_bytes)
         self.assertLess(len(server.ASSET_GZIP_CONTENT[production_entrypoint.resolve()]), production_entrypoint.stat().st_size)
+
+    def test_google_login_uses_server_oauth_instead_of_credential_post(self) -> None:
+        auth_js = (FRONTEND_APP_DIR / "auth.js").read_text(encoding="utf-8")
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+
+        self.assertIn('state.providers.google.login_url || "/auth/google/start"', auth_js)
+        self.assertNotIn('"/auth/google/credential"', auth_js)
+        self.assertNotIn("renderGoogleButton", auth_js)
+        self.assertNotIn('id="google-button-container"', index_html)
+
+    def test_google_provider_requires_complete_oauth_configuration(self) -> None:
+        with (
+            mock.patch.object(server, "GOOGLE_CLIENT_ID", "google-client"),
+            mock.patch.object(server, "GOOGLE_CLIENT_SECRET", "google-secret"),
+        ):
+            google = server.social_provider_config("https://chat.example.com/auth/google/callback", "")["google"]
+            self.assertTrue(google["enabled"])
+            self.assertEqual(google["login_url"], "/auth/google/start")
+            self.assertEqual(google["mode"], "oauth")
+
+        with (
+            mock.patch.object(server, "GOOGLE_CLIENT_ID", "google-client"),
+            mock.patch.object(server, "GOOGLE_CLIENT_SECRET", ""),
+        ):
+            google = server.social_provider_config("https://chat.example.com/auth/google/callback", "")["google"]
+            self.assertFalse(google["enabled"])
 
     def test_production_font_artifact_uses_one_preloaded_woff2(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -798,6 +824,40 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertTrue(all("new EventSource(" not in script for script in feature_scripts))
 
 
+class GoogleIdentityVerifierTestCase(unittest.TestCase):
+    def test_google_signing_certificates_are_cached_for_the_advertised_ttl(self) -> None:
+        response = mock.Mock()
+        response.is_error = False
+        response.status_code = 200
+        response.headers = {"Cache-Control": "public, max-age=3600"}
+        response.json.return_value = {"key-1": "certificate-1"}
+        client = mock.Mock()
+        client.request.return_value = response
+        verifier = integrations.GoogleIdTokenVerifier(client, clock=mock.Mock(return_value=100.0))
+
+        with (
+            mock.patch.object(integrations.google_auth_jwt, "decode_header", return_value={"kid": "key-1"}),
+            mock.patch.object(
+                integrations.google_auth_jwt,
+                "decode",
+                return_value={"sub": "google-user", "iss": "https://accounts.google.com"},
+            ) as decode,
+        ):
+            first = verifier.verify("signed-token", "client.apps.googleusercontent.com")
+            second = verifier.verify("signed-token", "client.apps.googleusercontent.com")
+
+        self.assertEqual(first, second)
+        self.assertEqual(client.request.call_count, 1)
+        self.assertEqual(decode.call_count, 2)
+        self.assertEqual(decode.call_args.kwargs["audience"], "client.apps.googleusercontent.com")
+        self.assertEqual(decode.call_args.kwargs["clock_skew_in_seconds"], 5)
+
+    def test_google_certificate_cache_ttl_is_bounded(self) -> None:
+        self.assertEqual(integrations.GoogleIdTokenVerifier.cache_ttl(""), 60)
+        self.assertEqual(integrations.GoogleIdTokenVerifier.cache_ttl("max-age=1"), 60)
+        self.assertEqual(integrations.GoogleIdTokenVerifier.cache_ttl("public, max-age=999999"), 86400)
+
+
 class AuthenticationHttpIntegrationTestCase(unittest.TestCase):
     def assert_oauth_state_is_browser_bound(self, provider: str) -> None:
         http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
@@ -896,8 +956,224 @@ class AuthenticationHttpIntegrationTestCase(unittest.TestCase):
     def test_google_oauth_state_is_browser_bound_and_single_use(self) -> None:
         self.assert_oauth_state_is_browser_bound("google")
 
+    def test_google_oauth_session_failure_redirects_instead_of_dropping_connection(self) -> None:
+        http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
+        server_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+        server_thread.start()
+        connection = http.client.HTTPConnection("127.0.0.1", http_server.server_address[1], timeout=5)
+        try:
+            with (
+                mock.patch.object(server, "GOOGLE_CLIENT_ID", "google-client"),
+                mock.patch.object(server, "GOOGLE_CLIENT_SECRET", "google-secret"),
+                mock.patch.object(server.ChatHandler, "request_google_token", return_value={"access_token": "mock-token"}),
+                mock.patch.object(
+                    server.ChatHandler,
+                    "request_google_user_profile",
+                    return_value={"sub": f"google-session-failure-{time.time_ns()}", "name": "Google Mock"},
+                ),
+                mock.patch.object(server.SESSIONS, "create", side_effect=TimeoutError("database timeout")),
+            ):
+                connection.request("GET", "/auth/google/start")
+                start_response = connection.getresponse()
+                start_response.read()
+                authorization_url = start_response.getheader("Location", "")
+                state = parse_qs(urlparse(authorization_url).query)["state"][0]
+                state_cookie = next(
+                    value.split(";", 1)[0]
+                    for key, value in start_response.getheaders()
+                    if key.lower() == "set-cookie"
+                )
+
+                connection.request(
+                    "GET",
+                    f"/auth/google/callback?{urlencode({'code': 'mock-code', 'state': state})}",
+                    headers={"Cookie": state_cookie},
+                )
+                callback_response = connection.getresponse()
+                callback_response.read()
+                self.assertEqual(callback_response.status, 302)
+                self.assertIn("auth_error=google_login_failed", callback_response.getheader("Location", ""))
+        finally:
+            connection.close()
+            http_server.shutdown()
+            http_server.server_close()
+            server_thread.join(timeout=5)
+
+    def test_google_identity_credential_creates_an_immediate_session(self) -> None:
+        google_sub = f"google-credential-{time.time_ns()}"
+        http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
+        server_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+        server_thread.start()
+        connection = http.client.HTTPConnection("127.0.0.1", http_server.server_address[1], timeout=5)
+        try:
+            with (
+                mock.patch.object(server, "GOOGLE_CLIENT_ID", "google-client.apps.googleusercontent.com"),
+                mock.patch.object(
+                    server.ChatHandler,
+                    "verify_google_id_token",
+                    return_value={"sub": google_sub, "name": "Google Credential User"},
+                ) as verify_token,
+            ):
+                body = json.dumps({"credential": "signed-google-id-token"}).encode("utf-8")
+                connection.request(
+                    "POST",
+                    "/auth/google/credential",
+                    body=body,
+                    headers={"Content-Type": "application/json", "Content-Length": str(len(body))},
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read())
+                session_cookie = response.getheader("Set-Cookie", "").split(";", 1)[0]
+
+                self.assertEqual(response.status, 200)
+                self.assertTrue(payload["authenticated"])
+                self.assertEqual(payload["user"]["display_name"], "Google Credential User")
+                self.assertTrue(session_cookie.startswith(f"{server.SESSION_COOKIE_NAME}="))
+                verify_token.assert_called_once_with("signed-google-id-token")
+
+                connection.request("GET", "/session", headers={"Cookie": session_cookie})
+                session_response = connection.getresponse()
+                session_payload = json.loads(session_response.read())
+                self.assertEqual(session_response.status, 200)
+                self.assertTrue(session_payload["authenticated"])
+                self.assertEqual(session_payload["user"]["id"], payload["user"]["id"])
+        finally:
+            connection.close()
+            http_server.shutdown()
+            http_server.server_close()
+            server_thread.join(timeout=5)
+
+    def test_google_identity_upstream_delay_returns_json_without_gateway_timeout(self) -> None:
+        http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
+        server_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+        server_thread.start()
+        connection = http.client.HTTPConnection("127.0.0.1", http_server.server_address[1], timeout=5)
+        try:
+            with (
+                mock.patch.object(server, "GOOGLE_CLIENT_ID", "google-client.apps.googleusercontent.com"),
+                mock.patch.object(
+                    server.ChatHandler,
+                    "verify_google_id_token",
+                    side_effect=ConnectionError("certificate timeout"),
+                ),
+            ):
+                body = json.dumps({"credential": "signed-google-id-token"}).encode("utf-8")
+                connection.request(
+                    "POST",
+                    "/auth/google/credential",
+                    body=body,
+                    headers={"Content-Type": "application/json", "Content-Length": str(len(body))},
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read())
+
+                self.assertEqual(response.status, 503)
+                self.assertIn("구글 인증 서버", payload["error"])
+        finally:
+            connection.close()
+            http_server.shutdown()
+            http_server.server_close()
+            server_thread.join(timeout=5)
+
+    def test_google_identity_session_write_failure_returns_json_service_unavailable(self) -> None:
+        http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
+        server_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+        server_thread.start()
+        connection = http.client.HTTPConnection("127.0.0.1", http_server.server_address[1], timeout=5)
+        try:
+            with (
+                mock.patch.object(server, "GOOGLE_CLIENT_ID", "google-client.apps.googleusercontent.com"),
+                mock.patch.object(
+                    server.ChatHandler,
+                    "verify_google_id_token",
+                    return_value={"sub": "session-write-user", "name": "Session Write User"},
+                ),
+                mock.patch.object(server.SESSIONS, "create", side_effect=TimeoutError("database timeout")),
+            ):
+                body = json.dumps({"credential": "signed-google-id-token"}).encode("utf-8")
+                connection.request(
+                    "POST",
+                    "/auth/google/credential",
+                    body=body,
+                    headers={"Content-Type": "application/json", "Content-Length": str(len(body))},
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read())
+
+                self.assertEqual(response.status, 503)
+                self.assertIn("로그인 정보", payload["error"])
+        finally:
+            connection.close()
+            http_server.shutdown()
+            http_server.server_close()
+            server_thread.join(timeout=5)
+
     def test_kakao_oauth_state_is_browser_bound_and_single_use(self) -> None:
         self.assert_oauth_state_is_browser_bound("kakao")
+
+    def test_kakao_oauth_failures_redirect_instead_of_dropping_connection(self) -> None:
+        for failure_stage in ("upstream", "session"):
+            with self.subTest(failure_stage=failure_stage):
+                http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
+                server_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+                server_thread.start()
+                connection = http.client.HTTPConnection("127.0.0.1", http_server.server_address[1], timeout=5)
+                patches = [
+                    mock.patch.object(server, "KAKAO_REST_API_KEY", "kakao-key"),
+                    mock.patch.object(
+                        server.ChatHandler,
+                        "request_kakao_token",
+                        return_value={"access_token": "mock-token"},
+                    ),
+                    mock.patch.object(
+                        server.ChatHandler,
+                        "request_kakao_user_profile",
+                        return_value={
+                            "id": f"kakao-failure-{failure_stage}-{time.time_ns()}",
+                            "kakao_account": {"profile": {"nickname": "Kakao Mock"}},
+                        },
+                    ),
+                ]
+                if failure_stage == "upstream":
+                    patches[1] = mock.patch.object(
+                        server.ChatHandler,
+                        "request_kakao_token",
+                        side_effect=ConnectionError("Kakao timeout"),
+                    )
+                else:
+                    patches.append(
+                        mock.patch.object(server.SESSIONS, "create", side_effect=TimeoutError("database timeout"))
+                    )
+
+                try:
+                    for patcher in patches:
+                        patcher.start()
+                    connection.request("GET", "/auth/kakao/start")
+                    start_response = connection.getresponse()
+                    start_response.read()
+                    state = parse_qs(urlparse(start_response.getheader("Location", "")).query)["state"][0]
+                    state_cookie = next(
+                        value.split(";", 1)[0]
+                        for key, value in start_response.getheaders()
+                        if key.lower() == "set-cookie"
+                    )
+
+                    connection.request(
+                        "GET",
+                        f"/auth/kakao/callback?{urlencode({'code': 'mock-code', 'state': state})}",
+                        headers={"Cookie": state_cookie},
+                    )
+                    callback_response = connection.getresponse()
+                    callback_response.read()
+                    self.assertEqual(callback_response.status, 302)
+                    self.assertIn("auth_error=kakao_login_failed", callback_response.getheader("Location", ""))
+                finally:
+                    for patcher in reversed(patches):
+                        patcher.stop()
+                    connection.close()
+                    http_server.shutdown()
+                    http_server.server_close()
+                    server_thread.join(timeout=5)
 
     def test_signup_page_is_served_separately_from_signup_api(self) -> None:
         http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
@@ -1228,6 +1504,7 @@ class AuthenticationHttpIntegrationTestCase(unittest.TestCase):
                     self.assertIn("default-src 'self'", csp)
                     self.assertIn("frame-ancestors 'none'", csp)
                     self.assertIn("https://accounts.google.com", csp)
+                    self.assertIn("style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style", csp)
                     self.assertIn("https://www.youtube-nocookie.com", csp)
                     self.assertNotIn("*", csp)
                     if path == "/auth/providers":
@@ -1955,6 +2232,35 @@ class AttachmentTransferIntegrationTestCase(unittest.TestCase):
 
 
 class AccountIdentityTestCase(unittest.TestCase):
+    def test_returning_social_login_skips_profile_writes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="colorless-social-login-") as temp_dir:
+            store = server.StateStore(Path(temp_dir) / "state.json")
+            try:
+                first = store.create_or_update_social_user(
+                    "google",
+                    "returning-google-user",
+                    nickname="Original Name",
+                    status_message="처음 로그인",
+                )
+                with (
+                    mock.patch.object(store.repository, "sync_account", wraps=store.repository.sync_account) as sync_account,
+                    mock.patch.object(store.repository, "sync_user", wraps=store.repository.sync_user) as sync_user,
+                ):
+                    returning = store.create_or_update_social_user(
+                        "google",
+                        "returning-google-user",
+                        nickname="Changed Google Name",
+                        status_message="다시 로그인",
+                    )
+
+                self.assertEqual(returning["id"], first["id"])
+                self.assertEqual(returning["display_name"], "Original Name")
+                self.assertEqual(returning["status_message"], "처음 로그인")
+                sync_account.assert_not_called()
+                sync_user.assert_not_called()
+            finally:
+                store.close()
+
     def test_account_owns_at_most_three_switchable_identities(self) -> None:
         with tempfile.TemporaryDirectory(prefix="colorless-identities-") as temp_dir:
             store = server.StateStore(Path(temp_dir) / "state.json")
