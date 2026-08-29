@@ -1243,6 +1243,48 @@ class AuthenticationHttpIntegrationTestCase(unittest.TestCase):
                 http_server.server_close()
                 server_thread.join(timeout=5)
 
+    def test_local_login_session_write_failure_returns_json_service_unavailable(self) -> None:
+        unique_suffix = str(time.time_ns())[-10:]
+        username = f"login{unique_suffix}"
+        password = "test-password"
+        user, error = server.STORE.create_local_user(
+            username,
+            f"login_{unique_suffix}",
+            password,
+            "",
+            f"010{unique_suffix[:8]}",
+            "20대",
+            "남성",
+        )
+        self.assertIsNone(error)
+        self.assertIsNotNone(user)
+
+        http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
+        server_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+        server_thread.start()
+        connection = http.client.HTTPConnection("127.0.0.1", http_server.server_address[1], timeout=5)
+        try:
+            body = json.dumps({"username": username, "password": password}).encode("utf-8")
+            with mock.patch.object(server.SESSIONS, "create", side_effect=TimeoutError("database timeout")):
+                connection.request(
+                    "POST",
+                    "/login",
+                    body=body,
+                    headers={"Content-Type": "application/json", "Content-Length": str(len(body))},
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read())
+
+            self.assertEqual(response.status, 503)
+            self.assertEqual(response.getheader("Retry-After"), "5")
+            self.assertIn("로그인 정보", payload["error"])
+            self.assertIsNone(response.getheader("Set-Cookie"))
+        finally:
+            connection.close()
+            http_server.shutdown()
+            http_server.server_close()
+            server_thread.join(timeout=5)
+
     def test_logout_body_does_not_corrupt_next_login_on_keep_alive_connection(self) -> None:
         unique_suffix = str(time.time_ns())[-10:]
         username = f"http{unique_suffix}"
