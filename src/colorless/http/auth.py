@@ -347,7 +347,15 @@ class AuthRoutesMixin:
             self.send_json({"error": "사용자 이름 또는 비밀번호가 올바르지 않습니다."}, self.context.HTTPStatus.UNAUTHORIZED)
             return
 
-        token = self.context.SESSIONS.create(user["username"])
+        try:
+            token = self.context.SESSIONS.create(user["username"])
+        except Exception:
+            self.send_json(
+                {"error": "로그인 정보를 저장하는 데 시간이 걸리고 있어요. 잠시 후 다시 시도해 주세요."},
+                self.context.HTTPStatus.SERVICE_UNAVAILABLE,
+                headers={"Retry-After": "5"},
+            )
+            return
         self.send_json(
             {"authenticated": True, "user": user},
             self.context.HTTPStatus.OK,
