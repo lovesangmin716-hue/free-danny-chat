@@ -122,10 +122,12 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
     def test_google_login_uses_server_oauth_instead_of_credential_post(self) -> None:
         auth_js = (FRONTEND_APP_DIR / "auth.js").read_text(encoding="utf-8")
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
 
         self.assertIn('state.providers.google.login_url || "/auth/google/start"', auth_js)
         self.assertNotIn('"/auth/google/credential"', auth_js)
         self.assertNotIn("renderGoogleButton", auth_js)
+        self.assertNotIn('id="google-button-container"', index_html)
 
     def test_google_provider_requires_complete_oauth_configuration(self) -> None:
         with (
@@ -1108,6 +1110,70 @@ class AuthenticationHttpIntegrationTestCase(unittest.TestCase):
 
     def test_kakao_oauth_state_is_browser_bound_and_single_use(self) -> None:
         self.assert_oauth_state_is_browser_bound("kakao")
+
+    def test_kakao_oauth_failures_redirect_instead_of_dropping_connection(self) -> None:
+        for failure_stage in ("upstream", "session"):
+            with self.subTest(failure_stage=failure_stage):
+                http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
+                server_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+                server_thread.start()
+                connection = http.client.HTTPConnection("127.0.0.1", http_server.server_address[1], timeout=5)
+                patches = [
+                    mock.patch.object(server, "KAKAO_REST_API_KEY", "kakao-key"),
+                    mock.patch.object(
+                        server.ChatHandler,
+                        "request_kakao_token",
+                        return_value={"access_token": "mock-token"},
+                    ),
+                    mock.patch.object(
+                        server.ChatHandler,
+                        "request_kakao_user_profile",
+                        return_value={
+                            "id": f"kakao-failure-{failure_stage}-{time.time_ns()}",
+                            "kakao_account": {"profile": {"nickname": "Kakao Mock"}},
+                        },
+                    ),
+                ]
+                if failure_stage == "upstream":
+                    patches[1] = mock.patch.object(
+                        server.ChatHandler,
+                        "request_kakao_token",
+                        side_effect=ConnectionError("Kakao timeout"),
+                    )
+                else:
+                    patches.append(
+                        mock.patch.object(server.SESSIONS, "create", side_effect=TimeoutError("database timeout"))
+                    )
+
+                try:
+                    for patcher in patches:
+                        patcher.start()
+                    connection.request("GET", "/auth/kakao/start")
+                    start_response = connection.getresponse()
+                    start_response.read()
+                    state = parse_qs(urlparse(start_response.getheader("Location", "")).query)["state"][0]
+                    state_cookie = next(
+                        value.split(";", 1)[0]
+                        for key, value in start_response.getheaders()
+                        if key.lower() == "set-cookie"
+                    )
+
+                    connection.request(
+                        "GET",
+                        f"/auth/kakao/callback?{urlencode({'code': 'mock-code', 'state': state})}",
+                        headers={"Cookie": state_cookie},
+                    )
+                    callback_response = connection.getresponse()
+                    callback_response.read()
+                    self.assertEqual(callback_response.status, 302)
+                    self.assertIn("auth_error=kakao_login_failed", callback_response.getheader("Location", ""))
+                finally:
+                    for patcher in reversed(patches):
+                        patcher.stop()
+                    connection.close()
+                    http_server.shutdown()
+                    http_server.server_close()
+                    server_thread.join(timeout=5)
 
     def test_signup_page_is_served_separately_from_signup_api(self) -> None:
         http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)

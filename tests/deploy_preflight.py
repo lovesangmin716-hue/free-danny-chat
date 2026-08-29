@@ -64,8 +64,10 @@ def validate_environment() -> tuple[list[str], list[str]]:
     require(os.getenv("SOCIAL_DEMO_LOGIN_ENABLED", "true").lower() == "false", "SOCIAL_DEMO_LOGIN_ENABLED must be false.", failures)
     require(os.getenv("LOCAL_SIGNUP_ENABLED", "true").lower() == "false", "LOCAL_SIGNUP_ENABLED must remain false until SMS delivery is configured.", failures)
     require(os.getenv("PHONE_VERIFICATION_MODE", "") == "prod", "PHONE_VERIFICATION_MODE must be prod.", failures)
-    if not (os.getenv("GOOGLE_CLIENT_ID", "").strip() or os.getenv("KAKAO_REST_API_KEY", "").strip()):
-        warnings.append("No OAuth provider is configured; only existing local accounts can log in.")
+    if not (os.getenv("GOOGLE_CLIENT_ID", "").strip() and os.getenv("GOOGLE_CLIENT_SECRET", "").strip()):
+        warnings.append("Google OAuth is incomplete; GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are both required.")
+    if not os.getenv("KAKAO_REST_API_KEY", "").strip():
+        warnings.append("KAKAO_REST_API_KEY is missing; Kakao login will be disabled.")
     if not os.getenv("YOUTUBE_API_KEY", "").strip():
         warnings.append("YOUTUBE_API_KEY is missing; Shorts will use fallback catalog behavior.")
     return failures, warnings

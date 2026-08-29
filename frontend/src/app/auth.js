@@ -27,10 +27,12 @@ async function loadProviders() {
     kakaoLoginButton.disabled = !kakaoEnabled;
     demoLoginButton.disabled = !demoEnabled;
 
-    if (googleEnabled) {
-      setProviderStatus("구글 로그인이 준비됐어요.", "success");
+    if (googleEnabled && kakaoEnabled) {
+      setProviderStatus("구글과 카카오 로그인이 준비됐어요.", "success");
+    } else if (googleEnabled) {
+      setProviderStatus("구글 로그인이 준비됐어요. 카카오는 앱 키 설정이 필요해요.");
     } else if (kakaoEnabled) {
-      setProviderStatus("카카오 로그인이 준비됐어요.", "success");
+      setProviderStatus("카카오 로그인이 준비됐어요. 구글은 앱 키 설정이 필요해요.");
     } else {
       setProviderStatus("구글/카카오 앱 키를 연결하면 SNS 로그인을 사용할 수 있어요.");
     }

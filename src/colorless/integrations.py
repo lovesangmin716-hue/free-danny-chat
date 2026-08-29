@@ -116,9 +116,16 @@ def fetch_json(
     method: str = "GET",
     headers: dict[str, str] | None = None,
     data: bytes | None = None,
+    timeout_seconds: float = 15.0,
 ) -> object:
     try:
-        response = OUTBOUND_HTTP_CLIENT.request(method, url, headers=headers, content=data, timeout=15.0)
+        response = OUTBOUND_HTTP_CLIENT.request(
+            method,
+            url,
+            headers=headers,
+            content=data,
+            timeout=timeout_seconds,
+        )
         if response.is_error:
             raise ValueError(response.text or f"HTTP {response.status_code}")
         return response.json() if response.content else {}

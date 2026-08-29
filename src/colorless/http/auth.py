@@ -208,11 +208,11 @@ class AuthRoutesMixin:
                 nickname=nickname,
                 status_message="카카오로 접속 중",
             )
+            token = self.context.SESSIONS.create(user["username"])
         except Exception:
             self.redirect_after_oauth("/?auth_error=kakao_login_failed")
             return
 
-        token = self.context.SESSIONS.create(user["username"])
         self.redirect_after_oauth("/", token)
 
     def request_google_token(self, code: str) -> dict:
@@ -228,6 +228,7 @@ class AuthRoutesMixin:
             method="POST",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             data=self.context.urlencode(payload).encode("utf-8"),
+            timeout_seconds=8.0,
         )
 
     def request_google_user_profile(self, access_token: str) -> dict:
@@ -235,6 +236,7 @@ class AuthRoutesMixin:
             "https://openidconnect.googleapis.com/v1/userinfo",
             method="GET",
             headers={"Authorization": f"Bearer {access_token}"},
+            timeout_seconds=8.0,
         )
 
     def verify_google_id_token(self, credential: str) -> dict:
@@ -255,6 +257,7 @@ class AuthRoutesMixin:
             method="POST",
             headers={"Content-Type": "application/x-www-form-urlencoded;charset=utf-8"},
             data=self.context.urlencode(payload).encode("utf-8"),
+            timeout_seconds=8.0,
         )
 
     def request_kakao_user_profile(self, access_token: str) -> dict:
@@ -262,6 +265,7 @@ class AuthRoutesMixin:
             "https://kapi.kakao.com/v2/user/me",
             method="GET",
             headers={"Authorization": f"Bearer {access_token}"},
+            timeout_seconds=8.0,
         )
 
     def demo_social_login(self) -> None:
