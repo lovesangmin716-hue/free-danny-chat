@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#ffffff" />
     <title>Colorless</title>
     <link rel="preload" href="assets/fonts/The%20Jamsil%203%20Regular.woff2?v=4e887c501a6c" as="font" type="font/woff2" crossorigin />
-    <script defer src="assets/js/main.js?v=a65346ac6960"></script>
+    <script defer src="assets/js/main.js?v=fd2de0031996"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -154,13 +154,6 @@
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         margin-top: 0;
-      }
-
-      .google-button-container { grid-column: 1 / -1; min-height: 48px; }
-
-      .google-button-container > div {
-        height: 48px !important;
-        width: 100% !important;
       }
 
       .provider-button.google, .provider-button.kakao, .provider-button.demo, .secondary-button {
@@ -857,7 +850,6 @@
           <p class="provider-copy">구글과 카카오 계정으로 로그인할 수 있어요.</p>
           <div class="provider-stack">
             <button type="button" class="provider-button google" id="google-login-button" aria-label="구글로 계속하기">구글로 계속하기</button>
-            <div class="google-button-container hidden" id="google-button-container"></div>
             <button type="button" class="provider-button kakao" id="kakao-login-button" aria-label="카카오로 계속하기">카카오로 계속하기</button>
             <button type="button" class="provider-button demo" id="demo-login-button" aria-label="개발용 SNS 체험 로그인">개발용 SNS 체험 로그인</button>
           </div>

@@ -364,7 +364,6 @@ const saveProfileButton = document.getElementById("save-profile-button");
 const loginForm = document.getElementById("login-form");
 const loginSubmitButton = document.getElementById("login-submit-button");
 const googleLoginButton = document.getElementById("google-login-button");
-const googleButtonContainer = document.getElementById("google-button-container");
 const kakaoLoginButton = document.getElementById("kakao-login-button");
 const demoLoginButton = document.getElementById("demo-login-button");
 const loginUsername = document.getElementById("login-username");
@@ -619,8 +618,6 @@ function setAuthRequestBusy(isBusy, message = "") {
   googleLoginButton.disabled = isBusy || !state.providers.google?.enabled;
   kakaoLoginButton.disabled = isBusy || !state.providers.kakao?.enabled;
   demoLoginButton.disabled = isBusy || !state.providers.demo?.enabled;
-  googleButtonContainer.style.pointerEvents = isBusy ? "none" : "";
-  googleButtonContainer.setAttribute("aria-busy", String(isBusy));
   if (message) setAuthStatus(message);
 }
 
@@ -856,7 +853,6 @@ export {
   friendList,
   friendsTab,
   getDisplayName,
-  googleButtonContainer,
   googleLoginButton,
   headerSearch,
   headerSearchInput,
