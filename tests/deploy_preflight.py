@@ -68,6 +68,8 @@ def validate_environment() -> tuple[list[str], list[str]]:
         warnings.append("Google OAuth is incomplete; GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are both required.")
     if not os.getenv("KAKAO_REST_API_KEY", "").strip():
         warnings.append("KAKAO_REST_API_KEY is missing; Kakao login will be disabled.")
+    elif not os.getenv("KAKAO_CLIENT_SECRET", "").strip():
+        warnings.append("KAKAO_CLIENT_SECRET is missing; token issuance fails unless Client Secret is disabled in Kakao Developers.")
     if not os.getenv("YOUTUBE_API_KEY", "").strip():
         warnings.append("YOUTUBE_API_KEY is missing; Shorts will use fallback catalog behavior.")
     return failures, warnings

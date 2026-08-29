@@ -158,7 +158,7 @@ YouTube 호출은 사용자 `/youtube/shorts` 요청에서 실행되지 않습�
 | 변수 | 설명 |
 | --- | --- |
 | `KAKAO_REST_API_KEY` | Kakao 앱의 REST API 키 |
-| `KAKAO_CLIENT_SECRET` | 선택 사항. 활성화한 경우에만 설정 |
+| `KAKAO_CLIENT_SECRET` | Kakao REST API 키의 Client Secret. Kakao Developers에서 기능을 끈 경우에만 생략 가능 |
 | `KAKAO_REDIRECT_URI` | 선택 사항. 기본값은 `<PUBLIC_BASE_URL>/auth/kakao/callback` |
 
 Kakao Developers에 다음 로컬 리디렉션 URI를 등록합니다.
@@ -167,7 +167,7 @@ Kakao Developers에 다음 로컬 리디렉션 URI를 등록합니다.
 http://localhost:8765/auth/kakao/callback
 ```
 
-운영 환경에서는 `<PUBLIC_BASE_URL>/auth/kakao/callback`을 Kakao Developers의 Redirect URI에 등록하고, Render에 `KAKAO_REST_API_KEY`를 반드시 설정해야 카카오 로그인 버튼이 활성화됩니다. Kakao Developers에서 Client Secret을 활성화했다면 동일한 값을 `KAKAO_CLIENT_SECRET`에도 설정합니다. Kakao 토큰·프로필 요청과 세션 저장이 실패하면 callback 연결을 끊지 않고 로그인 화면에 오류를 표시합니다.
+운영 환경에서는 `<PUBLIC_BASE_URL>/auth/kakao/callback`을 Kakao Developers의 REST API 키 Redirect URI에 등록하고, Render에 `KAKAO_REST_API_KEY`를 반드시 설정해야 카카오 로그인 버튼이 활성화됩니다. Kakao REST API 키의 Client Secret 기능은 기본 활성화이므로, Kakao Developers에서 명시적으로 끄지 않았다면 발급된 값을 `KAKAO_CLIENT_SECRET`에도 설정합니다. Kakao 토큰·프로필 요청과 세션 저장이 실패하면 callback 연결을 끊지 않고 로그인 화면에 오류를 표시합니다.
 
 ### 개발용 인증
 
