@@ -444,7 +444,10 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
         self.assertIn("authEpoch: 0", core_script)
         self.assertIn("function advanceAuthEpoch()", core_script)
-        self.assertIn("advanceAuthEpoch();\n  state.session = session;", core_script)
+        self.assertIn(
+            "advanceAuthEpoch();\n  httpClient.clearCache();\n  state.session = session;",
+            core_script,
+        )
         self.assertIn("advanceAuthEpoch();\n  setAuthRequestBusy(true, message);", core_script)
         self.assertIn("const authEpoch = state.authEpoch;", bootstrap_script)
         self.assertEqual(bootstrap_script.count("if (authEpoch !== state.authEpoch) return;"), 2)
@@ -543,7 +546,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
             self.assertIn("aria-label=", button.group(0))
         self.assertNotIn('shortShareSend.textContent = ">"', shorts_script)
 
-    def test_status_emoji_picker_is_mandatory_once_and_accepts_only_one_emoji(self) -> None:
+    def test_status_emoji_picker_is_optional_after_login_and_accepts_only_one_emoji(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         core_script = (FRONTEND_APP_DIR / "core.js").read_text(encoding="utf-8")
         app_script = (FRONTEND_APP_DIR / "app.js").read_text(encoding="utf-8")
@@ -554,8 +557,8 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
         start_app = re.search(r"async function startApp\(\) \{(.*?)\n\}", app_script, re.DOTALL)
         self.assertIsNotNone(start_app)
-        self.assertIn("if (!state.statusPromptShown && !savedStatusEmoji())", start_app.group(1))
-        self.assertIn("openStatusEmojiPicker(null)", start_app.group(1))
+        self.assertNotIn("openStatusEmojiPicker", start_app.group(1))
+        self.assertNotIn("statusPromptShown", core_script)
         self.assertIn('id="open-status-emoji-button"', index_html)
         self.assertIn('aria-labelledby="status-emoji-title"', index_html)
         self.assertIn('aria-describedby="status-emoji-description"', index_html)
@@ -586,6 +589,19 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertEqual(server.saved_activity_emoji("🇰🇷"), "🇰🇷")
         self.assertEqual(server.saved_activity_emoji("hello 😀"), "")
         self.assertEqual(server.saved_activity_emoji("😀😃"), "")
+
+    def test_login_form_prevents_mobile_username_rewriting_and_requires_credentials(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        username_input = re.search(r'<input(?=[^>]*id="login-username")[^>]*>', index_html)
+        password_input = re.search(r'<input(?=[^>]*id="login-password")[^>]*>', index_html)
+
+        self.assertIsNotNone(username_input)
+        self.assertIsNotNone(password_input)
+        self.assertIn('autocapitalize="none"', username_input.group(0))
+        self.assertIn('autocorrect="off"', username_input.group(0))
+        self.assertIn('spellcheck="false"', username_input.group(0))
+        self.assertIn("required", username_input.group(0))
+        self.assertIn("required", password_input.group(0))
 
     def test_mobile_header_keeps_title_on_one_line(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -998,7 +1014,6 @@ class AuthenticationHttpIntegrationTestCase(unittest.TestCase):
             http_server.shutdown()
             http_server.server_close()
             server_thread.join(timeout=5)
-
     def test_google_identity_credential_creates_an_immediate_session(self) -> None:
         google_sub = f"google-credential-{time.time_ns()}"
         http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
@@ -1866,6 +1881,35 @@ class AttachmentGrantContractTestCase(unittest.TestCase):
         )
         self.assertTrue(grants.owns("upload_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.pdf", "alice"))
 
+    def test_expired_upload_remains_queued_after_access_cleanup(self) -> None:
+        grants = server.UploadGrantStore(ttl_seconds=-1)
+        filename = "upload_cccccccccccccccccccccccccccccccc.pdf"
+        grants.create_pending(
+            filename,
+            "alice",
+            name="expired.pdf",
+            content_type="application/pdf",
+            size=10,
+        )
+
+        self.assertIsNone(grants.get(filename, "alice"))
+        self.assertEqual([grant["filename"] for grant in grants.pop_expired()], [filename])
+        self.assertEqual(grants.pop_expired(), [])
+
+    def test_failed_orphan_cleanup_is_retried(self) -> None:
+        grants = server.UploadGrantStore(ttl_seconds=-1)
+        filename = "upload_dddddddddddddddddddddddddddddddd.pdf"
+        grants.create(filename, "alice")
+
+        with (
+            mock.patch.object(server, "UPLOAD_GRANTS", grants),
+            mock.patch.object(server, "delete_upload_object", side_effect=[OSError("temporary"), None]) as delete,
+        ):
+            self.assertEqual(server.cleanup_expired_uploads(), 0)
+            self.assertEqual(server.cleanup_expired_uploads(), 1)
+
+        self.assertEqual(delete.call_count, 2)
+
     def test_supabase_signed_urls_are_object_scoped_and_service_key_is_not_returned(self) -> None:
         filename = "upload_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.pdf"
         with (
@@ -2030,6 +2074,22 @@ class AttachmentTransferIntegrationTestCase(unittest.TestCase):
         )
         self.assertEqual(status, 201, body)
         return json.loads(body.decode("utf-8"))["upload"]
+
+    def test_entity_page_etag_revalidation_returns_empty_304(self) -> None:
+        status, headers, body = self.request("GET", "/rooms?limit=30")
+        self.assertEqual(status, 200)
+        self.assertTrue(body)
+        etag = headers.get("ETag")
+        self.assertTrue(etag)
+
+        status, headers, body = self.request(
+            "GET",
+            "/rooms?limit=30",
+            headers={"If-None-Match": etag},
+        )
+        self.assertEqual(status, 304)
+        self.assertEqual(headers.get("ETag"), etag)
+        self.assertEqual(body, b"")
 
     def test_streamed_upload_is_verified_before_message_and_supports_ranges(self) -> None:
         payload = b"%PDF-1.7\n" + (b"streamed-attachment\n" * 4096)
@@ -2620,6 +2680,30 @@ class MultiInstanceConsistencyTestCase(unittest.TestCase):
                 broker_a.close()
                 broker_b.close()
 
+    def test_replay_batches_do_not_stop_at_first_500_events(self) -> None:
+        events = [
+            {"event_id": f"event-{revision}", "revision": revision}
+            for revision in range(1, 1002)
+        ]
+
+        class ReplayRepository:
+            @staticmethod
+            def events_for_user_after(username, after_sequence, *, limit=500):
+                del username
+                return [
+                    event for event in events if event["revision"] > after_sequence
+                ][:limit]
+
+        broker = object.__new__(server.DurableEventBroker)
+        broker.repository = ReplayRepository()
+        batches = list(broker.replay_batches("alice", 0, limit=500))
+
+        self.assertEqual([len(batch) for batch in batches], [500, 500, 1])
+        self.assertEqual(
+            [event["revision"] for batch in batches for event in batch],
+            list(range(1, 1002)),
+        )
+
     def test_publish_failure_is_retried_from_local_outbox(self) -> None:
         with tempfile.TemporaryDirectory(prefix="colorless-outbox-") as temp_dir:
             repository = server.NormalizedSqliteRepository(Path(temp_dir) / "shared.sqlite3")
@@ -2702,6 +2786,93 @@ class StateStoreTestCase(unittest.TestCase):
             with server.SUBSCRIBERS_LOCK:
                 server.SUBSCRIBERS.clear()
                 server.SUBSCRIBERS_BY_USERNAME.clear()
+
+    def test_room_page_batches_direct_peer_presence_lookup(self) -> None:
+        for index in range(8):
+            friend = self.store.create_or_update_social_user(
+                "demo", f"presence-page-{index}", nickname=f"presence{index}"
+            )
+            self.store.add_friend("alice", friend["id"])
+            room, _, error = self.store.create_or_get_direct_room("alice", friend["id"])
+            self.assertIsNone(error)
+            self.assertIsNotNone(room)
+
+        with mock.patch.object(
+            self.store.repository,
+            "presence_for_users",
+            wraps=self.store.repository.presence_for_users,
+        ) as presence_for_users:
+            page = self.store.get_rooms_page(self.alice, limit=20)
+
+        self.assertEqual(len(page["items"]), 9)
+        presence_for_users.assert_called_once()
+        self.assertEqual(len(presence_for_users.call_args.args[0]), 9)
+
+    def test_room_page_releases_state_lock_during_repository_reads(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        original = self.store.repository.latest_messages_for_rooms
+        result = []
+
+        def slow_latest_messages(room_ids: list[str]) -> dict[str, dict]:
+            started.set()
+            self.assertTrue(release.wait(2))
+            return original(room_ids)
+
+        with mock.patch.object(
+            self.store.repository,
+            "latest_messages_for_rooms",
+            side_effect=slow_latest_messages,
+        ):
+            worker = threading.Thread(
+                target=lambda: result.append(self.store.get_rooms_page(self.alice, limit=20)),
+                daemon=True,
+            )
+            worker.start()
+            self.assertTrue(started.wait(1))
+            acquired = self.store.lock.acquire(blocking=False)
+            if acquired:
+                self.store.lock.release()
+            release.set()
+            worker.join(timeout=3)
+
+        self.assertTrue(acquired)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result[0]["items"][0]["id"], self.room_id)
+
+    def test_message_page_releases_state_lock_during_repository_reads(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        original = self.store.repository.list_messages_with_sequences
+        result = []
+
+        def slow_messages(room_id: str, *, limit: int = 200, before: str = "") -> list[dict]:
+            started.set()
+            self.assertTrue(release.wait(2))
+            return original(room_id, limit=limit, before=before)
+
+        with mock.patch.object(
+            self.store.repository,
+            "list_messages_with_sequences",
+            side_effect=slow_messages,
+        ):
+            worker = threading.Thread(
+                target=lambda: result.append(
+                    self.store.get_messages_page(self.room_id, "alice", limit=30)
+                ),
+                daemon=True,
+            )
+            worker.start()
+            self.assertTrue(started.wait(1))
+            acquired = self.store.lock.acquire(blocking=False)
+            if acquired:
+                self.store.lock.release()
+            release.set()
+            worker.join(timeout=3)
+
+        self.assertTrue(acquired)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result[0]["items"], [])
 
     def test_full_sse_queue_drops_and_disconnects_slow_subscriber(self) -> None:
         slow_subscriber: queue.Queue = queue.Queue(maxsize=1)
@@ -3481,6 +3652,31 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertEqual(older["items"][0]["text"], "message-0")
         self.assertEqual(older["next_cursor"], "")
         self.assertEqual(self.store.state["messages"].get(self.room_id, []), [])
+
+    def test_normalized_message_history_is_not_pruned_at_page_limit(self) -> None:
+        for index in range(server.MAX_MESSAGES_PER_ROOM + 25):
+            self.store.add_message(self.room_id, "alice", f"retained-{index}")
+
+        retained = self.store.repository.list_messages(
+            self.room_id, limit=server.MAX_MESSAGES_PER_ROOM + 25
+        )
+        self.assertEqual(len(retained), server.MAX_MESSAGES_PER_ROOM + 25)
+        self.assertEqual(retained[0]["text"], "retained-0")
+        self.assertEqual(retained[-1]["text"], "retained-224")
+
+    def test_sync_requires_reset_when_cursor_predates_retained_events(self) -> None:
+        for index in range(100):
+            self.store.repository.publish_event(
+                {"type": "room_updated", "event_id": f"retained-event-{index}"},
+                {"alice"},
+                "retention-test",
+                retention=5,
+            )
+
+        sync = self.store.get_sync_page("alice", after_revision=1, limit=10)
+        self.assertTrue(sync["reset_required"])
+        self.assertEqual(sync["events"], [])
+        self.assertFalse(sync["has_more"])
 
     def test_message_pages_compute_read_state_without_loading_full_history(self) -> None:
         for index in range(80):

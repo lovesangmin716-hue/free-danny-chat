@@ -126,7 +126,6 @@ selectedProfileColor: "#000000",
 selectedProfilePalette: "default",
   customPalette: [],
   selectedStatusEmoji: "",
-  statusPromptShown: false,
   statusPickerTouched: false,
   statusPickerTimer: null,
   statusPickerOpener: null,
@@ -599,6 +598,7 @@ async function api(url, options = {}) {
 
 function rememberSession(session) {
   advanceAuthEpoch();
+  httpClient.clearCache();
   state.session = session;
   state.isGuest = false;
 }
@@ -630,6 +630,7 @@ function beginAuthRequest(message) {
 
 function showAuth(mode = "login") {
   advanceAuthEpoch();
+  httpClient.clearCache();
   if (state.eventSource) {
     state.eventSource.close();
     state.eventSource = null;
@@ -672,7 +673,6 @@ function showAuth(mode = "login") {
   ColorlessImageProcessing.cancel("room-image");
   state.roomImageProcessing = false;
   state.profileImagePreparing = false;
-  state.statusPromptShown = false;
   closeStatusEmojiPicker({ restoreFocus: false });
   setAuthRequestBusy(false);
   coreHooks.resetProfileImageCrop?.();

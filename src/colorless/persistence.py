@@ -647,6 +647,13 @@ class NormalizedSupabaseRepository:
         )
         return int(rows[0]["sequence"]) if rows else 0
 
+    def oldest_event_sequence(self) -> int:
+        rows = self.rows(
+            "realtime_events",
+            {"select": "sequence", "order": "sequence.asc", "limit": "1"},
+        )
+        return int(rows[0]["sequence"]) if rows else 0
+
     def list_events_after(self, sequence: int, *, limit: int = 500) -> list[tuple[dict, set[str]]]:
         rows = self.rows(
             "realtime_events",
@@ -1578,11 +1585,12 @@ class NormalizedSqliteRepository:
                     "UPDATE rooms SET updated_at=?, revision=?, data_json=? WHERE id=?",
                     (room_data["updated_at"], new_revision, self.encode(room_data), message["room_id"]),
                 )
-                database.execute(
-                    "DELETE FROM messages WHERE room_id=? AND id NOT IN ("
-                    "SELECT id FROM messages WHERE room_id=? ORDER BY rowid DESC LIMIT ?)",
-                    (message["room_id"], message["room_id"], keep),
-                )
+                if keep > 0:
+                    database.execute(
+                        "DELETE FROM messages WHERE room_id=? AND id NOT IN ("
+                        "SELECT id FROM messages WHERE room_id=? ORDER BY rowid DESC LIMIT ?)",
+                        (message["room_id"], message["room_id"], keep),
+                    )
             room["_revision"] = new_revision
             return True
         except sqlite3.IntegrityError:
@@ -1739,6 +1747,11 @@ class NormalizedSqliteRepository:
     def latest_event_sequence(self) -> int:
         with self.connection() as database:
             row = database.execute("SELECT COALESCE(MAX(sequence), 0) FROM realtime_events").fetchone()
+        return int(row[0])
+
+    def oldest_event_sequence(self) -> int:
+        with self.connection() as database:
+            row = database.execute("SELECT COALESCE(MIN(sequence), 0) FROM realtime_events").fetchone()
         return int(row[0])
 
     def list_events_after(self, sequence: int, *, limit: int = 500) -> list[tuple[dict, set[str]]]:

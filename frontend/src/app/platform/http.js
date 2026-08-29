@@ -12,20 +12,48 @@ export class HttpError extends Error {
   }
 
 export function createHttpClient({ onUnauthorized } = {}) {
+    const responseCache = new Map();
+    const responseCacheLimit = 64;
+
+    function cachedResponse(key) {
+      const cached = responseCache.get(key);
+      if (!cached) return null;
+      responseCache.delete(key);
+      responseCache.set(key, cached);
+      return cached;
+    }
+
+    function rememberResponse(key, value) {
+      responseCache.delete(key);
+      responseCache.set(key, value);
+      while (responseCache.size > responseCacheLimit) {
+        responseCache.delete(responseCache.keys().next().value);
+      }
+    }
+
+    function clearCache() {
+      responseCache.clear();
+    }
+
     async function request(url, options = {}) {
       const { headers: optionHeaders = {}, ...requestOptions } = options;
       const method = String(requestOptions.method || "GET").toUpperCase();
       const isJsonBody = typeof requestOptions.body === "string";
       const requestUrl = new URL(String(url), window.location.href);
       const isSameOrigin = requestUrl.origin === window.location.origin;
+      const headers = new Headers(optionHeaders);
+      if (isJsonBody && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+      const cacheKey = requestUrl.href;
+      const cacheableRequest = method === "GET" && isSameOrigin && !requestOptions.body;
+      const cached = cacheableRequest ? cachedResponse(cacheKey) : null;
+      if (cached && !headers.has("If-None-Match")) headers.set("If-None-Match", cached.etag);
       const response = await fetch(url, {
         credentials: "same-origin",
-        headers: {
-          ...(isJsonBody ? { "Content-Type": "application/json" } : {}),
-          ...optionHeaders,
-        },
+        headers,
         ...requestOptions,
       });
+
+      if (response.status === 304 && cached) return cached.payload;
 
       const contentType = response.headers.get("Content-Type") || "";
       let payload = null;
@@ -52,8 +80,18 @@ export function createHttpClient({ onUnauthorized } = {}) {
           payload,
         });
       }
+      const etag = response.headers.get("ETag") || "";
+      const cacheControl = response.headers.get("Cache-Control") || "";
+      if (
+        cacheableRequest
+        && etag
+        && contentType.includes("application/json")
+        && !cacheControl.toLowerCase().includes("no-store")
+      ) {
+        rememberResponse(cacheKey, { etag, payload });
+      }
       return payload;
     }
 
-    return Object.freeze({ request });
+    return Object.freeze({ clearCache, request });
 }

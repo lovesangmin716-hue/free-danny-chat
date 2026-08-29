@@ -110,13 +110,12 @@ class UploadGrantStore:
         self.lock = threading.Lock()
         self.ttl_seconds = ttl_seconds
         self.grants: dict[str, dict] = {}
+        self.cleanup_queue: deque[dict] = deque()
 
-    def _cleanup_locked(self, now: float) -> list[dict]:
-        expired: list[dict] = []
+    def _cleanup_locked(self, now: float) -> None:
         for filename, grant in list(self.grants.items()):
             if float(grant["expires_at"]) <= now:
-                expired.append(self.grants.pop(filename))
-        return expired
+                self.cleanup_queue.append(self.grants.pop(filename))
 
     def create(self, filename: str, username: str) -> None:
         now = time.monotonic()
@@ -219,7 +218,14 @@ class UploadGrantStore:
 
     def pop_expired(self) -> list[dict]:
         with self.lock:
-            return self._cleanup_locked(time.monotonic())
+            self._cleanup_locked(time.monotonic())
+            expired = list(self.cleanup_queue)
+            self.cleanup_queue.clear()
+            return expired
+
+    def requeue_cleanup(self, grant: dict) -> None:
+        with self.lock:
+            self.cleanup_queue.append(dict(grant))
 
     def owns(self, filename: str, username: str) -> bool:
         now = time.monotonic()

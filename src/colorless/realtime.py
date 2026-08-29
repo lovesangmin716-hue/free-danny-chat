@@ -66,6 +66,27 @@ class DurableEventBroker:
             SSE_METRICS.increment("events_replayed_total", len(events))
         return events
 
+    def replay_batches(self, username: str, after_sequence: int, *, limit: int = 500):
+        cursor = after_sequence
+        while True:
+            events = self.replay(username, cursor, limit=limit)
+            if not events:
+                return
+            yield events
+            next_cursor = max(int(event.get("revision", 0)) for event in events)
+            if next_cursor <= cursor:
+                return
+            cursor = next_cursor
+            if len(events) < limit:
+                return
+
+    def replay_expired(self, after_sequence: int) -> bool:
+        oldest_sequence = self.repository.oldest_event_sequence()
+        return bool(after_sequence and oldest_sequence and after_sequence < oldest_sequence - 1)
+
+    def latest_revision(self) -> int:
+        return int(self.repository.latest_event_sequence())
+
     def _retry_outbox(self) -> None:
         with self.lock:
             pending = list(self.outbox)

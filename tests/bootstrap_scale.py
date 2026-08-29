@@ -37,17 +37,20 @@ def percentile(values: list[float], quantile: float) -> float:
 
 
 def make_user(index: int, created_at: str) -> dict:
+    account_id = f"account_{index:08x}"
     return {
         "id": f"user_{index:08x}",
+        "account_id": account_id,
         "username": f"scale{index:04d}",
         "friend_code": f"scale_{index:04d}",
         "display_name": f"Scale User {index}",
         "status_message": "",
         "created_at": created_at,
-        "profile_pixels": ["#ffffff"] * 1024,
         "profile_pixels_blank": True,
+        "profile_art_version": 0,
         "profile_image_url": "",
         "profile_thumbnail_url": "",
+        "profile_image_version": 0,
         "custom_palette": [],
         "_revision": 1,
     }
@@ -56,6 +59,21 @@ def make_user(index: int, created_at: str) -> dict:
 def build_fixture(store, count: int) -> dict:
     started_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     users = [make_user(index, started_at.isoformat()) for index in range(count + 1)]
+    accounts = [
+        {
+            "id": user["account_id"],
+            "auth_provider": "local",
+            "provider_user_id": "",
+            "password_salt": "",
+            "password_hash": "",
+            "phone": "",
+            "age_group": "",
+            "gender": "",
+            "created_at": started_at.isoformat(),
+            "status": "active",
+        }
+        for user in users
+    ]
     owner = users[0]
     friendships = []
     rooms = []
@@ -71,6 +89,7 @@ def build_fixture(store, count: int) -> dict:
         rooms.append(room)
     with store.lock:
         store.state.update({
+            "accounts": accounts,
             "users": users,
             "friendships": friendships,
             "rooms": rooms,
@@ -153,6 +172,9 @@ def run(count: int, iterations: int) -> dict:
             return report
         finally:
             store.close()
+            server.SHORTS_COLLECTOR.close()
+            server.EVENT_BROKER.close()
+            server.STORE.close()
 
 
 def main() -> int:

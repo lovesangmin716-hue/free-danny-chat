@@ -411,9 +411,11 @@ begin
   where id=message_data->>'room_id'
   returning revision into new_revision;
   if new_revision is null then raise exception 'message room does not exist'; end if;
-  delete from messages where room_id = message_data->>'room_id' and sequence not in (
-    select sequence from messages where room_id = message_data->>'room_id' order by sequence desc limit greatest(1, keep_count)
-  );
+  if keep_count > 0 then
+    delete from messages where room_id = message_data->>'room_id' and sequence not in (
+      select sequence from messages where room_id = message_data->>'room_id' order by sequence desc limit keep_count
+    );
+  end if;
   return new_revision;
 end;
 $$;

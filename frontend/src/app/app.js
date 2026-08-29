@@ -1,6 +1,6 @@
 "use strict";
 
-import { CHAT_MESSAGE_PAGE_SIZE, appScreen, appTitle, chatList, chatsTab, createAvatar, createNewChatButton, directorySheet, friendCodeInput, friendList, friendsTab, getDisplayName, myDisplayName, myFriendCode, myProfileAvatar, myTab, myView, newChatGroupName, newChatGroupNameField, newChatMemberList, newChatSearch, newChatSheet, openDirectoryButton, openLoginButton, openNewChatButton, openStatusEmojiPicker, realtimeEvents, registerCoreHooks, renderStatusEmojiControl, requestAction, savedStatusEmoji, setAppStatus, shortShareBar, shortsSoundToggle, shortsTab, shortsView, showApp, state, syncAppStatusForActiveTab } from "./core.js";
+import { CHAT_MESSAGE_PAGE_SIZE, appScreen, appTitle, chatList, chatsTab, createAvatar, createNewChatButton, directorySheet, friendCodeInput, friendList, friendsTab, getDisplayName, myDisplayName, myFriendCode, myProfileAvatar, myTab, myView, newChatGroupName, newChatGroupNameField, newChatMemberList, newChatSearch, newChatSheet, openDirectoryButton, openLoginButton, openNewChatButton, realtimeEvents, registerCoreHooks, renderStatusEmojiControl, requestAction, setAppStatus, shortShareBar, shortsSoundToggle, shortsTab, shortsView, showApp, state, syncAppStatusForActiveTab } from "./core.js";
 import { connectEvents, rebuildPresenceIndexes, registerRealtimeHandlers, renderChats, renderDirectory, renderFriends, upsertMessengerRoom } from "./messenger.js";
 import { openChatRoom, rebuildMessageIndexes, renderChatRoom, retryDelay } from "./chat.js";
 import { captureChatVirtualAnchor, chatVirtualScrollTopForAnchor } from "./chat-virtual.js";
@@ -272,6 +272,10 @@ async function syncLiveState() {
         "messenger.sync",
         `/sync?after_revision=${encodeURIComponent(state.syncRevision)}&limit=200`,
       );
+      if (payload.reset_required) {
+        await loadMessenger();
+        break;
+      }
       for (const event of payload.events || []) {
         await realtimeEvents.dispatch(event, { isShortsView });
         recordSyncRevision(event.revision);
@@ -301,10 +305,6 @@ async function startApp() {
   try {
     registerRealtimeHandlers();
     await loadMessenger();
-    if (!state.statusPromptShown && !savedStatusEmoji()) {
-      state.statusPromptShown = true;
-      openStatusEmojiPicker(null);
-    }
     await syncLiveState();
     connectEvents();
     startLiveSync();
