@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#ffffff" />
     <title>Colorless</title>
     <link rel="preload" href="assets/fonts/The%20Jamsil%203%20Regular.woff2?v=4e887c501a6c" as="font" type="font/woff2" crossorigin />
-    <script defer src="assets/js/main.js?v=b16d3e5733d7"></script>
+    <script defer src="assets/js/main.js?v=9cee515c6cd0"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -347,6 +347,7 @@
       .ticket-field-wide { grid-column: 1 / -1; }
       .ticket-field label { font-size: 12px; font-weight: 700; }
       .ticket-field textarea { border: 1px solid var(--black); min-height: 96px; padding: 12px; resize: vertical; width: 100%; }
+      .ticket-field input[readonly] { background: var(--light-gray); color: var(--black); }
       .ticket-form-actions { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
       .ticket-status { color: var(--gray); font-size: 12px; margin: 0; min-height: 1.4em; }
       .app.ticket-transfer-active .chat-room:not(.hidden) { height: 100dvh; inset: 0; max-width: none; position: fixed; width: 100%; z-index: 230; }
@@ -1032,8 +1033,11 @@
                 <div class="ticket-form-grid">
                   <div class="ticket-field"><label for="ticket-game-date">경기 날짜</label><input type="date" id="ticket-game-date" required /></div>
                   <div class="ticket-field"><label for="ticket-stadium">야구장</label><select id="ticket-stadium" required></select></div>
-                  <div class="ticket-field ticket-field-wide"><label for="ticket-matchup">경기 정보 (선택)</label><input id="ticket-matchup" maxlength="60" placeholder="예: LG vs 두산" /></div>
-                  <div class="ticket-field ticket-field-wide"><label for="ticket-seat">좌석 정보</label><input id="ticket-seat" maxlength="120" placeholder="예: 1루 블루석 107블록 8열" required /></div>
+                  <div class="ticket-field"><label for="ticket-home-team">홈 팀</label><input id="ticket-home-team" readonly /></div>
+                  <div class="ticket-field"><label for="ticket-away-team">상대 팀</label><select id="ticket-away-team" required></select></div>
+                  <div class="ticket-field" id="ticket-seat-grade-select-field"><label for="ticket-seat-grade-select">좌석 등급</label><select id="ticket-seat-grade-select"></select></div>
+                  <div class="ticket-field hidden" id="ticket-seat-grade-input-field"><label for="ticket-seat-grade-input">좌석 등급</label><input id="ticket-seat-grade-input" maxlength="80" placeholder="좌석 등급을 입력해 주세요" /></div>
+                  <div class="ticket-field"><label for="ticket-seat-detail">구역·열</label><input id="ticket-seat-detail" maxlength="120" placeholder="예: 107블록 8열 12번" required /></div>
                   <div class="ticket-field"><label for="ticket-unit-price">1장 가격 (원)</label><input type="number" id="ticket-unit-price" min="0" max="10000000" step="1000" required /></div>
                   <div class="ticket-field"><label for="ticket-quantity">티켓 수량</label><input type="number" id="ticket-quantity" min="1" max="20" value="1" required /></div>
                   <div class="ticket-field ticket-field-wide"><label for="ticket-delivery-method">수령 방식</label><select id="ticket-delivery-method" required></select></div>

@@ -75,9 +75,84 @@ BASEBALL_STADIUMS = (
     "사직",
     "광주",
 )
+BASEBALL_TEAMS = (
+    "두산 베어스",
+    "한화 이글스",
+    "SSG 랜더스",
+    "기아 타이거즈",
+    "KT 위즈",
+    "NC 다이노스",
+    "LG 트윈스",
+    "롯데 자이언트",
+    "삼성 라이온즈",
+    "키움 히어로즈",
+)
+BASEBALL_HOME_TEAMS = {
+    "잠실(LG)": "LG 트윈스",
+    "잠실(두산)": "두산 베어스",
+    "고척": "키움 히어로즈",
+    "문학": "SSG 랜더스",
+    "대전": "한화 이글스",
+    "대구": "삼성 라이온즈",
+    "수원": "KT 위즈",
+    "창원": "NC 다이노스",
+    "사직": "롯데 자이언트",
+    "광주": "기아 타이거즈",
+}
+JAMSIL_SEAT_GRADES = (
+    "중앙석",
+    "중앙네이비석",
+    "1루 테이블석",
+    "3루 테이블석",
+    "1루 블루석",
+    "1루 오렌지석",
+    "1루 레드석",
+    "1루 네이비석",
+    "3루 블루석",
+    "3루 오렌지석",
+    "3루 레드석",
+    "3루 네이비석",
+    "1루 외야응원석",
+    "1루 외야그린석",
+    "3루 외야그린석",
+)
+MUNHAK_SEAT_GRADES = (
+    "라이브존",
+    "스카이박스",
+    "미니스카이박스",
+    "으쓱이존",
+    "노브랜드 테이블석",
+    "피코크 테이블석",
+    "1루 덕아웃 상단석",
+    "1루 내야필드석",
+    "1루 내야패밀리석",
+    "1루 외야필드석",
+    "1루 홈런커플존",
+    "3루 덕아웃상단석",
+    "3루 내야필드석",
+    "3루 내야패밀리존",
+    "3루 원정응원석",
+    "3루 외야필드석",
+    "외야패밀리존",
+    "바베큐존",
+    "몰리스 그린존",
+    "초가정자",
+    "중앙 4층 스카이뷰석",
+    "1루 4층 스카이뷰석",
+    "3루 4층 스카이뷰석",
+)
+BASEBALL_SEAT_GRADES = {
+    "잠실(LG)": JAMSIL_SEAT_GRADES,
+    "잠실(두산)": JAMSIL_SEAT_GRADES,
+    "문학": MUNHAK_SEAT_GRADES,
+}
 TICKET_DELIVERY_METHODS = ("모바일 티켓", "현장 전달", "택배", "기타")
 TICKET_ROOM_KINDS = {"ticket_listing", "ticket_deal"}
 KOREA_TIMEZONE = timezone(timedelta(hours=9))
+# Older deployed versions of colorless_insert_message interpret keep_count=0
+# as "keep one". This effectively-unbounded positive sentinel preserves full
+# history on both old and current database functions during rolling upgrades.
+DURABLE_MESSAGE_KEEP_COUNT = 1_000_000
 
 
 class StateStore:
@@ -1135,6 +1210,11 @@ class StateStore:
             baseball_identity = self._baseball_identity_for_account_locked(viewer.get("account_id", ""))
             context = {
                 "stadiums": list(BASEBALL_STADIUMS),
+                "teams": list(BASEBALL_TEAMS),
+                "home_teams": dict(BASEBALL_HOME_TEAMS),
+                "seat_grades": {
+                    stadium: list(grades) for stadium, grades in BASEBALL_SEAT_GRADES.items()
+                },
                 "delivery_methods": list(TICKET_DELIVERY_METHODS),
                 "baseball_identity": self._user_public(baseball_identity) if baseball_identity else None,
                 "active_identity_matches": bool(baseball_identity and baseball_identity["id"] == viewer["id"]),
@@ -1178,8 +1258,9 @@ class StateStore:
         *,
         game_date: str,
         stadium: str,
-        matchup: str,
-        seat: str,
+        away_team: str,
+        seat_grade: str,
+        seat_detail: str,
         unit_price: int,
         quantity: int,
         delivery_method: str,
@@ -1193,14 +1274,23 @@ class StateStore:
         if game_day < today or game_day > today + timedelta(days=370):
             return None, "경기 날짜는 오늘부터 1년 이내로 입력해 주세요."
         normalized_stadium = stadium.strip()
-        normalized_matchup = matchup.strip()[:60]
-        normalized_seat = seat.strip()[:120]
+        normalized_away_team = away_team.strip()
+        normalized_seat_grade = seat_grade.strip()[:80]
+        normalized_seat_detail = seat_detail.strip()[:120]
         normalized_delivery = delivery_method.strip()
         normalized_description = description.strip()[:500]
         if normalized_stadium not in BASEBALL_STADIUMS:
             return None, "목록에 있는 야구장을 선택해 주세요."
-        if not normalized_seat:
-            return None, "좌석 정보를 입력해 주세요."
+        home_team = BASEBALL_HOME_TEAMS[normalized_stadium]
+        if normalized_away_team not in BASEBALL_TEAMS or normalized_away_team == home_team:
+            return None, "상대 팀을 올바르게 선택해 주세요."
+        configured_grades = BASEBALL_SEAT_GRADES.get(normalized_stadium)
+        if not normalized_seat_grade:
+            return None, "좌석 등급을 입력해 주세요."
+        if configured_grades and normalized_seat_grade not in configured_grades:
+            return None, "선택한 야구장의 좌석 등급을 목록에서 선택해 주세요."
+        if not normalized_seat_detail:
+            return None, "좌석 구역과 열 정보를 입력해 주세요."
         if normalized_delivery not in TICKET_DELIVERY_METHODS:
             return None, "수령 방식을 선택해 주세요."
         if not 0 <= unit_price <= 10_000_000:
@@ -1213,7 +1303,9 @@ class StateStore:
             if seller is None or seller.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND:
                 return None, "선택한 야구 티켓 전용 ID로 전환해 주세요."
             created_at = utc_now_iso()
-            room_name = f"{normalized_stadium} · {game_day.strftime('%m/%d')} · {normalized_seat}"[:80]
+            matchup = f"{home_team} vs {normalized_away_team}"
+            seat = f"{normalized_seat_grade} · {normalized_seat_detail}"
+            room_name = f"{normalized_stadium} · {game_day.strftime('%m/%d')} · {normalized_seat_grade}"[:80]
             room = self._new_room(new_id("room"), room_name, normalized_description, username, created_at)
             room["kind"] = "ticket_listing"
             room["is_public"] = True
@@ -1223,8 +1315,12 @@ class StateStore:
                 "seller_id": seller["id"],
                 "game_date": game_day.isoformat(),
                 "stadium": normalized_stadium,
-                "matchup": normalized_matchup,
-                "seat": normalized_seat,
+                "home_team": home_team,
+                "away_team": normalized_away_team,
+                "matchup": matchup,
+                "seat_grade": normalized_seat_grade,
+                "seat_detail": normalized_seat_detail,
+                "seat": seat,
                 "unit_price": unit_price,
                 "quantity": quantity,
                 "remaining_quantity": quantity,
@@ -1303,7 +1399,11 @@ class StateStore:
                 "buyer_id": buyer["id"],
                 "game_date": listing_ticket.get("game_date", ""),
                 "stadium": listing_ticket.get("stadium", ""),
+                "home_team": listing_ticket.get("home_team", ""),
+                "away_team": listing_ticket.get("away_team", ""),
                 "matchup": listing_ticket.get("matchup", ""),
+                "seat_grade": listing_ticket.get("seat_grade", ""),
+                "seat_detail": listing_ticket.get("seat_detail", ""),
                 "seat": listing_ticket.get("seat", ""),
                 "unit_price": int(listing_ticket.get("unit_price", 0)),
                 "quantity": quantity,
@@ -2945,7 +3045,9 @@ class StateStore:
             if self.repository is not None:
                 # Normalized storage keeps the complete durable history. The
                 # in-process list above is only a bounded compatibility cache.
-                if not self.repository.insert_message(message, user["id"], room, 0):
+                if not self.repository.insert_message(
+                    message, user["id"], room, DURABLE_MESSAGE_KEEP_COUNT
+                ):
                     room_messages.pop()
                     if ticket_participant_added:
                         room["participant_ids"].remove(user["id"])

@@ -2370,8 +2370,9 @@ class AccountIdentityTestCase(unittest.TestCase):
                     seller["username"],
                     game_date=game_date,
                     stadium="잠실(LG)",
-                    matchup="LG vs 두산",
-                    seat="1루 107블록 8열",
+                    away_team="두산 베어스",
+                    seat_grade="1루 블루석",
+                    seat_detail="107블록 8열",
                     unit_price=35000,
                     quantity=3,
                     delivery_method="모바일 티켓",
@@ -2381,12 +2382,22 @@ class AccountIdentityTestCase(unittest.TestCase):
                 assert listing is not None
                 self.assertEqual(listing["remaining_quantity"], 3)
                 self.assertEqual(listing["room"]["kind"], "ticket_listing")
+                self.assertEqual(listing["home_team"], "LG 트윈스")
+                self.assertEqual(listing["away_team"], "두산 베어스")
+                self.assertEqual(listing["seat_grade"], "1루 블루석")
 
-                message_result = store.add_message(listing["id"], buyer["username"], "2장 구매하고 싶어요.")
-                self.assertIsNotNone(message_result)
+                for text in ("A", "B", "C"):
+                    message_result = store.add_message(listing["id"], buyer["username"], text)
+                    self.assertIsNotNone(message_result)
+                ticket_messages = store.get_messages(listing["id"], buyer["username"])
+                assert ticket_messages is not None
+                self.assertEqual([message["text"] for message in ticket_messages], ["A", "B", "C"])
                 seller_dashboard = store.get_ticket_dashboard(seller["username"])
                 assert seller_dashboard is not None
                 self.assertEqual(seller_dashboard["selling"][0]["commenters"][0]["id"], buyer["id"])
+                self.assertEqual(seller_dashboard["home_teams"]["대전"], "한화 이글스")
+                self.assertIn("중앙네이비석", seller_dashboard["seat_grades"]["잠실(LG)"])
+                self.assertIn("으쓱이존", seller_dashboard["seat_grades"]["문학"])
 
                 deal, created, error = store.open_ticket_deal(
                     seller["username"], listing["id"], buyer["id"], 2
@@ -3788,6 +3799,17 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertEqual(len(retained), server.MAX_MESSAGES_PER_ROOM + 25)
         self.assertEqual(retained[0]["text"], "retained-0")
         self.assertEqual(retained[-1]["text"], "retained-224")
+
+    def test_message_insert_is_compatible_with_legacy_supabase_keep_semantics(self) -> None:
+        with mock.patch.object(
+            self.store.repository,
+            "insert_message",
+            wraps=self.store.repository.insert_message,
+        ) as insert_message:
+            self.store.add_message(self.room_id, "alice", "legacy-rpc-compatible")
+
+        keep_count = insert_message.call_args.args[3]
+        self.assertGreater(keep_count, server.MAX_MESSAGES_PER_ROOM)
 
     def test_sync_requires_reset_when_cursor_predates_retained_events(self) -> None:
         for index in range(100):

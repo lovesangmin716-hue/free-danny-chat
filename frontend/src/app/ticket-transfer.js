@@ -22,8 +22,13 @@ const submitFormButton = document.getElementById("submit-ticket-form-button");
 const formStatus = document.getElementById("ticket-form-status");
 const gameDateInput = document.getElementById("ticket-game-date");
 const stadiumSelect = document.getElementById("ticket-stadium");
-const matchupInput = document.getElementById("ticket-matchup");
-const seatInput = document.getElementById("ticket-seat");
+const homeTeamInput = document.getElementById("ticket-home-team");
+const awayTeamSelect = document.getElementById("ticket-away-team");
+const seatGradeSelectField = document.getElementById("ticket-seat-grade-select-field");
+const seatGradeSelect = document.getElementById("ticket-seat-grade-select");
+const seatGradeInputField = document.getElementById("ticket-seat-grade-input-field");
+const seatGradeInput = document.getElementById("ticket-seat-grade-input");
+const seatDetailInput = document.getElementById("ticket-seat-detail");
 const unitPriceInput = document.getElementById("ticket-unit-price");
 const quantityInput = document.getElementById("ticket-quantity");
 const deliverySelect = document.getElementById("ticket-delivery-method");
@@ -78,9 +83,13 @@ function ticketCard(ticket, { selling = false } = {}) {
 
   const meta = document.createElement("div");
   meta.className = "ticket-card-meta";
-  const matchup = ticket.matchup ? `${ticket.matchup} · ` : "";
+  const matchup = ticket.matchup || [ticket.home_team, ticket.away_team].filter(Boolean).join(" vs ");
+  const seat = ticket.seat_grade
+    ? `${ticket.seat_grade} · ${ticket.seat_detail || "구역·열 정보 없음"}`
+    : ticket.seat;
   meta.append(
-    Object.assign(document.createElement("span"), { textContent: `${matchup}${ticket.seat}` }),
+    Object.assign(document.createElement("span"), { textContent: matchup || "경기 정보 없음" }),
+    Object.assign(document.createElement("span"), { textContent: seat || "좌석 정보 없음" }),
     Object.assign(document.createElement("span"), { textContent: `${ticket.delivery_method} · 판매자 ${getDisplayName(ticket.seller || {})}` }),
     Object.assign(document.createElement("span"), { textContent: `경기일 +7일까지 대화와 거래 기록이 유지됩니다.` }),
   );
@@ -141,8 +150,13 @@ function dealCard(deal) {
   const counterpart = deal.role === "seller" ? deal.buyer : deal.seller;
   const meta = document.createElement("div");
   meta.className = "ticket-card-meta";
+  const matchup = deal.matchup || [deal.home_team, deal.away_team].filter(Boolean).join(" vs ");
+  const seat = deal.seat_grade
+    ? `${deal.seat_grade} · ${deal.seat_detail || "구역·열 정보 없음"}`
+    : deal.seat;
   meta.append(
-    Object.assign(document.createElement("span"), { textContent: `${deal.seat} · ${deal.quantity}장` }),
+    Object.assign(document.createElement("span"), { textContent: matchup || "경기 정보 없음" }),
+    Object.assign(document.createElement("span"), { textContent: `${seat || "좌석 정보 없음"} · ${deal.quantity}장` }),
     Object.assign(document.createElement("span"), { textContent: `${deal.role === "seller" ? "구매자" : "판매자"} ${getDisplayName(counterpart || {})} (@${counterpart?.username || "-"})` }),
     Object.assign(document.createElement("span"), { textContent: `${deal.delivery_method} · 총 ${won.format(Number(deal.unit_price || 0) * Number(deal.quantity || 0))}원` }),
   );
@@ -156,10 +170,28 @@ function dealCard(deal) {
   return card;
 }
 
-function populateSelect(select, values) {
+function populateSelect(select, values, selectedValue = select.value) {
   select.replaceChildren(...values.map((value) => Object.assign(document.createElement("option"), {
     value, textContent: value,
   })));
+  if (values.includes(selectedValue)) select.value = selectedValue;
+}
+
+function syncStadiumFields() {
+  const dashboard = ticketState.dashboard;
+  if (!dashboard) return;
+  const stadium = stadiumSelect.value;
+  const homeTeam = dashboard.home_teams?.[stadium] || "";
+  homeTeamInput.value = homeTeam;
+  populateSelect(awayTeamSelect, (dashboard.teams || []).filter((team) => team !== homeTeam));
+
+  const grades = dashboard.seat_grades?.[stadium] || [];
+  const hasConfiguredGrades = grades.length > 0;
+  seatGradeSelectField.classList.toggle("hidden", !hasConfiguredGrades);
+  seatGradeInputField.classList.toggle("hidden", hasConfiguredGrades);
+  seatGradeSelect.required = hasConfiguredGrades;
+  seatGradeInput.required = !hasConfiguredGrades;
+  if (hasConfiguredGrades) populateSelect(seatGradeSelect, grades);
 }
 
 function renderDashboard() {
@@ -191,6 +223,7 @@ function renderDashboard() {
 
   populateSelect(stadiumSelect, dashboard.stadiums || []);
   populateSelect(deliverySelect, dashboard.delivery_methods || []);
+  syncStadiumFields();
   listingsNode.replaceChildren(...(dashboard.listings?.length
     ? dashboard.listings.map((ticket) => ticketCard(ticket))
     : [emptyCopy("현재 양도 중인 티켓이 없습니다.")]));
@@ -283,8 +316,11 @@ async function submitListing(event) {
       body: JSON.stringify({
         gameDate: gameDateInput.value,
         stadium: stadiumSelect.value,
-        matchup: matchupInput.value.trim(),
-        seat: seatInput.value.trim(),
+        awayTeam: awayTeamSelect.value,
+        seatGrade: seatGradeSelectField.classList.contains("hidden")
+          ? seatGradeInput.value.trim()
+          : seatGradeSelect.value,
+        seatDetail: seatDetailInput.value.trim(),
         unitPrice: Number(unitPriceInput.value),
         quantity: Number(quantityInput.value),
         deliveryMethod: deliverySelect.value,
@@ -294,6 +330,7 @@ async function submitListing(event) {
     listingForm.reset();
     gameDateInput.value = localIsoDate();
     quantityInput.value = "1";
+    syncStadiumFields();
     listingForm.classList.add("hidden");
     formStatus.textContent = "";
     await loadTicketDashboard();
@@ -342,9 +379,13 @@ openButton?.addEventListener("click", openTicketTransfer);
 closeButton?.addEventListener("click", closeTicketTransfer);
 refreshButton?.addEventListener("click", () => void loadTicketDashboard());
 identityButton?.addEventListener("click", () => void designateOrSwitchIdentity());
-openFormButton?.addEventListener("click", () => listingForm.classList.remove("hidden"));
+openFormButton?.addEventListener("click", () => {
+  syncStadiumFields();
+  listingForm.classList.remove("hidden");
+});
 cancelFormButton?.addEventListener("click", () => listingForm.classList.add("hidden"));
 listingForm?.addEventListener("submit", (event) => void submitListing(event));
+stadiumSelect?.addEventListener("change", syncStadiumFields);
 screen?.querySelectorAll("[data-ticket-tab]").forEach((button) => button.addEventListener("click", () => setTicketTab(button.dataset.ticketTab)));
 
 export { closeTicketTransfer, loadTicketDashboard, openTicketTransfer };
