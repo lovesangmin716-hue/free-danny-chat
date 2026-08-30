@@ -982,6 +982,36 @@ class ChatHandler(
                 return
             self.designate_ticket_identity(user)
             return
+        if path == "/tickets/agreement":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.sign_ticket_agreement(user)
+            return
+        if path == "/tickets/reports":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.report_ticket_listing(user)
+            return
+        if path == "/tickets/verification":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.request_ticket_verification(user)
+            return
+        if path == "/tickets/admin-action":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.update_ticket_moderation(user)
+            return
+        if path == "/tickets/admin-chat":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.open_ticket_admin_chat(user)
+            return
         if path == "/tickets":
             user = self.require_auth_record()
             if user is None:

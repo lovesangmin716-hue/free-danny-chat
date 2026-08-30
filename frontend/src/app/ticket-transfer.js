@@ -29,6 +29,7 @@ const seatGradeSelect = document.getElementById("ticket-seat-grade-select");
 const seatGradeInputField = document.getElementById("ticket-seat-grade-input-field");
 const seatGradeInput = document.getElementById("ticket-seat-grade-input");
 const seatDetailInput = document.getElementById("ticket-seat-detail");
+const purchasePriceInput = document.getElementById("ticket-purchase-price");
 const unitPriceInput = document.getElementById("ticket-unit-price");
 const quantityInput = document.getElementById("ticket-quantity");
 const deliverySelect = document.getElementById("ticket-delivery-method");
@@ -36,8 +37,28 @@ const descriptionInput = document.getElementById("ticket-description");
 const listingsNode = document.getElementById("ticket-listings");
 const sellingNode = document.getElementById("ticket-selling");
 const dealsNode = document.getElementById("ticket-deals");
+const accessPanel = document.getElementById("ticket-access-panel");
+const accessTitle = document.getElementById("ticket-access-title");
+const accessCopy = document.getElementById("ticket-access-copy");
+const accessActions = document.getElementById("ticket-access-actions");
+const moderationTab = document.getElementById("ticket-moderation-tab");
+const moderationNode = document.getElementById("ticket-moderation");
+const agreementModal = document.getElementById("ticket-agreement-modal");
+const agreementForm = document.getElementById("ticket-agreement-form");
+const agreementSignature = document.getElementById("ticket-agreement-signature");
+const agreementSubmit = document.getElementById("submit-ticket-agreement-button");
+const agreementStatus = document.getElementById("ticket-agreement-status");
+const closeAgreementButton = document.getElementById("close-ticket-agreement-button");
+const reportModal = document.getElementById("ticket-report-modal");
+const reportForm = document.getElementById("ticket-report-form");
+const reportReason = document.getElementById("ticket-report-reason");
+const reportDescription = document.getElementById("ticket-report-description");
+const reportPriceNotice = document.getElementById("ticket-report-price-notice");
+const reportSubmit = document.getElementById("submit-ticket-report-button");
+const reportStatus = document.getElementById("ticket-report-status");
+const closeReportButton = document.getElementById("close-ticket-report-button");
 
-const ticketState = { dashboard: null, activeTab: "listings", loading: false, timer: null };
+const ticketState = { dashboard: null, activeTab: "listings", loading: false, timer: null, reportListingId: "" };
 const won = new Intl.NumberFormat("ko-KR");
 
 function localIsoDate(date = new Date()) {
@@ -69,6 +90,22 @@ function actionButton(label, action, className = "secondary-button") {
   return button;
 }
 
+function verifiedBadge(user) {
+  if (!user?.ticket_verified) return null;
+  const badge = document.createElement("span");
+  badge.className = "ticket-verified";
+  badge.textContent = "✓";
+  badge.title = "@itsyou가 검증한 티켓 계정";
+  badge.setAttribute("aria-label", "검증된 티켓 계정");
+  return badge;
+}
+
+function appendUserName(node, user, { handle = false } = {}) {
+  node.append(document.createTextNode(`${getDisplayName(user || {})}${handle ? ` (@${user?.username || "-"})` : ""}`));
+  const badge = verifiedBadge(user);
+  if (badge) node.appendChild(badge);
+}
+
 function ticketCard(ticket, { selling = false } = {}) {
   const card = document.createElement("article");
   card.className = "ticket-card";
@@ -78,7 +115,9 @@ function ticketCard(ticket, { selling = false } = {}) {
   title.textContent = `${displayDate(ticket.game_date)} · ${ticket.stadium}`;
   const badge = document.createElement("span");
   badge.className = "ticket-badge";
-  badge.textContent = ticket.status === "sold_out" ? "양도 완료" : `${ticket.remaining_quantity}/${ticket.quantity}장`;
+  badge.textContent = ticket.status === "sold_out"
+    ? "양도 완료"
+    : ticket.status === "suspended" ? "판매 정지" : `${ticket.remaining_quantity}/${ticket.quantity}장`;
   heading.append(title, badge);
 
   const meta = document.createElement("div");
@@ -87,15 +126,19 @@ function ticketCard(ticket, { selling = false } = {}) {
   const seat = ticket.seat_grade
     ? `${ticket.seat_grade} · ${ticket.seat_detail || "구역·열 정보 없음"}`
     : ticket.seat;
+  const sellerLine = document.createElement("span");
+  sellerLine.append(document.createTextNode(`${ticket.delivery_method} · 판매자 `));
+  appendUserName(sellerLine, ticket.seller || {});
   meta.append(
     Object.assign(document.createElement("span"), { textContent: matchup || "경기 정보 없음" }),
     Object.assign(document.createElement("span"), { textContent: seat || "좌석 정보 없음" }),
-    Object.assign(document.createElement("span"), { textContent: `${ticket.delivery_method} · 판매자 ${getDisplayName(ticket.seller || {})}` }),
+    sellerLine,
     Object.assign(document.createElement("span"), { textContent: `경기일 +7일까지 대화와 거래 기록이 유지됩니다.` }),
   );
   const price = document.createElement("div");
   price.className = "ticket-card-price";
-  price.textContent = `1장 ${won.format(Number(ticket.unit_price || 0))}원`;
+  const purchasePrice = Number(ticket.purchase_price ?? ticket.unit_price ?? 0);
+  price.textContent = `판매가 ${won.format(Number(ticket.unit_price || 0))}원 · 구매가 ${won.format(purchasePrice)}원`;
   card.append(heading, meta, price);
   if (ticket.description) {
     const description = document.createElement("p");
@@ -106,6 +149,9 @@ function ticketCard(ticket, { selling = false } = {}) {
   const actions = document.createElement("div");
   actions.className = "ticket-card-actions";
   actions.appendChild(actionButton(selling ? "오픈채팅 보기" : "오픈채팅 참여", () => openTicketRoom(ticket.room)));
+  if (!selling && ticket.seller?.id !== state.session?.user?.id) {
+    actions.appendChild(actionButton("신고하기", () => openReportModal(ticket), "secondary-button"));
+  }
   card.appendChild(actions);
 
   if (selling) {
@@ -119,7 +165,7 @@ function ticketCard(ticket, { selling = false } = {}) {
       const row = document.createElement("div");
       row.className = "ticket-commenter";
       const name = document.createElement("span");
-      name.textContent = `${getDisplayName(buyer)} (@${buyer.username})`;
+      appendUserName(name, buyer, { handle: true });
       const quantity = document.createElement("input");
       quantity.type = "number";
       quantity.min = "1";
@@ -154,10 +200,13 @@ function dealCard(deal) {
   const seat = deal.seat_grade
     ? `${deal.seat_grade} · ${deal.seat_detail || "구역·열 정보 없음"}`
     : deal.seat;
+  const counterpartLine = document.createElement("span");
+  counterpartLine.append(document.createTextNode(`${deal.role === "seller" ? "구매자" : "판매자"} `));
+  appendUserName(counterpartLine, counterpart || {}, { handle: true });
   meta.append(
     Object.assign(document.createElement("span"), { textContent: matchup || "경기 정보 없음" }),
     Object.assign(document.createElement("span"), { textContent: `${seat || "좌석 정보 없음"} · ${deal.quantity}장` }),
-    Object.assign(document.createElement("span"), { textContent: `${deal.role === "seller" ? "구매자" : "판매자"} ${getDisplayName(counterpart || {})} (@${counterpart?.username || "-"})` }),
+    counterpartLine,
     Object.assign(document.createElement("span"), { textContent: `${deal.delivery_method} · 총 ${won.format(Number(deal.unit_price || 0) * Number(deal.quantity || 0))}원` }),
   );
   const actions = document.createElement("div");
@@ -194,15 +243,136 @@ function syncStadiumFields() {
   if (hasConfiguredGrades) populateSelect(seatGradeSelect, grades);
 }
 
+function showAgreementModal() {
+  agreementStatus.textContent = "";
+  agreementModal.classList.remove("hidden");
+  window.setTimeout(() => agreementSignature.focus(), 0);
+}
+
+function closeAgreementModal() {
+  agreementModal.classList.add("hidden");
+}
+
+function renderAccessPanel() {
+  const dashboard = ticketState.dashboard;
+  const access = dashboard?.ticket_access || {};
+  accessActions.replaceChildren();
+  if (dashboard?.is_admin) {
+    accessPanel.classList.add("hidden");
+    return;
+  }
+  accessPanel.classList.remove("hidden");
+  if (access.status === "suspended") {
+    accessTitle.textContent = "티켓 기능이 정지되었습니다";
+    accessCopy.textContent = `${access.suspension?.reason_label || "신고 접수"} 사유로 판매 게시물이 즉시 중지되었습니다. 관리자 @itsyou에게 소명해 주세요.`;
+    if (dashboard.admin_contact_available) accessActions.appendChild(actionButton("@itsyou에게 소명하기", openAdminChat));
+    return;
+  }
+  if (!access.agreement_signed) {
+    accessTitle.textContent = "판매 전 규정 서명이 필요합니다";
+    accessCopy.textContent = "실제 구매가를 초과해 판매할 수 없습니다. 판매하기 탭에서 안내를 확인하고 서명해 주세요.";
+    accessActions.appendChild(actionButton("규정 확인 및 서명", showAgreementModal, ""));
+    return;
+  }
+  if (access.verified) {
+    accessTitle.replaceChildren(document.createTextNode("검증된 티켓 계정"), verifiedBadge({ ticket_verified: true }));
+    accessCopy.textContent = `@itsyou 검증이 완료되었습니다. 판매자 이름 옆에 레드체크가 표시됩니다.`;
+  } else if (access.verification_status === "pending") {
+    accessTitle.textContent = "레드체크 검증 대기 중";
+    accessCopy.textContent = "@itsyou가 요청을 검토하고 있습니다. 필요한 자료는 관리자 채팅으로 전달해 주세요.";
+  } else {
+    accessTitle.textContent = "판매 규정 서명 완료";
+    accessCopy.textContent = "실제 구매가 이하로만 판매할 수 있습니다. @itsyou 검증을 받으면 레드체크가 표시됩니다.";
+    accessActions.appendChild(actionButton("레드체크 검증 요청", requestVerification, ""));
+  }
+  if (dashboard.admin_contact_available) accessActions.appendChild(actionButton("@itsyou 관리자 채팅", openAdminChat));
+}
+
+function moderationItem(title, lines, actions = []) {
+  const item = document.createElement("div");
+  item.className = "ticket-admin-item";
+  item.appendChild(Object.assign(document.createElement("strong"), { textContent: title }));
+  for (const line of lines.filter(Boolean)) item.appendChild(Object.assign(document.createElement("p"), { textContent: line }));
+  if (actions.length) {
+    const actionRow = document.createElement("div");
+    actionRow.className = "ticket-card-actions";
+    actionRow.append(...actions);
+    item.appendChild(actionRow);
+  }
+  return item;
+}
+
+function moderationSection(title, items, emptyText) {
+  const section = document.createElement("section");
+  section.className = "ticket-admin-section";
+  section.appendChild(Object.assign(document.createElement("h4"), { textContent: title }));
+  section.append(...(items.length ? items : [emptyCopy(emptyText)]));
+  return section;
+}
+
+function renderModeration() {
+  const moderation = ticketState.dashboard?.moderation || {};
+  if (!ticketState.dashboard?.is_admin) {
+    moderationNode.replaceChildren();
+    return;
+  }
+  const requests = (moderation.verification_requests || []).map((request) => {
+    const actions = request.status === "pending" ? [
+      actionButton("레드체크 승인", () => adminAction(request.user.id, "verify"), ""),
+      actionButton("요청 거절", () => adminAction(request.user.id, "reject_verification")),
+    ] : [];
+    return moderationItem(
+      `${getDisplayName(request.user)} (@${request.user.username}) · ${request.status}`,
+      [request.note || "요청 메모 없음", `요청: ${request.requested_at || "-"}`, request.reviewed_at ? `처리: ${request.reviewed_at}` : ""],
+      actions,
+    );
+  });
+  const reports = (moderation.reports || []).map((report) => {
+    const actions = report.status === "open" && report.seller ? [
+      actionButton("소명 확인·정지 해제", () => adminAction(report.seller.id, "reinstate", report.id), ""),
+    ] : [];
+    return moderationItem(
+      `${report.reason_label} · ${report.status}`,
+      [
+        `판매자 @${report.seller?.username || "-"} / 신고자 @${report.reporter?.username || "-"}`,
+        `${report.listing?.stadium || ""} ${report.listing?.seat || ""}`,
+        `판매가 ${won.format(Number(report.listing?.unit_price || 0))}원 / 구매가 ${won.format(Number(report.listing?.purchase_price || 0))}원`,
+        report.description || "상세 내용 없음",
+        report.created_at || "",
+      ],
+      actions,
+    );
+  });
+  const agreements = (moderation.agreements || []).map((agreement) => moderationItem(
+    `${getDisplayName(agreement.user)} (@${agreement.user.username})`,
+    [`서명: ${agreement.signature}`, `버전: ${agreement.version}`, `서명 시각: ${agreement.signed_at}`],
+  ));
+  const suspended = (moderation.suspended_users || []).map((entry) => moderationItem(
+    `${getDisplayName(entry.user)} (@${entry.user.username})`,
+    [entry.suspension?.reason_label || "정지", entry.suspension?.suspended_at || ""],
+    [actionButton("정지 해제", () => adminAction(entry.user.id, "reinstate"), "")],
+  ));
+  moderationNode.replaceChildren(
+    moderationSection("검증 요청", requests, "대기 중인 검증 요청이 없습니다."),
+    moderationSection("신고", reports, "접수된 신고가 없습니다."),
+    moderationSection("정지 계정", suspended, "정지된 티켓 계정이 없습니다."),
+    moderationSection("판매 규정 서명", agreements, "저장된 서명이 없습니다."),
+  );
+}
+
 function renderDashboard() {
   const dashboard = ticketState.dashboard;
   if (!dashboard) return;
   const baseballIdentity = dashboard.baseball_identity;
   identityLabel.textContent = baseballIdentity
     ? `${getDisplayName(baseballIdentity)} (@${baseballIdentity.username})`
-    : "야구 전용 ID를 선택해 주세요.";
-  identitySetup.classList.toggle("hidden", dashboard.active_identity_matches);
-  content.classList.toggle("hidden", !dashboard.active_identity_matches);
+    : dashboard.is_admin ? "@itsyou 티켓 관리자" : "야구 전용 ID를 선택해 주세요.";
+  identitySetup.classList.toggle("hidden", dashboard.active_identity_matches || dashboard.is_admin);
+  content.classList.toggle("hidden", !dashboard.active_identity_matches && !dashboard.is_admin);
+  moderationTab.classList.toggle("hidden", !dashboard.is_admin);
+  if (dashboard.is_admin && !dashboard.active_identity_matches && ticketState.activeTab === "listings") {
+    ticketState.activeTab = "moderation";
+  }
 
   if (!baseballIdentity) {
     const identities = state.session?.identities || [state.session?.user].filter(Boolean);
@@ -224,6 +394,7 @@ function renderDashboard() {
   populateSelect(stadiumSelect, dashboard.stadiums || []);
   populateSelect(deliverySelect, dashboard.delivery_methods || []);
   syncStadiumFields();
+  renderAccessPanel();
   listingsNode.replaceChildren(...(dashboard.listings?.length
     ? dashboard.listings.map((ticket) => ticketCard(ticket))
     : [emptyCopy("현재 양도 중인 티켓이 없습니다.")]));
@@ -233,6 +404,8 @@ function renderDashboard() {
   dealsNode.replaceChildren(...(dashboard.deals?.length
     ? dashboard.deals.map(dealCard)
     : [emptyCopy("진행 중이거나 완료된 거래가 없습니다.")]));
+  renderModeration();
+  openFormButton.disabled = dashboard.is_admin || dashboard.ticket_access?.status === "suspended";
   setTicketTab(ticketState.activeTab);
 }
 
@@ -278,9 +451,118 @@ function closeTicketTransfer() {
 }
 
 function setTicketTab(tab) {
+  if (
+    tab === "selling"
+    && !ticketState.dashboard?.is_admin
+    && !ticketState.dashboard?.ticket_access?.agreement_signed
+  ) {
+    showAgreementModal();
+    return;
+  }
   ticketState.activeTab = tab;
   screen.querySelectorAll("[data-ticket-tab]").forEach((button) => button.classList.toggle("active", button.dataset.ticketTab === tab));
   screen.querySelectorAll("[data-ticket-pane]").forEach((pane) => pane.classList.toggle("hidden", pane.dataset.ticketPane !== tab));
+}
+
+async function signAgreement(event) {
+  event.preventDefault();
+  agreementSubmit.disabled = true;
+  agreementStatus.textContent = "서명을 저장하고 있어요.";
+  try {
+    const payload = await requestAction("tickets.agreement", "/tickets/agreement", {
+      method: "POST", body: JSON.stringify({ signature: agreementSignature.value.trim() }),
+    });
+    ticketState.dashboard.ticket_access = payload.ticket_access;
+    closeAgreementModal();
+    agreementForm.reset();
+    renderAccessPanel();
+    openFormButton.disabled = false;
+    setTicketTab("selling");
+    screenStatus.textContent = "판매 규정 서명이 @itsyou 관리자 기록에 저장되었습니다.";
+  } catch (error) {
+    agreementStatus.textContent = error.message;
+  } finally {
+    agreementSubmit.disabled = false;
+  }
+}
+
+function openReportModal(ticket) {
+  ticketState.reportListingId = ticket.id;
+  reportForm.reset();
+  reportStatus.textContent = "";
+  populateSelect(reportReason, Object.keys(ticketState.dashboard?.report_reasons || {}));
+  for (const option of reportReason.options) {
+    option.textContent = ticketState.dashboard?.report_reasons?.[option.value] || option.value;
+  }
+  reportPriceNotice.textContent = ticketState.dashboard?.purchase_price_notice || "";
+  reportModal.classList.remove("hidden");
+  window.setTimeout(() => reportReason.focus(), 0);
+}
+
+function closeReportModal() {
+  ticketState.reportListingId = "";
+  reportModal.classList.add("hidden");
+}
+
+async function submitReport(event) {
+  event.preventDefault();
+  if (!ticketState.reportListingId) return;
+  reportSubmit.disabled = true;
+  reportStatus.textContent = "신고를 접수하고 있어요.";
+  try {
+    await requestAction("tickets.report", "/tickets/reports", {
+      method: "POST",
+      body: JSON.stringify({
+        listingId: ticketState.reportListingId,
+        reason: reportReason.value,
+        description: reportDescription.value.trim(),
+      }),
+    });
+    closeReportModal();
+    screenStatus.textContent = "신고가 접수되어 피신고 판매자의 티켓 기능이 즉시 정지되었습니다.";
+    await loadTicketDashboard({ quiet: true });
+  } catch (error) {
+    reportStatus.textContent = error.message;
+  } finally {
+    reportSubmit.disabled = false;
+  }
+}
+
+async function requestVerification() {
+  const note = window.prompt("@itsyou에게 전달할 검증 메모를 입력해 주세요. 필요한 자료는 관리자 채팅으로 보낼 수 있습니다.", "");
+  if (note === null) return;
+  try {
+    await requestAction("tickets.verification", "/tickets/verification", {
+      method: "POST", body: JSON.stringify({ note: note.trim() }),
+    });
+    screenStatus.textContent = "레드체크 검증을 @itsyou에 요청했습니다.";
+    await loadTicketDashboard({ quiet: true });
+  } catch (error) {
+    screenStatus.textContent = error.message;
+  }
+}
+
+async function openAdminChat() {
+  try {
+    const payload = await requestAction("tickets.admin-chat", "/tickets/admin-chat", {
+      method: "POST", body: "{}",
+    });
+    await openTicketRoom(payload.room);
+  } catch (error) {
+    screenStatus.textContent = error.message;
+  }
+}
+
+async function adminAction(userId, action, reportId = "") {
+  try {
+    await requestAction("tickets.admin-action", "/tickets/admin-action", {
+      method: "POST", body: JSON.stringify({ userId, action, reportId }),
+    });
+    screenStatus.textContent = "관리자 처리가 완료되었습니다.";
+    await loadTicketDashboard({ quiet: true });
+  } catch (error) {
+    screenStatus.textContent = error.message;
+  }
 }
 
 async function designateOrSwitchIdentity() {
@@ -308,6 +590,16 @@ async function designateOrSwitchIdentity() {
 
 async function submitListing(event) {
   event.preventDefault();
+  if (!ticketState.dashboard?.ticket_access?.can_sell) {
+    if (!ticketState.dashboard?.ticket_access?.agreement_signed) showAgreementModal();
+    else formStatus.textContent = "티켓 판매 기능이 정지되어 있습니다. @itsyou에 소명해 주세요.";
+    return;
+  }
+  if (Number(unitPriceInput.value) > Number(purchasePriceInput.value)) {
+    formStatus.textContent = "판매가는 실제 구매가를 초과할 수 없습니다.";
+    unitPriceInput.focus();
+    return;
+  }
   submitFormButton.disabled = true;
   formStatus.textContent = "티켓을 등록하고 있어요.";
   try {
@@ -321,6 +613,7 @@ async function submitListing(event) {
           ? seatGradeInput.value.trim()
           : seatGradeSelect.value,
         seatDetail: seatDetailInput.value.trim(),
+        purchasePrice: Number(purchasePriceInput.value),
         unitPrice: Number(unitPriceInput.value),
         quantity: Number(quantityInput.value),
         deliveryMethod: deliverySelect.value,
@@ -380,6 +673,11 @@ closeButton?.addEventListener("click", closeTicketTransfer);
 refreshButton?.addEventListener("click", () => void loadTicketDashboard());
 identityButton?.addEventListener("click", () => void designateOrSwitchIdentity());
 openFormButton?.addEventListener("click", () => {
+  if (!ticketState.dashboard?.ticket_access?.can_sell) {
+    if (!ticketState.dashboard?.ticket_access?.agreement_signed) showAgreementModal();
+    else screenStatus.textContent = "티켓 판매 기능이 정지되어 있습니다. @itsyou에 소명해 주세요.";
+    return;
+  }
   syncStadiumFields();
   listingForm.classList.remove("hidden");
 });
@@ -387,5 +685,11 @@ cancelFormButton?.addEventListener("click", () => listingForm.classList.add("hid
 listingForm?.addEventListener("submit", (event) => void submitListing(event));
 stadiumSelect?.addEventListener("change", syncStadiumFields);
 screen?.querySelectorAll("[data-ticket-tab]").forEach((button) => button.addEventListener("click", () => setTicketTab(button.dataset.ticketTab)));
+agreementForm?.addEventListener("submit", (event) => void signAgreement(event));
+closeAgreementButton?.addEventListener("click", closeAgreementModal);
+agreementModal?.addEventListener("click", (event) => { if (event.target === agreementModal) closeAgreementModal(); });
+reportForm?.addEventListener("submit", (event) => void submitReport(event));
+closeReportButton?.addEventListener("click", closeReportModal);
+reportModal?.addEventListener("click", (event) => { if (event.target === reportModal) closeReportModal(); });
 
 export { closeTicketTransfer, loadTicketDashboard, openTicketTransfer };

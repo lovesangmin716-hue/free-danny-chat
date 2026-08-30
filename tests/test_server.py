@@ -2349,7 +2349,11 @@ class AccountIdentityTestCase(unittest.TestCase):
                     "ticket_buyer", "buyer_code", "password", "", "01033334444", "20대", "여성"
                 )
                 self.assertIsNone(error)
-                assert seller is not None and buyer is not None
+                admin, error = store.create_local_user(
+                    "itsyou", "admin_code", "password", "", "01055556666", "30대", "남성"
+                )
+                self.assertIsNone(error)
+                assert seller is not None and buyer is not None and admin is not None
                 seller_extra, error = store.create_identity(
                     seller["username"], "ticket_extra", "Extra", "extra_code"
                 )
@@ -2366,6 +2370,40 @@ class AccountIdentityTestCase(unittest.TestCase):
                 self.assertIsNone(error)
 
                 game_date = (datetime.now(timezone.utc) + timedelta(days=30)).date().isoformat()
+                rejected, error = store.create_ticket_listing(
+                    seller["username"],
+                    game_date=game_date,
+                    stadium="잠실(LG)",
+                    away_team="두산 베어스",
+                    seat_grade="1루 블루석",
+                    seat_detail="107블록 8열",
+                    purchase_price=35000,
+                    unit_price=35000,
+                    quantity=3,
+                    delivery_method="모바일 티켓",
+                    description="연석입니다.",
+                )
+                self.assertIsNone(rejected)
+                self.assertIn("서명", error or "")
+                access, error = store.sign_ticket_seller_agreement(seller["username"], "판매자 서명")
+                self.assertIsNone(error)
+                assert access is not None
+                self.assertTrue(access["can_sell"])
+                overpriced, error = store.create_ticket_listing(
+                    seller["username"],
+                    game_date=game_date,
+                    stadium="잠실(LG)",
+                    away_team="두산 베어스",
+                    seat_grade="1루 블루석",
+                    seat_detail="107블록 8열",
+                    purchase_price=30000,
+                    unit_price=35000,
+                    quantity=3,
+                    delivery_method="모바일 티켓",
+                    description="연석입니다.",
+                )
+                self.assertIsNone(overpriced)
+                self.assertIn("구매가", error or "")
                 listing, error = store.create_ticket_listing(
                     seller["username"],
                     game_date=game_date,
@@ -2373,6 +2411,7 @@ class AccountIdentityTestCase(unittest.TestCase):
                     away_team="두산 베어스",
                     seat_grade="1루 블루석",
                     seat_detail="107블록 8열",
+                    purchase_price=40000,
                     unit_price=35000,
                     quantity=3,
                     delivery_method="모바일 티켓",
@@ -2385,6 +2424,7 @@ class AccountIdentityTestCase(unittest.TestCase):
                 self.assertEqual(listing["home_team"], "LG 트윈스")
                 self.assertEqual(listing["away_team"], "두산 베어스")
                 self.assertEqual(listing["seat_grade"], "1루 블루석")
+                self.assertEqual(listing["purchase_price"], 40000)
 
                 for text in ("A", "B", "C"):
                     message_result = store.add_message(listing["id"], buyer["username"], text)
@@ -2416,6 +2456,42 @@ class AccountIdentityTestCase(unittest.TestCase):
                 self.assertEqual(expires_at.astimezone(timezone(timedelta(hours=9))).date().isoformat(), (
                     date.fromisoformat(game_date) + timedelta(days=7)
                 ).isoformat())
+
+                verification, error = store.request_ticket_verification(seller["username"], "본인 확인 요청")
+                self.assertIsNone(error)
+                self.assertEqual(verification["verification_status"], "pending")
+                moderation, error = store.admin_update_ticket_user(
+                    admin["username"], seller["id"], "verify"
+                )
+                self.assertIsNone(error)
+                self.assertTrue(moderation["user"]["ticket_verified"])
+
+                report, error = store.report_ticket_listing(
+                    buyer["username"], listing["id"], "over_purchase_price", "구매가 증빙이 필요합니다."
+                )
+                self.assertIsNone(error)
+                assert report is not None
+                self.assertEqual(report["status"], "open")
+                suspended_dashboard = store.get_ticket_dashboard(seller["username"])
+                assert suspended_dashboard is not None
+                self.assertEqual(suspended_dashboard["ticket_access"]["status"], "suspended")
+                self.assertEqual(suspended_dashboard["selling"][0]["status"], "suspended")
+                admin_dashboard = store.get_ticket_dashboard(admin["username"])
+                assert admin_dashboard is not None
+                self.assertTrue(admin_dashboard["is_admin"])
+                self.assertEqual(admin_dashboard["moderation"]["reports"][0]["id"], report["id"])
+                self.assertEqual(
+                    admin_dashboard["moderation"]["agreements"][0]["signature"], "판매자 서명"
+                )
+                reinstated, error = store.admin_update_ticket_user(
+                    admin["username"], seller["id"], "reinstate", report["id"]
+                )
+                self.assertIsNone(error)
+                self.assertEqual(reinstated["ticket_access"]["status"], "active")
+                admin_room, created, error = store.open_ticket_admin_chat(buyer["username"])
+                self.assertIsNone(error)
+                self.assertTrue(created)
+                self.assertEqual(admin_room["kind"], "direct")
             finally:
                 store.close()
 
@@ -2425,6 +2501,8 @@ class AccountIdentityTestCase(unittest.TestCase):
                 assert dashboard is not None
                 self.assertEqual(dashboard["selling"][0]["remaining_quantity"], 1)
                 self.assertEqual(dashboard["deals"][0]["status"], "completed")
+                self.assertTrue(dashboard["ticket_access"]["agreement_signed"])
+                self.assertTrue(dashboard["ticket_access"]["verified"])
             finally:
                 reopened.close()
 
