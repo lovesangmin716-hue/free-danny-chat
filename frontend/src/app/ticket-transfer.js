@@ -6,6 +6,7 @@ import { upsertMessengerRoom } from "./messenger.js";
 
 const screen = document.getElementById("ticket-transfer-screen");
 const openButton = document.getElementById("open-ticket-transfer-button");
+const adminOpenButton = document.getElementById("open-ticket-admin-button");
 const closeButton = document.getElementById("close-ticket-transfer-button");
 const refreshButton = document.getElementById("refresh-ticket-transfer-button");
 const identityLabel = document.getElementById("ticket-identity-label");
@@ -221,8 +222,8 @@ function ticketCard(ticket, { selling = false } = {}) {
   const actions = document.createElement("div");
   actions.className = "ticket-card-actions";
   actions.appendChild(actionButton(selling ? "오픈채팅 보기" : "오픈채팅 참여", () => openTicketRoom(ticket.room)));
-  if (!selling && ticket.seller?.id !== state.session?.user?.id) {
-    actions.appendChild(actionButton("신고", () => openReportModal(ticket), "secondary-button ticket-report-button"));
+  if (!selling) {
+    actions.appendChild(actionButton("! 신고", () => openReportModal(ticket), "secondary-button ticket-report-button"));
   }
   if (selling) {
     actions.appendChild(actionButton("글 삭제", () => deleteListing(ticket.id), "secondary-button ticket-delete-button"));
@@ -458,7 +459,7 @@ function renderDashboard() {
   const baseballIdentity = dashboard.baseball_identity;
   identityLabel.textContent = baseballIdentity
     ? `${getDisplayName(baseballIdentity)} (@${baseballIdentity.username})`
-    : dashboard.is_admin ? "@itsyou 티켓 관리자" : "야구 전용 ID를 선택해 주세요.";
+    : dashboard.is_admin ? `${getDisplayName(state.session?.user)} 티켓 관리자` : "야구 전용 ID를 선택해 주세요.";
   identitySetup.classList.toggle("hidden", dashboard.active_identity_matches || dashboard.is_admin);
   content.classList.toggle("hidden", !dashboard.active_identity_matches && !dashboard.is_admin);
   moderationTab.classList.toggle("hidden", !dashboard.is_admin);
@@ -531,6 +532,11 @@ function openTicketTransfer() {
   void loadTicketDashboard();
   window.clearInterval(ticketState.timer);
   ticketState.timer = window.setInterval(() => void loadTicketDashboard({ quiet: true }), 20000);
+}
+
+function openTicketAdmin() {
+  ticketState.activeTab = "moderation";
+  openTicketTransfer();
 }
 
 function closeTicketTransfer() {
@@ -765,6 +771,7 @@ async function deleteListing(listingId) {
 }
 
 openButton?.addEventListener("click", openTicketTransfer);
+adminOpenButton?.addEventListener("click", openTicketAdmin);
 closeButton?.addEventListener("click", closeTicketTransfer);
 refreshButton?.addEventListener("click", () => void loadTicketDashboard());
 identityButton?.addEventListener("click", () => void designateOrSwitchIdentity());

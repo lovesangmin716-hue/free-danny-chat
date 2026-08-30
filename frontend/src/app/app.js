@@ -16,6 +16,7 @@ const identityDisplayName = document.getElementById("identity-display-name");
 const identityFriendCode = document.getElementById("identity-friend-code");
 const identityCreateButton = document.getElementById("identity-create-button");
 const identityFormStatus = document.getElementById("identity-form-status");
+const ticketAdminButton = document.getElementById("open-ticket-admin-button");
 
 // Application orchestration and feature-level state transitions.
 const APP_CHAT_PAGE_SIZE = typeof CHAT_MESSAGE_PAGE_SIZE === "number" ? CHAT_MESSAGE_PAGE_SIZE : 30;
@@ -79,6 +80,7 @@ function renderMy() {
     ? `사용자 고유식별 번호 · ${account.id} · ${identities.length}/${account.identity_limit || 3}`
     : `${identities.length}/3개의 활동 ID 사용 중`;
   identityCreateForm.classList.toggle("hidden", identities.length >= Number(account?.identity_limit || 3));
+  ticketAdminButton?.classList.toggle("hidden", !account?.is_ticket_admin);
   renderStatusEmojiControl();
   renderWorkModeControl();
 }

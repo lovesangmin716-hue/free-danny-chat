@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#ffffff" />
     <title>Colorless</title>
     <link rel="preload" href="assets/fonts/The%20Jamsil%203%20Regular.woff2?v=4e887c501a6c" as="font" type="font/woff2" crossorigin />
-    <script defer src="assets/js/main.js?v=def8ccdbcc48"></script>
+    <script defer src="assets/js/main.js?v=b4efca1ec702"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -339,7 +339,8 @@
       .ticket-card-description { line-height: 1.55; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
       .ticket-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
       .ticket-card-actions button { flex: 1 1 150px; }
-      .ticket-card-actions .ticket-report-button, .ticket-card-actions .ticket-delete-button { flex: 0 0 auto; font-size: 10px; min-height: 28px; padding: 4px 7px; }
+      .ticket-card-actions .ticket-report-button, .ticket-card-actions .ticket-delete-button { flex: 0 0 auto; font-size: 11px; min-height: 30px; padding: 4px 9px; }
+      .ticket-card-actions .ticket-report-button { background: var(--white); border-color: #c40000; color: #c40000; font-weight: 800; }
       .ticket-commenters { border-top: 1px solid var(--light-gray); display: grid; gap: 8px; padding-top: 10px; }
       .ticket-commenter { align-items: center; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) 68px auto; }
       .ticket-commenter input { min-height: 42px; padding-inline: 8px; }
@@ -1020,6 +1021,7 @@
             </div>
             <div class="my-actions">
               <button type="button" class="secondary-button" id="open-ticket-transfer-button" aria-label="야구 티켓 양도">⚾ 야구 티켓 양도</button>
+              <button type="button" class="secondary-button hidden" id="open-ticket-admin-button" aria-label="티켓 관리자">⚙ 티켓 관리자</button>
               <button type="button" class="secondary-button" id="open-profile-button" data-icon="user" aria-label="개인정보 수정">개인정보 수정</button>
               <button type="button" id="logout-button" data-icon="log-out" aria-label="로그아웃">로그아웃</button>
             </div>

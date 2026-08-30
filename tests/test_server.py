@@ -2355,6 +2355,17 @@ class AccountIdentityTestCase(unittest.TestCase):
                 )
                 self.assertIsNone(error)
                 assert seller is not None and buyer is not None and admin is not None
+                self.assertTrue(store._is_ticket_admin_user({
+                    "account_id": "account_user_561a6073",
+                    "username": "different_activity_id",
+                }))
+                self.assertFalse(store._is_ticket_admin_user({
+                    "account_id": "account_user_someone_else",
+                    "username": "different_activity_id",
+                }))
+                admin_context = store.get_account_context(admin["username"])
+                assert admin_context is not None
+                self.assertTrue(admin_context["account"]["is_ticket_admin"])
                 seller_extra, error = store.create_identity(
                     seller["username"], "ticket_extra", "Extra", "extra_code"
                 )

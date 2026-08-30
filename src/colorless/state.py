@@ -66,6 +66,7 @@ from .utils import (
 
 BASEBALL_TICKET_IDENTITY_KIND = "baseball_ticket"
 TICKET_ADMIN_USERNAME = "itsyou"
+TICKET_ADMIN_ACCOUNT_ID = "account_user_561a6073"
 TICKET_SELLER_AGREEMENT_VERSION = "2026-08-31-v1"
 TICKET_SIGNATURE_MAX_BYTES = 120 * 1024
 TICKET_REPORT_REASONS = {
@@ -1061,6 +1062,7 @@ class StateStore:
                     "id": account["id"],
                     "created_at": account.get("created_at", ""),
                     "identity_limit": MAX_IDENTITIES_PER_ACCOUNT,
+                    "is_ticket_admin": self._is_ticket_admin_user(active_user),
                 },
                 "identities": identities,
                 "active_identity_id": active_user["id"],
@@ -1166,6 +1168,30 @@ class StateStore:
                 and identity.get("identity_kind") == BASEBALL_TICKET_IDENTITY_KIND
             ),
             None,
+        )
+
+    @staticmethod
+    def _is_ticket_admin_user(user: dict | None) -> bool:
+        if user is None:
+            return False
+        return (
+            str(user.get("account_id", "")) == TICKET_ADMIN_ACCOUNT_ID
+            or str(user.get("username", "")) == TICKET_ADMIN_USERNAME
+        )
+
+    def _ticket_admin_identity_locked(self) -> dict | None:
+        account_identities = [
+            identity
+            for identity in self._users_by_account_id.get(TICKET_ADMIN_ACCOUNT_ID, [])
+            if not identity.get("disabled_at")
+        ]
+        return (
+            next(
+                (identity for identity in account_identities if identity.get("username") == TICKET_ADMIN_USERNAME),
+                None,
+            )
+            or next(iter(account_identities), None)
+            or self._users_by_username.get(TICKET_ADMIN_USERNAME)
         )
 
     def designate_baseball_identity(
@@ -1409,7 +1435,8 @@ class StateStore:
             if viewer is None:
                 return None
             baseball_identity = self._baseball_identity_for_account_locked(viewer.get("account_id", ""))
-            is_admin = viewer.get("username") == TICKET_ADMIN_USERNAME
+            is_admin = self._is_ticket_admin_user(viewer)
+            admin_identity = self._ticket_admin_identity_locked()
             context = {
                 "stadiums": list(BASEBALL_STADIUMS),
                 "teams": list(BASEBALL_TEAMS),
@@ -1423,8 +1450,7 @@ class StateStore:
                 "is_admin": is_admin,
                 "ticket_access": self._ticket_access_locked(baseball_identity),
                 "admin_contact_available": bool(
-                    viewer.get("username") != TICKET_ADMIN_USERNAME
-                    and TICKET_ADMIN_USERNAME in self._users_by_username
+                    admin_identity is not None and admin_identity.get("id") != viewer.get("id")
                 ),
                 "report_reasons": dict(TICKET_REPORT_REASONS),
                 "purchase_price_notice": (
@@ -1833,8 +1859,8 @@ class StateStore:
     ) -> tuple[dict | None, str | None]:
         with self.lock:
             admin = self._users_by_username.get(admin_username)
-            if admin is None or admin.get("username") != TICKET_ADMIN_USERNAME:
-                return None, "@itsyou 관리자만 처리할 수 있습니다."
+            if not self._is_ticket_admin_user(admin):
+                return None, "티켓 관리자 계정만 처리할 수 있습니다."
             target = self._users_by_id.get(target_user_id)
             if target is None or target.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND:
                 return None, "야구 티켓 전용 계정을 찾을 수 없습니다."
@@ -1895,18 +1921,18 @@ class StateStore:
     def open_ticket_admin_chat(self, username: str) -> tuple[dict | None, bool, str | None]:
         with self.lock:
             user = self._users_by_username.get(username)
-            admin = self._users_by_username.get(TICKET_ADMIN_USERNAME)
+            admin = self._ticket_admin_identity_locked()
             if user is None:
                 return None, False, "사용자를 찾을 수 없습니다."
             if admin is None:
-                return None, False, "@itsyou 관리자 계정을 찾을 수 없습니다."
+                return None, False, "티켓 관리자 계정을 찾을 수 없습니다."
             if user["id"] == admin["id"]:
                 return None, False, "관리자 본인 계정입니다."
             participant_ids = sorted([user["id"], admin["id"]])
             room = self._direct_rooms_by_pair.get(tuple(participant_ids))
             if room is not None:
                 return self._room_summary(room, user), False, None
-            room = self._new_room(new_id("room"), TICKET_ADMIN_USERNAME, "티켓 신고·소명·검증 문의", username)
+            room = self._new_room(new_id("room"), admin["username"], "티켓 신고·소명·검증 문의", username)
             room["kind"] = "direct"
             room["participant_ids"] = participant_ids
             room["ticket_admin_contact"] = True
