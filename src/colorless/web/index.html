@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#ffffff" />
     <title>Colorless</title>
     <link rel="preload" href="assets/fonts/The%20Jamsil%203%20Regular.woff2?v=4e887c501a6c" as="font" type="font/woff2" crossorigin />
-    <script defer src="assets/js/main.js?v=b20e59096473"></script>
+    <script defer src="assets/js/main.js?v=def8ccdbcc48"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -333,10 +333,13 @@
       .ticket-card-heading strong { font-size: 17px; line-height: 1.35; }
       .ticket-badge { border: 1px solid var(--black); flex: 0 0 auto; font-size: 11px; padding: 4px 7px; }
       .ticket-card-meta { color: var(--gray); display: grid; font-size: 13px; gap: 5px; line-height: 1.45; }
-      .ticket-card-price { font-size: 18px; font-weight: 700; }
+      .ticket-card-price { display: grid; gap: 2px; }
+      .ticket-card-purchase-price { color: var(--gray); font-size: 12px; font-weight: 400; }
+      .ticket-card-sale-price { font-size: 18px; font-weight: 700; }
       .ticket-card-description { line-height: 1.55; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
       .ticket-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
       .ticket-card-actions button { flex: 1 1 150px; }
+      .ticket-card-actions .ticket-report-button, .ticket-card-actions .ticket-delete-button { flex: 0 0 auto; font-size: 10px; min-height: 28px; padding: 4px 7px; }
       .ticket-commenters { border-top: 1px solid var(--light-gray); display: grid; gap: 8px; padding-top: 10px; }
       .ticket-commenter { align-items: center; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) 68px auto; }
       .ticket-commenter input { min-height: 42px; padding-inline: 8px; }
@@ -365,10 +368,14 @@
       .ticket-modal-content textarea { min-height: 110px; resize: vertical; }
       .ticket-policy-confirm { align-items: start; display: grid; gap: 8px; grid-template-columns: auto minmax(0, 1fr); }
       .ticket-policy-confirm input { margin-top: 4px; width: auto; }
+      .ticket-signature-pad { background: var(--white); border: 1px solid var(--black); cursor: crosshair; height: 160px; touch-action: none; width: 100%; }
+      .ticket-signature-actions { display: flex; justify-content: flex-end; }
+      .ticket-signature-actions button { min-height: 34px; padding: 5px 10px; }
       .ticket-admin-section { border: 1px solid var(--black); display: grid; gap: 10px; padding: 14px; }
       .ticket-admin-item { border-top: 1px solid var(--light-gray); display: grid; gap: 7px; padding-top: 10px; }
       .ticket-admin-item:first-child { border-top: 0; padding-top: 0; }
       .ticket-admin-item p { color: var(--gray); font-size: 12px; line-height: 1.5; margin: 0; white-space: pre-wrap; }
+      .ticket-admin-signature { background: var(--white); border: 1px solid var(--light-gray); height: 90px; object-fit: contain; width: 100%; }
       .app.ticket-transfer-active .chat-room:not(.hidden) { height: 100dvh; inset: 0; max-width: none; position: fixed; width: 100%; z-index: 230; }
       .app.ticket-transfer-active .chat-room-back { display: inline-flex; }
       @media (max-width: 520px) {
@@ -1077,18 +1084,19 @@
             </section>
             <section class="ticket-pane hidden" data-ticket-pane="selling"><h3>판매하기 · 판매 관리</h3><div class="ticket-list" id="ticket-selling"></div></section>
             <section class="ticket-pane hidden" data-ticket-pane="deals"><h3>거래 관리</h3><div class="ticket-list" id="ticket-deals"></div></section>
-            <section class="ticket-pane hidden" data-ticket-pane="moderation"><h3>@itsyou 티켓 관리자</h3><div class="ticket-list" id="ticket-moderation"></div></section>
+            <section class="ticket-pane hidden" data-ticket-pane="moderation"><h3>@itsyou 티켓 관리자</h3><p class="ticket-price-note">이 탭은 활동 ID가 정확히 @itsyou일 때만 표시됩니다. 판매글별 손그림 서명, 레드체크 검증 요청, 신고와 정지 계정을 여기서 확인하고 처리할 수 있습니다.</p><div class="ticket-list" id="ticket-moderation"></div></section>
           </section>
         </div>
         <div class="sheet-backdrop ticket-modal hidden" id="ticket-agreement-modal" role="dialog" aria-modal="true" aria-labelledby="ticket-agreement-title">
           <section class="user-sheet">
             <header class="sheet-header"><h2 id="ticket-agreement-title">티켓 판매 규정 서명</h2><button type="button" class="sheet-close" id="close-ticket-agreement-button">닫기</button></header>
             <form class="ticket-modal-content" id="ticket-agreement-form">
-              <p>관련 법령과 입장권 부정판매 방지 취지에 따라 실제 구매가를 초과하는 가격으로 티켓을 판매할 수 없습니다.</p>
+              <p>이 판매글을 등록하려면 아래에 직접 서명해야 합니다. 관련 법령과 입장권 부정판매 방지 취지에 따라 실제 구매가를 초과하는 가격으로 티켓을 판매할 수 없습니다.</p>
               <ul><li>판매가는 판매자가 실제 결제한 구매가 이하여야 합니다.</li><li>구매가는 정가와 다를 수 있으며 취소표 대기 수수료 등 실제 결제 비용이 포함될 수 있습니다.</li><li>허위 구매가 입력, 사기 및 허위 판매 신고가 접수되면 티켓 기능이 즉시 정지되며 @itsyou에 소명해야 합니다.</li></ul>
-              <label for="ticket-agreement-signature">서명</label><input id="ticket-agreement-signature" maxlength="60" autocomplete="name" placeholder="실명 또는 서명을 입력해 주세요" required />
-              <label class="ticket-policy-confirm"><input type="checkbox" id="ticket-agreement-confirm" required /><span>위 내용을 확인했고 구매가를 초과해 판매하지 않겠습니다. 서명 기록이 관리자 @itsyou에 저장되는 것에 동의합니다.</span></label>
-              <button type="submit" id="submit-ticket-agreement-button">동의하고 서명</button>
+              <label for="ticket-agreement-signature">손그림 서명</label><canvas class="ticket-signature-pad" id="ticket-agreement-signature" width="1040" height="320" tabindex="0" aria-label="손그림 서명란"></canvas>
+              <div class="ticket-signature-actions"><button type="button" class="secondary-button" id="clear-ticket-agreement-signature">다시 그리기</button></div>
+              <label class="ticket-policy-confirm"><input type="checkbox" id="ticket-agreement-confirm" required /><span>위 내용을 확인했고 구매가를 초과해 판매하지 않겠습니다. 이 판매글의 서명 기록이 관리자 @itsyou에 저장되는 것에 동의합니다.</span></label>
+              <button type="submit" id="submit-ticket-agreement-button">서명하고 판매글 등록</button>
               <p class="ticket-status" id="ticket-agreement-status" role="status" aria-live="polite"></p>
             </form>
           </section>

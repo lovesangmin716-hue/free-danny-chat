@@ -988,6 +988,12 @@ class ChatHandler(
                 return
             self.sign_ticket_agreement(user)
             return
+        if path == "/tickets/delete":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.delete_ticket_listing(user)
+            return
         if path == "/tickets/reports":
             user = self.require_auth_record()
             if user is None:

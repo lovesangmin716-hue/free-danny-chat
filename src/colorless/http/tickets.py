@@ -49,11 +49,26 @@ class TicketRoutesMixin:
             quantity=quantity,
             delivery_method=str(payload.get("deliveryMethod", "")),
             description=str(payload.get("description", "")),
+            signature_image=str(payload.get("signatureImage", "")),
         )
         if error:
             self.send_json({"error": error}, self.context.HTTPStatus.BAD_REQUEST)
             return
         self.send_json({"listing": listing}, self.context.HTTPStatus.CREATED)
+
+    def delete_ticket_listing(self, user: dict) -> None:
+        if not self.allow_request(f"ticket-delete:{user['username']}", 30, 60 * 60):
+            return
+        payload = self.read_json_body()
+        if payload is None:
+            return
+        listing, error = self.context.STORE.delete_ticket_listing(
+            user["username"], str(payload.get("listingId", "")).strip()
+        )
+        if error:
+            self.send_json({"error": error}, self.context.HTTPStatus.BAD_REQUEST)
+            return
+        self.send_json({"listing": listing}, self.context.HTTPStatus.OK)
 
     def sign_ticket_agreement(self, user: dict) -> None:
         if not self.allow_request(f"ticket-agreement:{user['username']}", 10, 60 * 60):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 import io
 import gzip
@@ -2370,6 +2371,9 @@ class AccountIdentityTestCase(unittest.TestCase):
                 self.assertIsNone(error)
 
                 game_date = (datetime.now(timezone.utc) + timedelta(days=30)).date().isoformat()
+                signature_image = "data:image/png;base64," + base64.b64encode(
+                    b"\x89PNG\r\n\x1a\n" + (b"signed-ticket" * 12)
+                ).decode("ascii")
                 rejected, error = store.create_ticket_listing(
                     seller["username"],
                     game_date=game_date,
@@ -2382,13 +2386,10 @@ class AccountIdentityTestCase(unittest.TestCase):
                     quantity=3,
                     delivery_method="모바일 티켓",
                     description="연석입니다.",
+                    signature_image="",
                 )
                 self.assertIsNone(rejected)
                 self.assertIn("서명", error or "")
-                access, error = store.sign_ticket_seller_agreement(seller["username"], "판매자 서명")
-                self.assertIsNone(error)
-                assert access is not None
-                self.assertTrue(access["can_sell"])
                 overpriced, error = store.create_ticket_listing(
                     seller["username"],
                     game_date=game_date,
@@ -2401,6 +2402,7 @@ class AccountIdentityTestCase(unittest.TestCase):
                     quantity=3,
                     delivery_method="모바일 티켓",
                     description="연석입니다.",
+                    signature_image=signature_image,
                 )
                 self.assertIsNone(overpriced)
                 self.assertIn("구매가", error or "")
@@ -2416,6 +2418,7 @@ class AccountIdentityTestCase(unittest.TestCase):
                     quantity=3,
                     delivery_method="모바일 티켓",
                     description="연석입니다.",
+                    signature_image=signature_image,
                 )
                 self.assertIsNone(error)
                 assert listing is not None
@@ -2425,6 +2428,9 @@ class AccountIdentityTestCase(unittest.TestCase):
                 self.assertEqual(listing["away_team"], "두산 베어스")
                 self.assertEqual(listing["seat_grade"], "1루 블루석")
                 self.assertEqual(listing["purchase_price"], 40000)
+                self.assertTrue(listing["signature_saved"])
+                self.assertNotIn("seller_signature", listing)
+                self.assertNotIn("seller_signature", listing["room"]["ticket"])
 
                 for text in ("A", "B", "C"):
                     message_result = store.add_message(listing["id"], buyer["username"], text)
@@ -2480,14 +2486,37 @@ class AccountIdentityTestCase(unittest.TestCase):
                 assert admin_dashboard is not None
                 self.assertTrue(admin_dashboard["is_admin"])
                 self.assertEqual(admin_dashboard["moderation"]["reports"][0]["id"], report["id"])
+                self.assertEqual(admin_dashboard["moderation"]["agreements"][0]["listing_id"], listing["id"])
                 self.assertEqual(
-                    admin_dashboard["moderation"]["agreements"][0]["signature"], "판매자 서명"
+                    admin_dashboard["moderation"]["agreements"][0]["image_data_url"], signature_image
                 )
                 reinstated, error = store.admin_update_ticket_user(
                     admin["username"], seller["id"], "reinstate", report["id"]
                 )
                 self.assertIsNone(error)
                 self.assertEqual(reinstated["ticket_access"]["status"], "active")
+                disposable, error = store.create_ticket_listing(
+                    seller["username"],
+                    game_date=game_date,
+                    stadium="문학",
+                    away_team="LG 트윈스",
+                    seat_grade="으쓱이존",
+                    seat_detail="1블록 2열",
+                    purchase_price=50000,
+                    unit_price=45000,
+                    quantity=1,
+                    delivery_method="모바일 티켓",
+                    description="삭제 테스트",
+                    signature_image=signature_image,
+                )
+                self.assertIsNone(error)
+                assert disposable is not None
+                deleted, error = store.delete_ticket_listing(seller["username"], disposable["id"])
+                self.assertIsNone(error)
+                self.assertEqual(deleted["status"], "deleted")
+                after_delete = store.get_ticket_dashboard(seller["username"])
+                assert after_delete is not None
+                self.assertEqual([item["id"] for item in after_delete["selling"]], [listing["id"]])
                 admin_room, created, error = store.open_ticket_admin_chat(buyer["username"])
                 self.assertIsNone(error)
                 self.assertTrue(created)
@@ -2501,7 +2530,7 @@ class AccountIdentityTestCase(unittest.TestCase):
                 assert dashboard is not None
                 self.assertEqual(dashboard["selling"][0]["remaining_quantity"], 1)
                 self.assertEqual(dashboard["deals"][0]["status"], "completed")
-                self.assertTrue(dashboard["ticket_access"]["agreement_signed"])
+                self.assertTrue(dashboard["ticket_access"]["has_signed_listing"])
                 self.assertTrue(dashboard["ticket_access"]["verified"])
             finally:
                 reopened.close()

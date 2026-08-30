@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import copy
 import hmac
 import json
@@ -65,6 +67,7 @@ from .utils import (
 BASEBALL_TICKET_IDENTITY_KIND = "baseball_ticket"
 TICKET_ADMIN_USERNAME = "itsyou"
 TICKET_SELLER_AGREEMENT_VERSION = "2026-08-31-v1"
+TICKET_SIGNATURE_MAX_BYTES = 120 * 1024
 TICKET_REPORT_REASONS = {
     "fraud": "사기 및 허위 판매",
     "over_purchase_price": "구매가 이상 판매",
@@ -1196,6 +1199,28 @@ class StateStore:
             and bool(agreement.get("signed_at"))
         )
 
+    @staticmethod
+    def _normalize_ticket_signature_image(value: str) -> str:
+        candidate = value.strip()
+        prefix = "data:image/png;base64,"
+        if not candidate.startswith(prefix) or len(candidate) > (TICKET_SIGNATURE_MAX_BYTES * 2):
+            return ""
+        try:
+            packed = base64.b64decode(candidate.removeprefix(prefix), validate=True)
+        except (ValueError, binascii.Error):
+            return ""
+        if not 100 <= len(packed) <= TICKET_SIGNATURE_MAX_BYTES or not packed.startswith(b"\x89PNG\r\n\x1a\n"):
+            return ""
+        return candidate
+
+    def _has_ticket_signature_locked(self, user_id: str) -> bool:
+        return any(
+            room.get("kind") == "ticket_listing"
+            and room.get("ticket", {}).get("seller_id") == user_id
+            and bool(room.get("ticket", {}).get("seller_signature", {}).get("image_data_url"))
+            for room in self.state["rooms"]
+        )
+
     def _ticket_access_locked(self, user: dict | None) -> dict:
         if user is None:
             return {
@@ -1212,13 +1237,14 @@ class StateStore:
             else "none"
         )
         status = str(user.get("ticket_moderation_status", "active"))
-        agreement_signed = self._ticket_agreement_is_current(user)
         return {
             "status": status,
-            "can_sell": status == "active" and agreement_signed,
-            "agreement_signed": agreement_signed,
+            "can_sell": status == "active",
+            "agreement_signed": False,
+            "signature_required_per_listing": True,
+            "has_signed_listing": self._has_ticket_signature_locked(user["id"]),
             "agreement_version": TICKET_SELLER_AGREEMENT_VERSION,
-            "agreement_signed_at": str(user.get("ticket_agreement", {}).get("signed_at", "")),
+            "agreement_signed_at": "",
             "verified": bool(user.get("ticket_verified", False)),
             "verification_status": verification_status,
             "suspension": copy.deepcopy(user.get("ticket_suspension", {})) if status == "suspended" else {},
@@ -1256,8 +1282,8 @@ class StateStore:
                 return None, "선택한 야구 티켓 전용 ID로 전환해 주세요."
             if user.get("ticket_moderation_status", "active") != "active":
                 return None, "정지 상태에서는 검증을 요청할 수 없습니다. @itsyou에 먼저 소명해 주세요."
-            if not self._ticket_agreement_is_current(user):
-                return None, "판매 규정에 서명한 뒤 검증을 요청해 주세요."
+            if not self._has_ticket_signature_locked(user["id"]):
+                return None, "손그림 서명이 포함된 판매글을 먼저 등록한 뒤 검증을 요청해 주세요."
             if user.get("ticket_verified"):
                 return self._ticket_access_locked(user), None
             requested_at = utc_now_iso()
@@ -1281,9 +1307,6 @@ class StateStore:
             if user.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND:
                 continue
             public = self._user_list_summary(user)
-            agreement = user.get("ticket_agreement", {})
-            if isinstance(agreement, dict) and agreement.get("signed_at"):
-                agreements.append({"user": public, **copy.deepcopy(agreement)})
             request = user.get("ticket_verification_request", {})
             if isinstance(request, dict) and request.get("status"):
                 verification_requests.append({"user": public, **copy.deepcopy(request)})
@@ -1299,6 +1322,20 @@ class StateStore:
                 continue
             ticket = room.get("ticket", {})
             seller = self._users_by_id.get(str(ticket.get("seller_id", "")))
+            signature = ticket.get("seller_signature", {})
+            if isinstance(signature, dict) and signature.get("image_data_url") and seller is not None:
+                agreements.append({
+                    "user": self._user_list_summary(seller),
+                    "listing_id": room["id"],
+                    "listing": {
+                        "game_date": ticket.get("game_date", ""),
+                        "stadium": ticket.get("stadium", ""),
+                        "seat": ticket.get("seat", ""),
+                        "purchase_price": int(ticket.get("purchase_price", 0)),
+                        "unit_price": int(ticket.get("unit_price", 0)),
+                    },
+                    **copy.deepcopy(signature),
+                })
             for report in ticket.get("reports", []):
                 if not isinstance(report, dict):
                     continue
@@ -1321,7 +1358,7 @@ class StateStore:
         verification_requests.sort(key=key, reverse=True)
         reports.sort(key=key, reverse=True)
         return {
-            "agreements": agreements,
+            "agreements": agreements[:100],
             "verification_requests": verification_requests,
             "reports": reports,
             "suspended_users": suspended_users,
@@ -1335,6 +1372,8 @@ class StateStore:
         include_commenters: bool = False,
     ) -> dict:
         ticket = copy.deepcopy(room.get("ticket", {}))
+        ticket["signature_saved"] = bool(ticket.pop("seller_signature", None))
+        ticket.pop("reports", None)
         seller = self._users_by_id.get(str(ticket.get("seller_id", "")))
         summary = {
             "id": room["id"],
@@ -1418,6 +1457,7 @@ class StateStore:
                 self._ticket_listing_summary_locked(room, viewer, include_commenters=True)
                 for room in valid_listings
                 if room.get("ticket", {}).get("seller_id") == viewer["id"]
+                and room.get("ticket", {}).get("status") != "deleted"
             ]
             deal_rooms = [
                 room
@@ -1447,6 +1487,7 @@ class StateStore:
         quantity: int,
         delivery_method: str,
         description: str,
+        signature_image: str,
     ) -> tuple[dict | None, str | None]:
         try:
             game_day = date.fromisoformat(game_date)
@@ -1461,6 +1502,7 @@ class StateStore:
         normalized_seat_detail = seat_detail.strip()[:120]
         normalized_delivery = delivery_method.strip()
         normalized_description = description.strip()[:500]
+        normalized_signature = self._normalize_ticket_signature_image(signature_image)
         if normalized_stadium not in BASEBALL_STADIUMS:
             return None, "목록에 있는 야구장을 선택해 주세요."
         home_team = BASEBALL_HOME_TEAMS[normalized_stadium]
@@ -1481,6 +1523,8 @@ class StateStore:
             return None, "판매가는 실제 구매가를 초과할 수 없습니다."
         if not 1 <= quantity <= 20:
             return None, "티켓 수량은 1~20장으로 입력해 주세요."
+        if not normalized_signature:
+            return None, "판매 규정 확인 후 화면에 직접 서명해 주세요."
 
         with self.lock:
             seller = self._users_by_username.get(username)
@@ -1488,8 +1532,6 @@ class StateStore:
                 return None, "선택한 야구 티켓 전용 ID로 전환해 주세요."
             if seller.get("ticket_moderation_status", "active") != "active":
                 return None, "티켓 판매 기능이 정지되었습니다. @itsyou에 소명해 주세요."
-            if not self._ticket_agreement_is_current(seller):
-                return None, "판매 규정 안내에 서명한 뒤 티켓을 등록해 주세요."
             created_at = utc_now_iso()
             matchup = f"{home_team} vs {normalized_away_team}"
             seat = f"{normalized_seat_grade} · {normalized_seat_detail}"
@@ -1517,6 +1559,15 @@ class StateStore:
                 "description": normalized_description,
                 "status": "open",
                 "reports": [],
+                "seller_signature": {
+                    "version": TICKET_SELLER_AGREEMENT_VERSION,
+                    "image_data_url": normalized_signature,
+                    "signed_at": created_at,
+                    "signer_user_id": seller["id"],
+                    "signer_username": seller["username"],
+                    "account_id": seller.get("account_id", ""),
+                    "admin_recipient": TICKET_ADMIN_USERNAME,
+                },
                 "created_at": created_at,
                 "updated_at": created_at,
                 "expires_at": self._ticket_expiry_iso(game_day),
@@ -1528,6 +1579,31 @@ class StateStore:
                 self.repository.sync_room(room)
             self._save_locked("rooms")
             return self._ticket_listing_summary_locked(room, seller, include_commenters=True), None
+
+    def delete_ticket_listing(self, username: str, listing_id: str) -> tuple[dict | None, str | None]:
+        with self.lock:
+            seller = self._users_by_username.get(username)
+            listing = self._rooms_by_id.get(listing_id)
+            if seller is None or seller.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND:
+                return None, "선택한 야구 티켓 전용 ID로 전환해 주세요."
+            if listing is None or listing.get("kind") != "ticket_listing":
+                return None, "티켓 게시글을 찾을 수 없습니다."
+            ticket = listing.get("ticket", {})
+            if ticket.get("seller_id") != seller["id"]:
+                return None, "판매자만 게시글을 삭제할 수 있습니다."
+            if ticket.get("status") == "deleted":
+                return self._ticket_listing_summary_locked(listing, seller), None
+            deleted_at = utc_now_iso()
+            ticket["status"] = "deleted"
+            ticket["deleted_at"] = deleted_at
+            ticket["updated_at"] = deleted_at
+            listing["is_public"] = False
+            listing["archived_at"] = deleted_at
+            listing["updated_at"] = deleted_at
+            if self.repository is not None:
+                self.repository.sync_room(listing)
+            self._save_locked("rooms")
+            return self._ticket_listing_summary_locked(listing, seller), None
 
     def open_ticket_deal(
         self,
@@ -1546,6 +1622,8 @@ class StateStore:
             listing_ticket = listing.get("ticket", {})
             if listing_ticket.get("seller_id") != seller["id"]:
                 return None, False, "판매자만 1:1 거래 채팅을 열 수 있습니다."
+            if listing_ticket.get("status") != "open":
+                return None, False, "현재 판매 중인 티켓만 1:1 거래를 열 수 있습니다."
             if seller.get("ticket_moderation_status", "active") != "active":
                 return None, False, "티켓 판매 기능이 정지되었습니다. @itsyou에 소명해 주세요."
             buyer = self._users_by_id.get(buyer_user_id)
@@ -1789,6 +1867,9 @@ class StateStore:
                         ticket["updated_at"] = now
                         room["updated_at"] = now
                         changed_rooms.append(room)
+            elif action == "resolve_report":
+                if not report_id:
+                    return None, "처리할 신고를 선택해 주세요."
             else:
                 return None, "지원하지 않는 관리자 처리입니다."
 
@@ -1940,7 +2021,10 @@ class StateStore:
                 if (participant := self._users_by_id.get(user_id)) is not None
             ]
         if room.get("kind") in TICKET_ROOM_KINDS:
-            summary["ticket"] = copy.deepcopy(room.get("ticket", {}))
+            public_ticket = copy.deepcopy(room.get("ticket", {}))
+            public_ticket.pop("seller_signature", None)
+            public_ticket.pop("reports", None)
+            summary["ticket"] = public_ticket
         return summary
 
     def get_user_record(self, username: str) -> dict | None:
@@ -2121,6 +2205,8 @@ class StateStore:
             ):
                 return False
             if kind == "ticket_listing":
+                if room.get("ticket", {}).get("status") == "deleted":
+                    return user["id"] in room.get("participant_ids", [])
                 return True
             return user["id"] in room.get("participant_ids", [])
         return bool(room.get("is_public")) or user["id"] in room.get("participant_ids", [])
