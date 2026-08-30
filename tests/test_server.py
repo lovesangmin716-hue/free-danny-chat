@@ -19,6 +19,7 @@ import time
 import unittest
 from contextlib import redirect_stdout
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -63,6 +64,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertEqual(server.ChatHandler.serve_session.__module__, "colorless.http.messaging")
         self.assertEqual(server.ChatHandler.start_google_login.__module__, "colorless.http.auth")
         self.assertEqual(server.ChatHandler.serve_public_shorts.__module__, "colorless.http.shorts")
+        self.assertEqual(server.ChatHandler.serve_ticket_dashboard.__module__, "colorless.http.tickets")
         self.assertEqual(server.ChatHandler.serve_upload.__module__, "colorless.http.uploads")
 
     def test_work_mode_supports_mobile_single_and_double_tap(self) -> None:
@@ -2334,6 +2336,87 @@ class AttachmentTransferIntegrationTestCase(unittest.TestCase):
 
 
 class AccountIdentityTestCase(unittest.TestCase):
+    def test_baseball_ticket_listing_open_chat_and_completed_deal(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="colorless-baseball-ticket-") as temp_dir:
+            state_path = Path(temp_dir) / "state.json"
+            store = server.StateStore(state_path)
+            try:
+                seller, error = store.create_local_user(
+                    "ticket_seller", "seller_code", "password", "", "01011112222", "20대", "남성"
+                )
+                self.assertIsNone(error)
+                buyer, error = store.create_local_user(
+                    "ticket_buyer", "buyer_code", "password", "", "01033334444", "20대", "여성"
+                )
+                self.assertIsNone(error)
+                assert seller is not None and buyer is not None
+                seller_extra, error = store.create_identity(
+                    seller["username"], "ticket_extra", "Extra", "extra_code"
+                )
+                self.assertIsNone(error)
+                assert seller_extra is not None
+
+                designated, error = store.designate_baseball_identity(seller["username"], seller["id"])
+                self.assertIsNone(error)
+                self.assertEqual(designated["identity_kind"], "baseball_ticket")
+                rejected, error = store.designate_baseball_identity(seller["username"], seller_extra["id"])
+                self.assertIsNone(rejected)
+                self.assertIn("계정당 1개", error or "")
+                _, error = store.designate_baseball_identity(buyer["username"], buyer["id"])
+                self.assertIsNone(error)
+
+                game_date = (datetime.now(timezone.utc) + timedelta(days=30)).date().isoformat()
+                listing, error = store.create_ticket_listing(
+                    seller["username"],
+                    game_date=game_date,
+                    stadium="잠실(LG)",
+                    matchup="LG vs 두산",
+                    seat="1루 107블록 8열",
+                    unit_price=35000,
+                    quantity=3,
+                    delivery_method="모바일 티켓",
+                    description="연석입니다.",
+                )
+                self.assertIsNone(error)
+                assert listing is not None
+                self.assertEqual(listing["remaining_quantity"], 3)
+                self.assertEqual(listing["room"]["kind"], "ticket_listing")
+
+                message_result = store.add_message(listing["id"], buyer["username"], "2장 구매하고 싶어요.")
+                self.assertIsNotNone(message_result)
+                seller_dashboard = store.get_ticket_dashboard(seller["username"])
+                assert seller_dashboard is not None
+                self.assertEqual(seller_dashboard["selling"][0]["commenters"][0]["id"], buyer["id"])
+
+                deal, created, error = store.open_ticket_deal(
+                    seller["username"], listing["id"], buyer["id"], 2
+                )
+                self.assertIsNone(error)
+                self.assertTrue(created)
+                assert deal is not None
+                self.assertEqual(deal["room"]["kind"], "ticket_deal")
+                completed, updated_listing, error = store.complete_ticket_deal(seller["username"], deal["id"])
+                self.assertIsNone(error)
+                assert completed is not None and updated_listing is not None
+                self.assertEqual(completed["status"], "completed")
+                self.assertEqual(completed["buyer"]["id"], buyer["id"])
+                self.assertEqual(updated_listing["remaining_quantity"], 1)
+                expires_at = datetime.fromisoformat(updated_listing["expires_at"])
+                self.assertEqual(expires_at.astimezone(timezone(timedelta(hours=9))).date().isoformat(), (
+                    date.fromisoformat(game_date) + timedelta(days=7)
+                ).isoformat())
+            finally:
+                store.close()
+
+            reopened = server.StateStore(state_path)
+            try:
+                dashboard = reopened.get_ticket_dashboard("ticket_seller")
+                assert dashboard is not None
+                self.assertEqual(dashboard["selling"][0]["remaining_quantity"], 1)
+                self.assertEqual(dashboard["deals"][0]["status"], "completed")
+            finally:
+                reopened.close()
+
     def test_returning_social_login_skips_profile_writes(self) -> None:
         with tempfile.TemporaryDirectory(prefix="colorless-social-login-") as temp_dir:
             store = server.StateStore(Path(temp_dir) / "state.json")

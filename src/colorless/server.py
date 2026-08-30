@@ -235,6 +235,7 @@ from .http import (
     HandlerContext,
     MessagingRoutesMixin,
     ShortsRoutesMixin,
+    TicketRoutesMixin,
     UploadRoutesMixin,
 )
 from .profile_art import (
@@ -459,6 +460,7 @@ class ChatHandler(
     AuthRoutesMixin,
     ShortsRoutesMixin,
     MessagingRoutesMixin,
+    TicketRoutesMixin,
     UploadRoutesMixin,
     BaseHTTPRequestHandler,
 ):
@@ -769,6 +771,12 @@ class ChatHandler(
                 return
             self.send_conditional_json(STORE.get_me_summary(user))
             return
+        if path == "/tickets":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.serve_ticket_dashboard(user)
+            return
         if path == "/friends":
             user = self.require_auth_record()
             if user is None:
@@ -967,6 +975,30 @@ class ChatHandler(
             if user is None:
                 return
             self.update_profile(user)
+            return
+        if path == "/tickets/identity":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.designate_ticket_identity(user)
+            return
+        if path == "/tickets":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.create_ticket_listing(user)
+            return
+        if path == "/tickets/deals":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.open_ticket_deal(user)
+            return
+        if path == "/tickets/deals/complete":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.complete_ticket_deal(user)
             return
         if path == "/identities":
             user = self.require_auth()

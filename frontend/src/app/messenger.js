@@ -11,7 +11,7 @@ import { ColorlessPlatform } from "./platform/index.js";
 
 // Room, friend, presence, directory, and realtime synchronization behavior.
 function recentChatRooms() {
-  return [...state.messenger.rooms].sort((first, second) => {
+  return state.messenger.rooms.filter((room) => ["direct", "group"].includes(room.kind || "group")).sort((first, second) => {
     const firstHasMessage = Boolean(first.last_message);
     const secondHasMessage = Boolean(second.last_message);
     if (firstHasMessage !== secondHasMessage) return firstHasMessage ? -1 : 1;
@@ -40,7 +40,7 @@ function renderChats() {
     if (context.filter === "unread" && !(room.unread_count > 0)) return false;
     return true;
   });
-  if (!state.messenger.rooms.length) {
+  if (!rooms.length && context.filter !== "unread") {
     const empty = document.createElement("p");
     empty.className = "empty-list";
     empty.textContent = state.isGuest
@@ -374,6 +374,7 @@ function registerRealtimeHandlers() {
     recordSyncRevision(payload.revision);
     const isIncoming = payload.message?.username !== state.messenger.user?.username;
     if (!isIncoming) return;
+    const isTicketRoom = ["ticket_listing", "ticket_deal"].includes(payload.room?.kind);
     let room;
     appStore.transact("realtime.message-created", () => {
       const existingRoom = state.roomById.get(payload.roomId);
@@ -392,13 +393,13 @@ function registerRealtimeHandlers() {
         if (appendChatMessageState(visibleMessage)) appendChatMessageNode(visibleMessage, true);
       }
     }, { event: payload.type });
-    showWorkModeMessage(room, payload.message, payload.sender);
+    if (!isTicketRoom) showWorkModeMessage(room, payload.message, payload.sender);
     if (payload.roomId === state.selectedRoomId && payload.message?.id) {
       scheduleRoomRead(payload.roomId);
-    } else if (!isShortsView) {
+    } else if (!isShortsView && !isTicketRoom) {
       renderChats();
     }
-    if (!state.shortInlineReply && room) showShortMessageNotice(room, payload.message);
+    if (!state.shortInlineReply && room && !isTicketRoom) showShortMessageNotice(room, payload.message);
     else if (!state.shortInlineReply) renderShortShareBar();
   });
   realtimeEvents.register("message_deleted", async (payload, { isShortsView }) => {

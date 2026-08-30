@@ -7,6 +7,7 @@ import re
 import sqlite3
 import threading
 import time
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from .config import (
@@ -59,6 +60,24 @@ from .utils import (
     valid_hex_color,
     valid_profile_pixels,
 )
+
+
+BASEBALL_TICKET_IDENTITY_KIND = "baseball_ticket"
+BASEBALL_STADIUMS = (
+    "잠실(LG)",
+    "잠실(두산)",
+    "고척",
+    "문학",
+    "대전",
+    "대구",
+    "수원",
+    "창원",
+    "사직",
+    "광주",
+)
+TICKET_DELIVERY_METHODS = ("모바일 티켓", "현장 전달", "택배", "기타")
+TICKET_ROOM_KINDS = {"ticket_listing", "ticket_deal"}
+KOREA_TIMEZONE = timezone(timedelta(hours=9))
 
 
 class StateStore:
@@ -448,6 +467,7 @@ class StateStore:
             user.setdefault("status_message", "")
             user.setdefault("auth_provider", "local")
             user.setdefault("provider_user_id", "")
+            user.setdefault("identity_kind", "general")
             user.setdefault("created_at", utc_now_iso())
             legacy_pixels = user.get("profile_pixels")
             if valid_profile_pixels(legacy_pixels) or isinstance(legacy_pixels, str):
@@ -908,6 +928,7 @@ class StateStore:
                 "google": "구글",
                 "demo": "개발용 SNS",
             }.get(provider, provider),
+            "identity_kind": user.get("identity_kind", "general"),
             "created_at": user["created_at"],
             "profile_image_url": f"{profile_image_url}?v={profile_image_version}" if profile_image_url else "",
             "profile_thumbnail_url": (
@@ -931,6 +952,10 @@ class StateStore:
                 if not identity.get("disabled_at")
             ]
             identities.sort(key=lambda identity: (identity.get("created_at", ""), identity["id"]))
+            baseball_identity = next(
+                (identity for identity in identities if identity.get("identity_kind") == BASEBALL_TICKET_IDENTITY_KIND),
+                None,
+            )
             return {
                 "account": {
                     "id": account["id"],
@@ -939,6 +964,7 @@ class StateStore:
                 },
                 "identities": identities,
                 "active_identity_id": active_user["id"],
+                "baseball_identity_id": baseball_identity["id"] if baseball_identity else "",
             }
 
     def create_identity(
@@ -983,6 +1009,7 @@ class StateStore:
                 "friend_code": normalized_friend_code,
                 "display_name": normalized_display_name,
                 "status_message": status_message.strip()[:40] or build_status_message(account.get("auth_provider", "local")),
+                "identity_kind": "general",
                 "created_at": utc_now_iso(),
                 "profile_pixels_blank": True,
                 "profile_art_version": 0,
@@ -1004,6 +1031,346 @@ class StateStore:
                     raise
             self._save_locked("users")
             return self._user_public(identity), None
+
+    @staticmethod
+    def _ticket_expiry_iso(game_day: date) -> str:
+        expiry_day = game_day + timedelta(days=7)
+        expiry_local = datetime(
+            expiry_day.year,
+            expiry_day.month,
+            expiry_day.day,
+            23,
+            59,
+            59,
+            tzinfo=KOREA_TIMEZONE,
+        )
+        return expiry_local.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+    @staticmethod
+    def _ticket_room_is_valid(room: dict) -> bool:
+        expires_at = str(room.get("ticket", {}).get("expires_at", ""))
+        try:
+            expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        return expiry >= datetime.now(timezone.utc)
+
+    def _baseball_identity_for_account_locked(self, account_id: str) -> dict | None:
+        return next(
+            (
+                identity
+                for identity in self._users_by_account_id.get(account_id, [])
+                if not identity.get("disabled_at")
+                and identity.get("identity_kind") == BASEBALL_TICKET_IDENTITY_KIND
+            ),
+            None,
+        )
+
+    def designate_baseball_identity(
+        self,
+        owner_username: str,
+        identity_id: str,
+    ) -> tuple[dict | None, str | None]:
+        with self.lock:
+            owner = self._users_by_username.get(owner_username)
+            if owner is None:
+                return None, "로그인 계정을 찾을 수 없습니다."
+            target = self._users_by_id.get(identity_id)
+            if target is None or target.get("account_id") != owner.get("account_id") or target.get("disabled_at"):
+                return None, "이 계정이 소유한 활동 ID가 아닙니다."
+            existing = self._baseball_identity_for_account_locked(owner["account_id"])
+            if existing is not None and existing["id"] != target["id"]:
+                return None, "야구 티켓 전용 ID는 계정당 1개만 선택할 수 있습니다."
+            if target.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND:
+                target["identity_kind"] = BASEBALL_TICKET_IDENTITY_KIND
+                if self.repository is not None:
+                    self.repository.sync_user(target)
+                self._save_locked("users")
+            return self._user_public(target), None
+
+    def _ticket_listing_summary_locked(
+        self,
+        room: dict,
+        viewer: dict,
+        *,
+        include_commenters: bool = False,
+    ) -> dict:
+        ticket = copy.deepcopy(room.get("ticket", {}))
+        seller = self._users_by_id.get(str(ticket.get("seller_id", "")))
+        summary = {
+            "id": room["id"],
+            **ticket,
+            "room": self._room_summary(room, viewer, include_members=False),
+            "seller": self._user_list_summary(seller) if seller is not None else None,
+        }
+        if include_commenters:
+            summary["commenters"] = [
+                self._user_list_summary(commenter)
+                for user_id in room.get("participant_ids", [])
+                if user_id != ticket.get("seller_id")
+                and (commenter := self._users_by_id.get(user_id)) is not None
+            ]
+        return summary
+
+    def _ticket_deal_summary_locked(self, room: dict, viewer: dict) -> dict:
+        ticket = copy.deepcopy(room.get("ticket", {}))
+        seller = self._users_by_id.get(str(ticket.get("seller_id", "")))
+        buyer = self._users_by_id.get(str(ticket.get("buyer_id", "")))
+        return {
+            "id": room["id"],
+            **ticket,
+            "room": self._room_summary(room, viewer, include_members=False),
+            "seller": self._user_list_summary(seller) if seller is not None else None,
+            "buyer": self._user_list_summary(buyer) if buyer is not None else None,
+            "role": "seller" if viewer.get("id") == ticket.get("seller_id") else "buyer",
+        }
+
+    def get_ticket_dashboard(self, username: str) -> dict | None:
+        with self.lock:
+            viewer = self._users_by_username.get(username)
+            if viewer is None:
+                return None
+            baseball_identity = self._baseball_identity_for_account_locked(viewer.get("account_id", ""))
+            context = {
+                "stadiums": list(BASEBALL_STADIUMS),
+                "delivery_methods": list(TICKET_DELIVERY_METHODS),
+                "baseball_identity": self._user_public(baseball_identity) if baseball_identity else None,
+                "active_identity_matches": bool(baseball_identity and baseball_identity["id"] == viewer["id"]),
+            }
+            if baseball_identity is None or baseball_identity["id"] != viewer["id"]:
+                return {**context, "listings": [], "selling": [], "deals": []}
+
+            valid_listings = [
+                room
+                for room in self.state["rooms"]
+                if room.get("kind") == "ticket_listing" and self._ticket_room_is_valid(room)
+            ]
+            listings = [
+                self._ticket_listing_summary_locked(room, viewer)
+                for room in valid_listings
+                if room.get("ticket", {}).get("status") == "open"
+                and int(room.get("ticket", {}).get("remaining_quantity", 0)) > 0
+            ]
+            selling = [
+                self._ticket_listing_summary_locked(room, viewer, include_commenters=True)
+                for room in valid_listings
+                if room.get("ticket", {}).get("seller_id") == viewer["id"]
+            ]
+            deal_rooms = [
+                room
+                for room in self.state["rooms"]
+                if room.get("kind") == "ticket_deal"
+                and viewer["id"] in room.get("participant_ids", [])
+                and self._ticket_room_is_valid(room)
+            ]
+            deals = [self._ticket_deal_summary_locked(room, viewer) for room in deal_rooms]
+
+        listings.sort(key=lambda item: (str(item.get("game_date", "")), str(item.get("created_at", ""))))
+        selling.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
+        deals.sort(key=lambda item: str(item.get("updated_at", item.get("created_at", ""))), reverse=True)
+        return {**context, "listings": listings, "selling": selling, "deals": deals}
+
+    def create_ticket_listing(
+        self,
+        username: str,
+        *,
+        game_date: str,
+        stadium: str,
+        matchup: str,
+        seat: str,
+        unit_price: int,
+        quantity: int,
+        delivery_method: str,
+        description: str,
+    ) -> tuple[dict | None, str | None]:
+        try:
+            game_day = date.fromisoformat(game_date)
+        except ValueError:
+            return None, "경기 날짜를 올바르게 입력해 주세요."
+        today = datetime.now(KOREA_TIMEZONE).date()
+        if game_day < today or game_day > today + timedelta(days=370):
+            return None, "경기 날짜는 오늘부터 1년 이내로 입력해 주세요."
+        normalized_stadium = stadium.strip()
+        normalized_matchup = matchup.strip()[:60]
+        normalized_seat = seat.strip()[:120]
+        normalized_delivery = delivery_method.strip()
+        normalized_description = description.strip()[:500]
+        if normalized_stadium not in BASEBALL_STADIUMS:
+            return None, "목록에 있는 야구장을 선택해 주세요."
+        if not normalized_seat:
+            return None, "좌석 정보를 입력해 주세요."
+        if normalized_delivery not in TICKET_DELIVERY_METHODS:
+            return None, "수령 방식을 선택해 주세요."
+        if not 0 <= unit_price <= 10_000_000:
+            return None, "티켓 1장 가격을 올바르게 입력해 주세요."
+        if not 1 <= quantity <= 20:
+            return None, "티켓 수량은 1~20장으로 입력해 주세요."
+
+        with self.lock:
+            seller = self._users_by_username.get(username)
+            if seller is None or seller.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND:
+                return None, "선택한 야구 티켓 전용 ID로 전환해 주세요."
+            created_at = utc_now_iso()
+            room_name = f"{normalized_stadium} · {game_day.strftime('%m/%d')} · {normalized_seat}"[:80]
+            room = self._new_room(new_id("room"), room_name, normalized_description, username, created_at)
+            room["kind"] = "ticket_listing"
+            room["is_public"] = True
+            room["participant_ids"] = [seller["id"]]
+            room["ticket"] = {
+                "type": "listing",
+                "seller_id": seller["id"],
+                "game_date": game_day.isoformat(),
+                "stadium": normalized_stadium,
+                "matchup": normalized_matchup,
+                "seat": normalized_seat,
+                "unit_price": unit_price,
+                "quantity": quantity,
+                "remaining_quantity": quantity,
+                "delivery_method": normalized_delivery,
+                "description": normalized_description,
+                "status": "open",
+                "created_at": created_at,
+                "updated_at": created_at,
+                "expires_at": self._ticket_expiry_iso(game_day),
+            }
+            self.state["rooms"].append(room)
+            self._register_room_locked(room)
+            self.state["messages"][room["id"]] = []
+            if self.repository is not None:
+                self.repository.sync_room(room)
+            self._save_locked("rooms")
+            return self._ticket_listing_summary_locked(room, seller, include_commenters=True), None
+
+    def open_ticket_deal(
+        self,
+        username: str,
+        listing_id: str,
+        buyer_user_id: str,
+        quantity: int,
+    ) -> tuple[dict | None, bool, str | None]:
+        with self.lock:
+            seller = self._users_by_username.get(username)
+            listing = self._rooms_by_id.get(listing_id)
+            if seller is None or seller.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND:
+                return None, False, "선택한 야구 티켓 전용 ID로 전환해 주세요."
+            if listing is None or listing.get("kind") != "ticket_listing" or not self._ticket_room_is_valid(listing):
+                return None, False, "유효한 티켓 게시글을 찾을 수 없습니다."
+            listing_ticket = listing.get("ticket", {})
+            if listing_ticket.get("seller_id") != seller["id"]:
+                return None, False, "판매자만 1:1 거래 채팅을 열 수 있습니다."
+            buyer = self._users_by_id.get(buyer_user_id)
+            if (
+                buyer is None
+                or buyer["id"] == seller["id"]
+                or buyer["id"] not in listing.get("participant_ids", [])
+                or buyer.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND
+            ):
+                return None, False, "오픈채팅에 참여한 구매 희망자를 선택해 주세요."
+            remaining = int(listing_ticket.get("remaining_quantity", 0))
+            if not 1 <= quantity <= remaining:
+                return None, False, "거래할 티켓 수량을 올바르게 선택해 주세요."
+
+            existing = next(
+                (
+                    room
+                    for room in self.state["rooms"]
+                    if room.get("kind") == "ticket_deal"
+                    and room.get("ticket", {}).get("listing_id") == listing_id
+                    and room.get("ticket", {}).get("buyer_id") == buyer["id"]
+                    and self._ticket_room_is_valid(room)
+                ),
+                None,
+            )
+            if existing is not None:
+                return self._ticket_deal_summary_locked(existing, seller), False, None
+
+            created_at = utc_now_iso()
+            room = self._new_room(
+                new_id("room"),
+                f"{listing_ticket.get('stadium', '야구')} · {listing_ticket.get('seat', '티켓')} 1:1 거래"[:80],
+                "티켓 양도 1:1 거래 채팅",
+                username,
+                created_at,
+            )
+            room["kind"] = "ticket_deal"
+            room["participant_ids"] = [seller["id"], buyer["id"]]
+            room["ticket"] = {
+                "type": "deal",
+                "listing_id": listing_id,
+                "seller_id": seller["id"],
+                "buyer_id": buyer["id"],
+                "game_date": listing_ticket.get("game_date", ""),
+                "stadium": listing_ticket.get("stadium", ""),
+                "matchup": listing_ticket.get("matchup", ""),
+                "seat": listing_ticket.get("seat", ""),
+                "unit_price": int(listing_ticket.get("unit_price", 0)),
+                "quantity": quantity,
+                "delivery_method": listing_ticket.get("delivery_method", ""),
+                "status": "pending",
+                "created_at": created_at,
+                "updated_at": created_at,
+                "completed_at": "",
+                "expires_at": listing_ticket.get("expires_at", ""),
+            }
+            self.state["rooms"].append(room)
+            self._register_room_locked(room)
+            self.state["messages"][room["id"]] = []
+            if self.repository is not None:
+                self.repository.sync_room(room)
+            self._save_locked("rooms")
+            return self._ticket_deal_summary_locked(room, seller), True, None
+
+    def complete_ticket_deal(
+        self,
+        username: str,
+        deal_room_id: str,
+    ) -> tuple[dict | None, dict | None, str | None]:
+        with self.lock:
+            seller = self._users_by_username.get(username)
+            deal_room = self._rooms_by_id.get(deal_room_id)
+            if seller is None or seller.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND:
+                return None, None, "선택한 야구 티켓 전용 ID로 전환해 주세요."
+            if deal_room is None or deal_room.get("kind") != "ticket_deal" or not self._ticket_room_is_valid(deal_room):
+                return None, None, "유효한 거래 채팅을 찾을 수 없습니다."
+            deal = deal_room.get("ticket", {})
+            if deal.get("seller_id") != seller["id"]:
+                return None, None, "판매자만 거래 완료를 처리할 수 있습니다."
+            if deal.get("status") == "completed":
+                listing = self._rooms_by_id.get(str(deal.get("listing_id", "")))
+                listing_summary = (
+                    self._ticket_listing_summary_locked(listing, seller, include_commenters=True)
+                    if listing is not None else None
+                )
+                return self._ticket_deal_summary_locked(deal_room, seller), listing_summary, None
+            listing = self._rooms_by_id.get(str(deal.get("listing_id", "")))
+            if listing is None or listing.get("kind") != "ticket_listing" or not self._ticket_room_is_valid(listing):
+                return None, None, "티켓 게시글의 유효기간이 지났습니다."
+            listing_ticket = listing.get("ticket", {})
+            quantity = int(deal.get("quantity", 0))
+            remaining = int(listing_ticket.get("remaining_quantity", 0))
+            if deal.get("status") != "pending" or not 1 <= quantity <= remaining:
+                return None, None, "남은 티켓 수량을 확인해 주세요."
+
+            updated_at = utc_now_iso()
+            listing_ticket["remaining_quantity"] = remaining - quantity
+            listing_ticket["status"] = "sold_out" if remaining == quantity else "open"
+            listing_ticket["updated_at"] = updated_at
+            listing["updated_at"] = updated_at
+            deal["status"] = "completed"
+            deal["completed_at"] = updated_at
+            deal["updated_at"] = updated_at
+            deal_room["updated_at"] = updated_at
+            if self.repository is not None:
+                self.repository.sync_room(listing)
+                self.repository.sync_room(deal_room)
+            self._save_locked("rooms")
+            return (
+                self._ticket_deal_summary_locked(deal_room, seller),
+                self._ticket_listing_summary_locked(listing, seller, include_commenters=True),
+                None,
+            )
 
     def _user_list_summary(self, user: dict) -> dict:
         public = self._user_public(user)
@@ -1107,6 +1474,8 @@ class StateStore:
                 for user_id in room.get("participant_ids", [])
                 if (participant := self._users_by_id.get(user_id)) is not None
             ]
+        if room.get("kind") in TICKET_ROOM_KINDS:
+            summary["ticket"] = copy.deepcopy(room.get("ticket", {}))
         return summary
 
     def get_user_record(self, username: str) -> dict | None:
@@ -1279,6 +1648,16 @@ class StateStore:
         return set(self._friend_ids_by_user.get(user_id, set()))
 
     def _can_access_room_locked(self, room: dict, user: dict) -> bool:
+        kind = room.get("kind")
+        if kind in TICKET_ROOM_KINDS:
+            if (
+                user.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND
+                or not self._ticket_room_is_valid(room)
+            ):
+                return False
+            if kind == "ticket_listing":
+                return True
+            return user["id"] in room.get("participant_ids", [])
         return bool(room.get("is_public")) or user["id"] in room.get("participant_ids", [])
 
     def can_access_room(self, room_id: str, username: str) -> bool:
@@ -1292,7 +1671,8 @@ class StateStore:
             rooms = [
                 self._room_summary(room, viewer)
                 for room in self.state["rooms"]
-                if viewer is None or self._can_access_room_locked(room, viewer)
+                if room.get("kind", "group") in {"direct", "group"}
+                and (viewer is None or self._can_access_room_locked(room, viewer))
             ]
         return sorted(rooms, key=lambda room: room["updated_at"], reverse=True)
 
@@ -1928,6 +2308,12 @@ class StateStore:
             room = self._rooms_by_id.get(room_id)
             if room is None:
                 return set()
+            if room.get("kind") == "ticket_listing":
+                return {
+                    user["username"]
+                    for user_id in room.get("participant_ids", [])
+                    if (user := self._users_by_id.get(user_id)) is not None
+                }
             if room.get("is_public"):
                 return set(self._users_by_username)
             return {
@@ -2489,6 +2875,12 @@ class StateStore:
             if room is None or user is None or not self._can_access_room_locked(room, user):
                 return None
 
+            ticket_participant_added = False
+            if room.get("kind") == "ticket_listing" and user["id"] not in room.get("participant_ids", []):
+                room.setdefault("participant_ids", []).append(user["id"])
+                self._room_ids_by_user.setdefault(user["id"], set()).add(room_id)
+                ticket_participant_added = True
+
             idempotency_key = (room_id, username, client_message_id)
             existing_message = self._messages_by_client_id.get(idempotency_key) if client_message_id else None
             if existing_message is None and client_message_id and self.repository is not None:
@@ -2555,6 +2947,9 @@ class StateStore:
                 # in-process list above is only a bounded compatibility cache.
                 if not self.repository.insert_message(message, user["id"], room, 0):
                     room_messages.pop()
+                    if ticket_participant_added:
+                        room["participant_ids"].remove(user["id"])
+                        self._room_ids_by_user.get(user["id"], set()).discard(room_id)
                     existing_message = self.repository.message_by_client_id(room_id, user["id"], client_message_id) if client_message_id else None
                     if existing_message is not None:
                         return existing_message, self._room_summary(

@@ -625,9 +625,13 @@ function renderChatRoom({ scrollToBottom = false, preserveScrollHeight = 0, rest
   chatRoomName.textContent = room.name; /*
   chatRoomPresence.textContent = isInThisRoom ? "대화방에 접속 중" : (presence?.online ? "활동 중" : "");
 
-  */ chatRoomPresence.textContent = isGroupRoom
-    ? `${room.participant_count || room.participants?.length || 0}명`
-    : (isInThisRoom ? "in chat" : (presence?.online ? "online" : ""));
+  */ chatRoomPresence.textContent = room.kind === "ticket_listing"
+    ? `티켓 오픈채팅 · ${room.participant_count || 1}명`
+    : room.kind === "ticket_deal"
+      ? "티켓 1:1 거래 채팅"
+      : isGroupRoom
+        ? `${room.participant_count || room.participants?.length || 0}명`
+        : (isInThisRoom ? "in chat" : (presence?.online ? "online" : ""));
   if (
     state.renderedMessageRoomId !== room.id
     || state.renderedMessageRevision !== state.messageRevision

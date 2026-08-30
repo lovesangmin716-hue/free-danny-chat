@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#ffffff" />
     <title>Colorless</title>
     <link rel="preload" href="assets/fonts/The%20Jamsil%203%20Regular.woff2?v=4e887c501a6c" as="font" type="font/woff2" crossorigin />
-    <script defer src="assets/js/main.js?v=fd2de0031996"></script>
+    <script defer src="assets/js/main.js?v=b16d3e5733d7"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -309,6 +309,54 @@
       .my-work-mode-toggle { min-width: 86px; }
       .my-actions { display: grid; gap: 8px; }
       .my-actions button { width: 100%; }
+      .ticket-transfer-screen { background: var(--white); display: flex; flex-direction: column; inset: 0; position: fixed; z-index: 205; }
+      .ticket-transfer-screen.hidden { display: none; }
+      .ticket-header { align-items: center; border-bottom: 1px solid var(--black); display: grid; gap: 12px; grid-template-columns: 48px minmax(0, 1fr) auto; min-height: 72px; padding: calc(8px + env(safe-area-inset-top)) 14px 8px; }
+      .ticket-header h2 { font-size: 20px; }
+      .ticket-header-copy { display: grid; gap: 3px; min-width: 0; }
+      .ticket-header-copy span { color: var(--gray); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ticket-header-button { background: var(--white); color: var(--black); min-height: 44px; min-width: 44px; }
+      .ticket-transfer-body { margin: 0 auto; max-width: 760px; overflow-y: auto; padding: 18px 18px calc(32px + env(safe-area-inset-bottom)); width: 100%; }
+      .ticket-identity-setup { border: 1px solid var(--black); display: grid; gap: 12px; padding: 20px; }
+      .ticket-identity-setup h3, .ticket-pane h3 { margin: 0; }
+      .ticket-identity-setup p, .ticket-empty { color: var(--gray); font-size: 13px; line-height: 1.55; margin: 0; }
+      .ticket-identity-setup select, .ticket-form select { background: var(--white); border: 1px solid var(--black); min-height: 48px; padding: 0 12px; width: 100%; }
+      .ticket-tabs { display: grid; gap: 0; grid-template-columns: repeat(3, 1fr); margin-bottom: 18px; }
+      .ticket-tab { background: var(--white); color: var(--black); }
+      .ticket-tab + .ticket-tab { border-left: 0; }
+      .ticket-tab.active { background: var(--black); color: var(--white); }
+      .ticket-pane { display: grid; gap: 14px; }
+      .ticket-pane-heading { align-items: center; display: flex; gap: 12px; justify-content: space-between; }
+      .ticket-list { display: grid; gap: 12px; }
+      .ticket-card { border: 1px solid var(--black); display: grid; gap: 11px; padding: 16px; }
+      .ticket-card-heading { align-items: start; display: flex; gap: 12px; justify-content: space-between; }
+      .ticket-card-heading strong { font-size: 17px; line-height: 1.35; }
+      .ticket-badge { border: 1px solid var(--black); flex: 0 0 auto; font-size: 11px; padding: 4px 7px; }
+      .ticket-card-meta { color: var(--gray); display: grid; font-size: 13px; gap: 5px; line-height: 1.45; }
+      .ticket-card-price { font-size: 18px; font-weight: 700; }
+      .ticket-card-description { line-height: 1.55; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+      .ticket-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+      .ticket-card-actions button { flex: 1 1 150px; }
+      .ticket-commenters { border-top: 1px solid var(--light-gray); display: grid; gap: 8px; padding-top: 10px; }
+      .ticket-commenter { align-items: center; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) 68px auto; }
+      .ticket-commenter input { min-height: 42px; padding-inline: 8px; }
+      .ticket-commenter button { min-height: 42px; padding-inline: 11px; }
+      .ticket-form { border: 1px solid var(--black); display: grid; gap: 12px; margin: 0; padding: 16px; }
+      .ticket-form-grid { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .ticket-field { display: grid; gap: 6px; }
+      .ticket-field-wide { grid-column: 1 / -1; }
+      .ticket-field label { font-size: 12px; font-weight: 700; }
+      .ticket-field textarea { border: 1px solid var(--black); min-height: 96px; padding: 12px; resize: vertical; width: 100%; }
+      .ticket-form-actions { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
+      .ticket-status { color: var(--gray); font-size: 12px; margin: 0; min-height: 1.4em; }
+      .app.ticket-transfer-active .chat-room:not(.hidden) { height: 100dvh; inset: 0; max-width: none; position: fixed; width: 100%; z-index: 230; }
+      .app.ticket-transfer-active .chat-room-back { display: inline-flex; }
+      @media (max-width: 520px) {
+        .ticket-form-grid { grid-template-columns: 1fr; }
+        .ticket-field-wide { grid-column: auto; }
+        .ticket-commenter { grid-template-columns: minmax(0, 1fr) 58px; }
+        .ticket-commenter button { grid-column: 1 / -1; }
+      }
       body.work-mode-active { overflow: hidden; }
       .work-mode-screen { background: var(--white); display: grid; inset: 0; padding: clamp(28px, 7vw, 96px); place-items: center; position: fixed; touch-action: manipulation; z-index: 200; }
       .work-mode-screen.hidden { display: none; }
@@ -944,11 +992,62 @@
               <button type="button" class="secondary-button my-work-mode-toggle" id="work-mode-toggle" aria-pressed="false">켜기</button>
             </div>
             <div class="my-actions">
+              <button type="button" class="secondary-button" id="open-ticket-transfer-button" aria-label="야구 티켓 양도">⚾ 야구 티켓 양도</button>
               <button type="button" class="secondary-button" id="open-profile-button" data-icon="user" aria-label="개인정보 수정">개인정보 수정</button>
               <button type="button" id="logout-button" data-icon="log-out" aria-label="로그아웃">로그아웃</button>
             </div>
           </div>
         </section>
+      </section>
+      <section class="ticket-transfer-screen hidden" id="ticket-transfer-screen" aria-label="야구 티켓 양도" aria-hidden="true">
+        <header class="ticket-header">
+          <button type="button" class="ticket-header-button" id="close-ticket-transfer-button" aria-label="티켓 양도 닫기">←</button>
+          <div class="ticket-header-copy">
+            <h2>야구 티켓 양도</h2>
+            <span id="ticket-identity-label">야구 전용 ID를 선택해 주세요.</span>
+          </div>
+          <button type="button" class="ticket-header-button" id="refresh-ticket-transfer-button" aria-label="새로고침">↻</button>
+        </header>
+        <div class="ticket-transfer-body">
+          <section class="ticket-identity-setup" id="ticket-identity-setup">
+            <h3>야구 전용 ID 선택</h3>
+            <p>계정당 활동 ID 한 개만 선택할 수 있으며, 선택 후에는 다른 ID로 변경할 수 없습니다. 티켓 게시와 대화는 이 ID로만 이용합니다.</p>
+            <select id="ticket-identity-select" aria-label="야구 전용 활동 ID"></select>
+            <button type="button" id="designate-ticket-identity-button">이 ID를 야구 전용으로 선택</button>
+            <p class="ticket-status" id="ticket-identity-status" role="status" aria-live="polite"></p>
+          </section>
+          <section class="hidden" id="ticket-transfer-content">
+            <nav class="ticket-tabs" aria-label="티켓 양도 메뉴">
+              <button type="button" class="ticket-tab active" data-ticket-tab="listings">양도 티켓</button>
+              <button type="button" class="ticket-tab" data-ticket-tab="selling">판매 관리</button>
+              <button type="button" class="ticket-tab" data-ticket-tab="deals">거래 관리</button>
+            </nav>
+            <p class="ticket-status" id="ticket-screen-status" role="status" aria-live="polite"></p>
+            <section class="ticket-pane" data-ticket-pane="listings">
+              <div class="ticket-pane-heading">
+                <h3>양도 티켓</h3>
+                <button type="button" class="secondary-button" id="open-ticket-form-button">티켓 올리기</button>
+              </div>
+              <form class="ticket-form hidden" id="ticket-listing-form">
+                <div class="ticket-form-grid">
+                  <div class="ticket-field"><label for="ticket-game-date">경기 날짜</label><input type="date" id="ticket-game-date" required /></div>
+                  <div class="ticket-field"><label for="ticket-stadium">야구장</label><select id="ticket-stadium" required></select></div>
+                  <div class="ticket-field ticket-field-wide"><label for="ticket-matchup">경기 정보 (선택)</label><input id="ticket-matchup" maxlength="60" placeholder="예: LG vs 두산" /></div>
+                  <div class="ticket-field ticket-field-wide"><label for="ticket-seat">좌석 정보</label><input id="ticket-seat" maxlength="120" placeholder="예: 1루 블루석 107블록 8열" required /></div>
+                  <div class="ticket-field"><label for="ticket-unit-price">1장 가격 (원)</label><input type="number" id="ticket-unit-price" min="0" max="10000000" step="1000" required /></div>
+                  <div class="ticket-field"><label for="ticket-quantity">티켓 수량</label><input type="number" id="ticket-quantity" min="1" max="20" value="1" required /></div>
+                  <div class="ticket-field ticket-field-wide"><label for="ticket-delivery-method">수령 방식</label><select id="ticket-delivery-method" required></select></div>
+                  <div class="ticket-field ticket-field-wide"><label for="ticket-description">추가 설명 (선택)</label><textarea id="ticket-description" maxlength="500" placeholder="양도 조건이나 참고사항을 입력해 주세요."></textarea></div>
+                </div>
+                <div class="ticket-form-actions"><button type="button" class="secondary-button" id="cancel-ticket-form-button">취소</button><button type="submit" id="submit-ticket-form-button">등록</button></div>
+                <p class="ticket-status" id="ticket-form-status" role="status" aria-live="polite"></p>
+              </form>
+              <div class="ticket-list" id="ticket-listings"></div>
+            </section>
+            <section class="ticket-pane hidden" data-ticket-pane="selling"><h3>판매 관리</h3><div class="ticket-list" id="ticket-selling"></div></section>
+            <section class="ticket-pane hidden" data-ticket-pane="deals"><h3>거래 관리</h3><div class="ticket-list" id="ticket-deals"></div></section>
+          </section>
+        </div>
       </section>
       <p class="tab-status hidden" id="app-status" role="status" aria-live="polite"></p>
       <aside class="short-share-bar" id="short-share-bar" aria-label="컨텍스트 작업">

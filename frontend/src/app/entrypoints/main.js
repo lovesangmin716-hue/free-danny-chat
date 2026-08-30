@@ -11,4 +11,5 @@ import "../shorts.js";
 import "../action-bar.js";
 import "../app.js";
 import "../auth.js";
+import "../ticket-transfer.js";
 import "../bootstrap.js";
