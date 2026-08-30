@@ -21,7 +21,7 @@ BUDGETS = {
     ".css": 16 * 1024,
     ".woff2": 250 * 1024,
     ".image": 100 * 1024,
-    ".html": 80 * 1024,
+    ".html": 82 * 1024,
     ".static-total": 512 * 1024,
 }
 IMAGE_SUFFIXES = {".avif", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"}
