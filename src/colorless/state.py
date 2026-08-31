@@ -2404,7 +2404,8 @@ class StateStore:
             ) else 0,
         }
         if room.get("kind") == "direct" and viewer is not None:
-            peer_id = next((user_id for user_id in room.get("participant_ids", []) if user_id != viewer["id"]), "")
+            direct_participant_ids = room.get("direct_participant_ids", room.get("participant_ids", []))
+            peer_id = next((user_id for user_id in direct_participant_ids if user_id != viewer["id"]), "")
             peer = self._users_by_id.get(peer_id)
             if peer is not None:
                 summary["name"] = peer.get("display_name") or peer["username"]
@@ -3621,35 +3622,45 @@ class StateStore:
             self._save_locked("rooms")
             return self._room_summary(room, user), None
 
-    def leave_group_room(
+    def leave_room(
         self,
         username: str,
         room_id: str,
-    ) -> tuple[dict | None, set[str], str | None]:
+    ) -> tuple[dict | None, set[str], str, str | None]:
         with self.lock:
             user = self._users_by_username.get(username)
             room = self._rooms_by_id.get(room_id)
+            acting_user = self._room_identity_locked(room, user) if room is not None and user is not None else None
             if (
-                user is None
+                acting_user is None
                 or room is None
-                or room.get("kind") != "group"
-                or user["id"] not in room.get("participant_ids", [])
+                or room.get("kind") not in {"direct", "group"}
             ):
-                return None, set(), "not_found"
+                return None, set(), "", "not_found"
 
+            user = acting_user
+            left_username = user["username"]
+            room_kind = room.get("kind")
+            original_participant_ids = list(room.get("participant_ids", []))
             recipients = {
                 participant["username"]
-                for user_id in room.get("participant_ids", [])
+                for user_id in original_participant_ids
                 if (participant := self._users_by_id.get(user_id)) is not None
             }
             remaining_ids = [
-                user_id for user_id in room.get("participant_ids", [])
+                user_id for user_id in original_participant_ids
                 if user_id != user["id"]
             ]
+            if room_kind == "direct":
+                room.setdefault("direct_participant_ids", original_participant_ids)
+                if len(original_participant_ids) == 2:
+                    pair = tuple(sorted(original_participant_ids))
+                    if self._direct_rooms_by_pair.get(pair) is room:
+                        self._direct_rooms_by_pair.pop(pair, None)
             room["participant_ids"] = remaining_ids
             room.setdefault("last_read_by", {}).pop(user["id"], None)
             self._room_ids_by_user.get(user["id"], set()).discard(room_id)
-            if room.get("created_by") == username:
+            if room_kind == "group" and room.get("created_by") == left_username:
                 next_creator = self._users_by_id.get(remaining_ids[0]) if remaining_ids else None
                 room["created_by"] = next_creator["username"] if next_creator else ""
             room["updated_at"] = utc_now_iso()
@@ -3664,7 +3675,7 @@ class StateStore:
             if self.repository is not None:
                 self.repository.sync_room(room)
             self._save_locked("rooms")
-            return summary, recipients, None
+            return summary, recipients, left_username, None
 
     def create_local_user(
         self,

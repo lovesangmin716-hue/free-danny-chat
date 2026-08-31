@@ -21,14 +21,28 @@ function setRoomSettingsBusy(isBusy) {
 function renderRoomSettings() {
   const room = currentRoom();
   const isGroup = room?.kind === "group";
+  const isDirect = room?.kind === "direct";
   const isOwner = isCurrentUserRoomOwner(room);
-  if (!isGroup) {
+  if (!isGroup && !isDirect) {
     roomSettingsSheet.classList.add("hidden");
     return;
   }
 
-  roomSettingsPhotoPreview.replaceChildren(createRoomAvatar(room));
-  if (document.activeElement !== roomSettingsName) roomSettingsName.value = room.name;
+  const groupOnlyElements = [
+    roomSettingsPhotoPreview.closest(".room-settings-photo"),
+    roomSettingsName.closest(".field"),
+    saveRoomSettingsButton,
+    roomSettingsOwnerHelp,
+  ];
+  for (const element of groupOnlyElements) element?.classList.toggle("hidden", isDirect);
+  roomSettingsSheet.querySelector("#room-settings-title").textContent = isDirect ? "1:1 채팅 설정" : "채팅방 설정";
+  roomSettingsSheet.querySelector(".room-settings-danger p").textContent = isDirect
+    ? "나가면 내 채팅 목록과 대화 기록에서 사라집니다. 상대방의 기존 기록은 유지됩니다."
+    : "나가면 이 채팅방의 메시지와 첨부 파일에 더 이상 접근할 수 없습니다.";
+  if (isGroup) {
+    roomSettingsPhotoPreview.replaceChildren(createRoomAvatar(room));
+    if (document.activeElement !== roomSettingsName) roomSettingsName.value = room.name;
+  }
   roomSettingsName.disabled = !isOwner || state.roomSettingsBusy;
   selectRoomPhotoButton.disabled = !isOwner || (state.roomSettingsBusy && !state.roomImageProcessing);
   removeRoomPhotoButton.disabled = !isOwner || state.roomSettingsBusy || !room.image_url;
@@ -42,11 +56,12 @@ function renderRoomSettings() {
 
 function openRoomSettings() {
   const room = currentRoom();
-  if (!room || room.kind !== "group") return;
-  roomSettingsName.value = room.name;
+  if (!room || (room.kind !== "group" && room.kind !== "direct")) return;
+  if (room.kind === "group") roomSettingsName.value = room.name;
   renderRoomSettings();
   roomSettingsSheet.classList.remove("hidden");
-  (isCurrentUserRoomOwner(room) ? roomSettingsName : leaveRoomButton).focus({ preventScroll: true });
+  (room.kind === "group" && isCurrentUserRoomOwner(room) ? roomSettingsName : leaveRoomButton)
+    .focus({ preventScroll: true });
 }
 
 function closeRoomSettings() {
@@ -233,10 +248,13 @@ async function removeRoomPhoto() {
   }
 }
 
-async function leaveCurrentGroupRoom() {
+async function leaveCurrentRoom() {
   const room = currentRoom();
-  if (!room || room.kind !== "group") return;
-  if (!window.confirm(`'${room.name}' 채팅방에서 나갈까요?`)) return;
+  if (!room || (room.kind !== "group" && room.kind !== "direct")) return;
+  const confirmation = room.kind === "direct"
+    ? `'${room.name}'님과의 1:1 채팅에서 나갈까요?\n내 목록에서는 대화가 사라지고 상대방의 기록은 유지됩니다.`
+    : `'${room.name}' 채팅방에서 나갈까요?`;
+  if (!window.confirm(confirmation)) return;
   setRoomSettingsBusy(true);
   try {
     await requestAction("rooms.leave", "/rooms/leave", {
@@ -247,7 +265,7 @@ async function leaveCurrentGroupRoom() {
     roomSettingsSheet.classList.add("hidden");
     closeChatRoom();
     renderMessenger();
-    setAppStatus(`${room.name} 채팅방에서 나갔습니다.`, "success");
+    setAppStatus(`${room.name} ${room.kind === "direct" ? "1:1 채팅" : "채팅방"}에서 나갔습니다.`, "success");
   } catch (error) {
     setAppStatus(error.message, "error");
   } finally {
@@ -257,7 +275,7 @@ async function leaveCurrentGroupRoom() {
 
 export {
   closeRoomSettings,
-  leaveCurrentGroupRoom,
+  leaveCurrentRoom,
   openRoomSettings,
   removeRoomPhoto,
   renderRoomSettings,

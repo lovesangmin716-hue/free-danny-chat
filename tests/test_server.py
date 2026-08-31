@@ -624,6 +624,17 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("function preserveRealtimeViewerIdentity", messenger_script)
         self.assertIn("viewer_identity_id: existingRoom.viewer_identity_id", messenger_script)
 
+    def test_direct_chat_exposes_the_shared_room_leave_action(self) -> None:
+        chat_script = (FRONTEND_APP_DIR / "chat.js").read_text(encoding="utf-8")
+        room_settings_script = (FRONTEND_APP_DIR / "room-settings.js").read_text(encoding="utf-8")
+        bootstrap_script = (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8")
+
+        self.assertIn('isGroupRoom || room.kind === "direct"', chat_script)
+        self.assertIn('const isDirect = room?.kind === "direct"', room_settings_script)
+        self.assertIn('room.kind !== "group" && room.kind !== "direct"', room_settings_script)
+        self.assertIn("상대방의 기존 기록은 유지됩니다.", room_settings_script)
+        self.assertIn("leaveCurrentRoom", bootstrap_script)
+
     def test_my_tab_owns_profile_status_and_logout_while_lists_own_search(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         app_script = (FRONTEND_APP_DIR / "app.js").read_text(encoding="utf-8")
@@ -2094,6 +2105,23 @@ class AttachmentTransferIntegrationTestCase(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_direct_chat_can_be_left_through_the_room_endpoint(self) -> None:
+        status, _, content = self.request(
+            "POST",
+            "/rooms/leave",
+            json.dumps({"roomId": self.room["id"]}).encode("utf-8"),
+            {"Content-Type": "application/json"},
+        )
+        self.assertEqual(status, 200, content)
+        self.assertEqual(json.loads(content), {"left": True, "roomId": self.room["id"]})
+        self.assertFalse(server.STORE.can_access_room(self.room["id"], self.username))
+        self.assertTrue(server.STORE.can_access_room(self.room["id"], self.peer["username"]))
+
+        status, _, content = self.request("GET", "/rooms?limit=30")
+        self.assertEqual(status, 200, content)
+        room_ids = {room["id"] for room in json.loads(content)["items"]}
+        self.assertNotIn(self.room["id"], room_ids)
+
     def test_identity_creation_switch_and_ownership_boundary(self) -> None:
         suffix = str(time.time_ns())[-8:]
         body = json.dumps({
@@ -2764,6 +2792,15 @@ class AccountIdentityTestCase(unittest.TestCase):
                 self.assertNotIn("viewer_identity", event["room"])
                 self.assertNotIn("viewer_identity_id", event["room"])
                 self.assertEqual(event["message"]["username"], outsider["username"])
+
+                leave_outcome = services.leave_room(primary, {"roomId": room["id"]})
+                self.assertTrue(leave_outcome.data["left"])
+                self.assertEqual(len(leave_outcome.events), 1)
+                leave_event, leave_recipients = leave_outcome.events[0]
+                self.assertEqual(leave_event["username"], second["username"])
+                self.assertEqual(leave_recipients, {second["username"], outsider["username"]})
+                self.assertFalse(store.can_access_room(room["id"], primary["username"]))
+                self.assertTrue(store.can_access_room(room["id"], outsider["username"]))
             finally:
                 store.close()
 
@@ -3770,8 +3807,9 @@ class StateStoreTestCase(unittest.TestCase):
             "size": 5,
         }
         self.store.add_message(room_id, "alice", "private", attachment)
-        room_after_leave, recipients, error = self.store.leave_group_room("alice", room_id)
+        room_after_leave, recipients, left_username, error = self.store.leave_room("alice", room_id)
         self.assertIsNone(error)
+        self.assertEqual(left_username, "alice")
         self.assertEqual(recipients, {"alice", "bob", "eve"})
         assert room_after_leave is not None
         self.assertEqual(room_after_leave["created_by"], "bob")
@@ -3782,11 +3820,26 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertEqual(self.store.room_event_recipients(room_id), {"bob", "eve"})
         self.assertEqual(self.store.group_room_access("bob", room_id), "owner")
 
-        direct_room, recipients, error = self.store.leave_group_room("bob", self.room_id)
-        self.assertIsNone(direct_room)
-        self.assertEqual(recipients, set())
-        self.assertEqual(error, "not_found")
-        self.assertIsNotNone(self.store.get_messages(self.room_id, "bob"))
+        self.assertIsNotNone(self.store.add_message(self.room_id, "alice", "1:1 기록"))
+        direct_room, recipients, left_username, error = self.store.leave_room("bob", self.room_id)
+        self.assertIsNone(error)
+        self.assertEqual(left_username, "bob")
+        self.assertEqual(recipients, {"alice", "bob"})
+        assert direct_room is not None
+        self.assertEqual(direct_room["participant_count"], 1)
+        self.assertEqual(direct_room["peer"]["username"], "bob")
+        self.assertIsNone(self.store.get_messages(self.room_id, "bob"))
+        self.assertEqual(
+            [message["text"] for message in self.store.get_messages(self.room_id, "alice")],
+            ["1:1 기록"],
+        )
+        bob_room_ids = {room["id"] for room in self.store.get_rooms_page(self.bob, limit=30)["items"]}
+        self.assertNotIn(self.room_id, bob_room_ids)
+        replacement, created, error = self.store.create_or_get_direct_room("bob", self.alice["id"])
+        self.assertIsNone(error)
+        self.assertTrue(created)
+        assert replacement is not None
+        self.assertNotEqual(replacement["id"], self.room_id)
 
     def test_attachment_access_follows_room_membership(self) -> None:
         attachment = {

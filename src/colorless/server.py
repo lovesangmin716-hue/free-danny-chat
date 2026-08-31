@@ -1109,7 +1109,7 @@ class ChatHandler(
             user = self.require_auth_record()
             if user is None:
                 return
-            self.leave_group_room(user)
+            self.leave_room(user)
             return
         if path == "/presence":
             user = self.require_auth()

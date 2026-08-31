@@ -306,10 +306,10 @@ class MessagingRoutesMixin:
             return
         self.run_json_command(lambda payload: self.context.APPLICATION.update_group_room(user, payload))
 
-    def leave_group_room(self, user: dict) -> None:
+    def leave_room(self, user: dict) -> None:
         if not self.allow_request(f"leave-room:{user['username']}", 60, 60 * 60):
             return
-        self.run_json_command(lambda payload: self.context.APPLICATION.leave_group_room(user, payload))
+        self.run_json_command(lambda payload: self.context.APPLICATION.leave_room(user, payload))
 
     def add_friend(self, user: dict) -> None:
         self.run_json_command(lambda payload: self.context.APPLICATION.add_friend(user, payload))

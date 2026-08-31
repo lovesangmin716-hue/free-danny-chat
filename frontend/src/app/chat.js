@@ -620,10 +620,11 @@ function renderChatRoom({ scrollToBottom = false, preserveScrollHeight = 0, rest
   }
   const presence = room.peer?.presence;
   const isGroupRoom = room.kind === "group";
+  const hasRoomSettings = isGroupRoom || room.kind === "direct";
   const isInThisRoom = Boolean(presence?.online && presence.active_room_ids?.includes(room.id));
   chatRoom.classList.remove("hidden");
   syncAppStatusForActiveTab();
-  openRoomSettingsButton.classList.toggle("hidden", !isGroupRoom);
+  openRoomSettingsButton.classList.toggle("hidden", !hasRoomSettings);
   renderChatAttachmentTray();
   renderChatAttachmentPreview();
   const draft = state.chatDrafts[room.id] || "";

@@ -4,7 +4,7 @@ import { PROFILE_IMAGE_SIDE, blankProfilePixels, cancelProfilePhotoButton, chatA
 import { addCustomPaletteColor, buildProfileEditor, cancelProfileImageCrop, clearProfilePixels, closeProfileEditor, convertCroppedProfileImageToPixels, finishProfileCropPointer, getActiveProfilePalette, moveProfileCrop, openProfileEditor, renderPalettePicker, renderProfileImagePreview, renderProfilePalette, saveProfilePixels, updateProfileCropZoom, uploadSelectedProfileImage } from "./profile.js";
 import { clearChatAttachment, handlePastedChatAttachment, openAttachmentPicker, resetAttachmentSwipe, selectChatAttachment, showAttachmentGuide, updateAttachmentSwipe } from "./attachments.js";
 import { toggleVoiceRecording } from "./voice.js";
-import { closeRoomSettings, leaveCurrentGroupRoom, openRoomSettings, removeRoomPhoto, saveRoomSettings, uploadRoomPhoto } from "./room-settings.js";
+import { closeRoomSettings, leaveCurrentRoom, openRoomSettings, removeRoomPhoto, saveRoomSettings, uploadRoomPhoto } from "./room-settings.js";
 import { beginMessageReadSwipe, closeChatRoom, closeMessageReadMenu, finishMessageReadSwipe, retryDelay, scheduleChatVirtualRender, sendChatMessage, suppressClickAfterMessageSwipe, suppressMessageReadContextMenu, updateMessageReadSwipe, updatePresence } from "./chat.js";
 import { beginWorkModeComposition, finishWorkModeComposition, handleWorkModeScreenTap, handleWorkModeShortcut, markWorkModeMessageRead, sendWorkModeReply, toggleWorkMode, workModeReplyForm, workModeReplyInput, workModeScreen, workModeToggle } from "./work-mode.js";
 import { closeListSearch, handleContextActionPrimary, openListSearch, updateHeaderSearch } from "./action-bar.js";
@@ -64,7 +64,7 @@ roomPhotoInput.addEventListener("change", () => {
   if (file) void uploadRoomPhoto(file);
 });
 removeRoomPhotoButton.addEventListener("click", () => void removeRoomPhoto());
-leaveRoomButton.addEventListener("click", () => void leaveCurrentGroupRoom());
+leaveRoomButton.addEventListener("click", () => void leaveCurrentRoom());
 roomSettingsSheet.addEventListener("click", (event) => {
   if (event.target === roomSettingsSheet) closeRoomSettings();
 });

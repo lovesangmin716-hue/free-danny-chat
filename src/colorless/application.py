@@ -109,17 +109,17 @@ class ApplicationServices:
         event = {"type": "room_updated", "roomId": room_id, "room": room}
         return CommandOutcome({"room": room}, events=[(event, self.store.room_event_recipients(room_id))])
 
-    def leave_group_room(self, user: dict, payload: dict) -> CommandOutcome:
+    def leave_room(self, user: dict, payload: dict) -> CommandOutcome:
         room_id = str(payload.get("roomId", "")).strip()
         if not ROOM_ID_PATTERN.fullmatch(room_id):
             raise CommandFailure("올바른 채팅방을 선택해 주세요.")
-        room, recipients, error = self.store.leave_group_room(user["username"], room_id)
+        room, recipients, left_username, error = self.store.leave_room(user["username"], room_id)
         if error:
             raise CommandFailure("채팅방을 찾을 수 없습니다.", HTTPStatus.NOT_FOUND)
         event = {
             "type": "room_left",
             "roomId": room_id,
-            "username": user["username"],
+            "username": left_username,
             "room": room,
         }
         return CommandOutcome({"left": True, "roomId": room_id}, events=[(event, recipients)])
