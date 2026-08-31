@@ -2453,8 +2453,21 @@ class AccountIdentityTestCase(unittest.TestCase):
                 assert seller_dashboard is not None
                 self.assertEqual(seller_dashboard["selling"][0]["commenters"][0]["id"], buyer["id"])
                 self.assertEqual(seller_dashboard["home_teams"]["대전"], "한화 이글스")
+                self.assertEqual(set(seller_dashboard["seat_grades"]), set(seller_dashboard["stadiums"]))
                 self.assertIn("중앙네이비석", seller_dashboard["seat_grades"]["잠실(LG)"])
                 self.assertIn("으쓱이존", seller_dashboard["seat_grades"]["문학"])
+                side_specific_seats = {
+                    "고척": ("1루 버건디석", "3루 버건디석"),
+                    "대전": ("1루 내야지정석 A", "3루 내야지정석 A"),
+                    "대구": ("1루 내야지정석", "3루 내야지정석"),
+                    "수원": ("1루 응원지정석", "3루 응원지정석"),
+                    "창원": ("1루 1층 내야석", "3루 1층 내야석"),
+                    "사직": ("1루 내야탁자석", "3루 내야탁자석"),
+                    "광주": ("1루 K8", "3루 K8"),
+                }
+                for stadium, seats in side_specific_seats.items():
+                    with self.subTest(stadium=stadium):
+                        self.assertTrue(set(seats).issubset(seller_dashboard["seat_grades"][stadium]))
 
                 deal, created, error = store.open_ticket_deal(
                     seller["username"], listing["id"], buyer["id"], 2
