@@ -785,6 +785,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
     def test_ticket_hub_separates_roles_and_requires_quantity_before_open_chat(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         ticket_script = (FRONTEND_APP_DIR / "ticket-transfer.js").read_text(encoding="utf-8")
+        ticket_actions_script = (FRONTEND_APP_DIR / "ticket-chat-actions.js").read_text(encoding="utf-8")
         filter_script = (FRONTEND_APP_DIR / "ticket-listing-filter.js").read_text(encoding="utf-8")
         chat_overview_script = (FRONTEND_APP_DIR / "ticket-chat-overview.js").read_text(encoding="utf-8")
         server_script = SERVER_PATH.read_text(encoding="utf-8")
@@ -814,7 +815,13 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("function renderTicketChats(", chat_overview_script)
         self.assertIn("function submitTicketInterest(event)", ticket_script)
         self.assertIn('requestAction("tickets.join", "/tickets/join"', ticket_script)
+        self.assertIn('requestAction("tickets.cancel", "/tickets/cancel"', ticket_actions_script)
+        self.assertIn('requestAction("tickets.leave", "/tickets/leave"', ticket_actions_script)
+        self.assertIn("신청 취소", chat_overview_script)
+        self.assertIn("채팅 나가기", chat_overview_script)
         self.assertIn('if path == "/tickets/join":', server_script)
+        self.assertIn('if path == "/tickets/cancel":', server_script)
+        self.assertIn('if path == "/tickets/leave":', server_script)
 
     def test_presence_events_patch_indexed_rows_on_one_animation_frame(self) -> None:
         messenger_script = (FRONTEND_APP_DIR / "messenger.js").read_text(encoding="utf-8")
@@ -2487,6 +2494,27 @@ class AccountIdentityTestCase(unittest.TestCase):
                 self.assertEqual(buyer_dashboard["buying"][0]["id"], listing["id"])
                 self.assertEqual(buyer_dashboard["buying"][0]["viewer_interest_quantity"], 2)
 
+                cancelled_listing, error = store.cancel_ticket_interest(buyer["username"], listing["id"])
+                self.assertIsNone(error)
+                assert cancelled_listing is not None
+                self.assertEqual(cancelled_listing["viewer_interest_quantity"], 0)
+                self.assertFalse(cancelled_listing["viewer_has_interest"])
+                self.assertTrue(store.can_access_room(listing["id"], buyer["username"]))
+                retained_messages = store.get_messages(listing["id"], seller["username"])
+                assert retained_messages is not None
+                self.assertEqual([message["text"] for message in retained_messages], ["A", "B", "C"])
+                seller_dashboard = store.get_ticket_dashboard(seller["username"])
+                assert seller_dashboard is not None
+                self.assertEqual(seller_dashboard["selling"][0]["commenters"], [])
+                rejected_deal, _, error = store.open_ticket_deal(
+                    seller["username"], listing["id"], buyer["id"], 1
+                )
+                self.assertIsNone(rejected_deal)
+                self.assertIn("신청 중인", error)
+                rejoined_listing, error = store.join_ticket_listing(buyer["username"], listing["id"], 2)
+                self.assertIsNone(error)
+                self.assertIsNotNone(rejoined_listing)
+
                 deal, created, error = store.open_ticket_deal(
                     seller["username"], listing["id"], buyer["id"], 2
                 )
@@ -2500,6 +2528,22 @@ class AccountIdentityTestCase(unittest.TestCase):
                 self.assertEqual(completed["status"], "completed")
                 self.assertEqual(completed["buyer"]["id"], buyer["id"])
                 self.assertEqual(updated_listing["remaining_quantity"], 1)
+                self.assertIsNotNone(store.add_message(deal["id"], buyer["username"], "거래 기록"))
+                recipients, error = store.leave_ticket_chat(buyer["username"], deal["id"])
+                self.assertIsNone(error)
+                self.assertIn(seller["username"], recipients)
+                self.assertFalse(store.can_access_room(deal["id"], buyer["username"]))
+                retained_deal_messages = store.get_messages(deal["id"], seller["username"])
+                assert retained_deal_messages is not None
+                self.assertEqual([message["text"] for message in retained_deal_messages], ["거래 기록"])
+
+                recipients, error = store.leave_ticket_chat(buyer["username"], listing["id"])
+                self.assertIsNone(error)
+                self.assertIn(seller["username"], recipients)
+                self.assertFalse(store.can_access_room(listing["id"], buyer["username"]))
+                retained_listing_messages = store.get_messages(listing["id"], seller["username"])
+                assert retained_listing_messages is not None
+                self.assertEqual([message["text"] for message in retained_listing_messages], ["A", "B", "C"])
                 expires_at = datetime.fromisoformat(updated_listing["expires_at"])
                 self.assertEqual(expires_at.astimezone(timezone(timedelta(hours=9))).date().isoformat(), (
                     date.fromisoformat(game_date) + timedelta(days=7)
@@ -2571,8 +2615,16 @@ class AccountIdentityTestCase(unittest.TestCase):
                 dashboard = reopened.get_ticket_dashboard("ticket_seller")
                 assert dashboard is not None
                 self.assertEqual(dashboard["selling"][0]["remaining_quantity"], 1)
-                self.assertEqual(dashboard["selling"][0]["commenters"][0]["requested_quantity"], 2)
+                self.assertEqual(dashboard["selling"][0]["commenters"], [])
                 self.assertEqual(dashboard["deals"][0]["status"], "completed")
+                self.assertEqual(
+                    [message["text"] for message in reopened.get_messages(listing["id"], "ticket_seller")],
+                    ["A", "B", "C"],
+                )
+                self.assertEqual(
+                    [message["text"] for message in reopened.get_messages(deal["id"], "ticket_seller")],
+                    ["거래 기록"],
+                )
                 self.assertTrue(dashboard["ticket_access"]["has_signed_listing"])
                 self.assertTrue(dashboard["ticket_access"]["verified"])
                 expired_at = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()

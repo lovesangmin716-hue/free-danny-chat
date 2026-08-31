@@ -979,6 +979,18 @@ class ChatHandler(
                 return
             self.join_ticket_listing(user)
             return
+        if path == "/tickets/cancel":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.cancel_ticket_interest(user)
+            return
+        if path == "/tickets/leave":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.leave_ticket_chat(user)
+            return
         if path == "/tickets/reports":
             user = self.require_auth_record()
             if user is None:

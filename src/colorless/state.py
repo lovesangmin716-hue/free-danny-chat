@@ -1639,10 +1639,12 @@ class StateStore:
         ticket.pop("reports", None)
         seller = self._users_by_id.get(str(ticket.get("seller_id", "")))
         viewer_interest = interests.get(viewer.get("id", ""), {})
+        viewer_interest_quantity = int(viewer_interest.get("quantity", 0) or 0)
         summary = {
             "id": room["id"],
             **ticket,
-            "viewer_interest_quantity": int(viewer_interest.get("quantity", 0) or 0),
+            "viewer_interest_quantity": viewer_interest_quantity,
+            "viewer_has_interest": viewer_interest_quantity > 0,
             "room": self._room_summary(
                 room,
                 viewer,
@@ -1661,9 +1663,12 @@ class StateStore:
                 if commenter is None:
                     continue
                 interest = interests.get(user_id, {})
+                requested_quantity = int(interest.get("quantity", 0) or 0)
+                if requested_quantity < 1:
+                    continue
                 commenters.append({
                     **self._user_list_summary(commenter),
-                    "requested_quantity": int(interest.get("quantity", 1) or 1),
+                    "requested_quantity": requested_quantity,
                     "joined_at": str(interest.get("joined_at", "")),
                 })
             summary["commenters"] = commenters
@@ -1911,6 +1916,72 @@ class StateStore:
             self._save_locked("rooms")
             return self._ticket_listing_summary_locked(listing, buyer), None
 
+    def cancel_ticket_interest(self, username: str, listing_id: str) -> tuple[dict | None, str | None]:
+        with self.lock:
+            buyer = self._users_by_username.get(username)
+            listing = self._rooms_by_id.get(listing_id)
+            if buyer is None or buyer.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND:
+                return None, "선택한 야구 티켓 전용 ID로 전환해 주세요."
+            if listing is None or listing.get("kind") != "ticket_listing":
+                return None, "티켓 게시글을 찾을 수 없습니다."
+            ticket = listing.get("ticket", {})
+            if ticket.get("seller_id") == buyer["id"]:
+                return None, "판매자는 자신의 티켓 신청을 취소할 수 없습니다."
+            if buyer["id"] not in listing.get("participant_ids", []):
+                return None, "참여 중인 오픈채팅이 아닙니다."
+
+            interests = ticket.setdefault("interests", {})
+            if buyer["id"] not in interests:
+                return self._ticket_listing_summary_locked(listing, buyer), None
+            interests.pop(buyer["id"], None)
+            updated_at = utc_now_iso()
+            ticket["updated_at"] = updated_at
+            listing["updated_at"] = updated_at
+            if self.repository is not None:
+                self.repository.sync_room(listing)
+            self._save_locked("rooms")
+            return self._ticket_listing_summary_locked(listing, buyer), None
+
+    def leave_ticket_chat(self, username: str, room_id: str) -> tuple[set[str], str | None]:
+        with self.lock:
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
+            if user is None or user.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND:
+                return set(), "선택한 야구 티켓 전용 ID로 전환해 주세요."
+            if room is None or room.get("kind") not in TICKET_ROOM_KINDS:
+                return set(), "티켓 채팅을 찾을 수 없습니다."
+            if user["id"] not in room.get("participant_ids", []):
+                return set(), "이미 나간 티켓 채팅입니다."
+
+            ticket = room.get("ticket", {})
+            if room.get("kind") == "ticket_listing" and ticket.get("seller_id") == user["id"]:
+                return set(), "판매자는 오픈채팅에서 나갈 수 없습니다. 판매글 삭제를 이용해 주세요."
+            recipients = {
+                participant["username"]
+                for user_id in room.get("participant_ids", [])
+                if (participant := self._users_by_id.get(user_id)) is not None
+            }
+            room["participant_ids"] = [
+                user_id for user_id in room.get("participant_ids", []) if user_id != user["id"]
+            ]
+            room.setdefault("last_read_by", {}).pop(user["id"], None)
+            self._room_ids_by_user.get(user["id"], set()).discard(room_id)
+            updated_at = utc_now_iso()
+            ticket["updated_at"] = updated_at
+            if room.get("kind") == "ticket_listing":
+                ticket.setdefault("interests", {}).pop(user["id"], None)
+            elif ticket.get("status") == "pending":
+                ticket["status"] = "cancelled"
+                ticket["cancelled_at"] = updated_at
+                ticket["cancelled_by_user_id"] = user["id"]
+            room["updated_at"] = updated_at
+            if not room["participant_ids"]:
+                room["archived_at"] = updated_at
+            if self.repository is not None:
+                self.repository.sync_room(room)
+            self._save_locked("rooms")
+            return recipients, None
+
     def delete_ticket_listing(self, username: str, listing_id: str) -> tuple[dict | None, str | None]:
         with self.lock:
             seller = self._users_by_username.get(username)
@@ -1958,15 +2029,19 @@ class StateStore:
             if seller.get("ticket_moderation_status", "active") != "active":
                 return None, False, "티켓 판매 기능이 정지되었습니다. 관리자에게 소명해 주세요."
             buyer = self._users_by_id.get(buyer_user_id)
+            interests = listing_ticket.get("interests", {})
+            interest = interests.get(buyer_user_id, {}) if isinstance(interests, dict) else {}
+            requested_quantity = int(interest.get("quantity", 0) or 0)
             if (
                 buyer is None
                 or buyer["id"] == seller["id"]
                 or buyer["id"] not in listing.get("participant_ids", [])
                 or buyer.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND
+                or requested_quantity < 1
             ):
-                return None, False, "오픈채팅에 참여한 구매 희망자를 선택해 주세요."
+                return None, False, "신청 중인 구매 희망자를 선택해 주세요."
             remaining = int(listing_ticket.get("remaining_quantity", 0))
-            if not 1 <= quantity <= remaining:
+            if not 1 <= quantity <= min(remaining, requested_quantity):
                 return None, False, "거래할 티켓 수량을 올바르게 선택해 주세요."
 
             existing = next(
@@ -1976,6 +2051,8 @@ class StateStore:
                     if room.get("kind") == "ticket_deal"
                     and room.get("ticket", {}).get("listing_id") == listing_id
                     and room.get("ticket", {}).get("buyer_id") == buyer["id"]
+                    and seller["id"] in room.get("participant_ids", [])
+                    and buyer["id"] in room.get("participant_ids", [])
                     and self._ticket_room_is_valid(room)
                 ),
                 None,

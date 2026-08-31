@@ -91,6 +91,33 @@ class TicketRoutesMixin:
             return
         self.send_json({"listing": listing}, self.context.HTTPStatus.OK)
 
+    def cancel_ticket_interest(self, user: dict) -> None:
+        if not self.allow_request(f"ticket-cancel:{user['username']}", 60, 60 * 60):
+            return
+        payload = self.read_json_body()
+        if payload is None:
+            return
+        listing, error = self.context.STORE.cancel_ticket_interest(
+            user["username"], str(payload.get("listingId", "")).strip()
+        )
+        if error:
+            self.send_json({"error": error}, self.context.HTTPStatus.BAD_REQUEST)
+            return
+        self.send_json({"listing": listing}, self.context.HTTPStatus.OK)
+
+    def leave_ticket_chat(self, user: dict) -> None:
+        if not self.allow_request(f"ticket-leave:{user['username']}", 60, 60 * 60):
+            return
+        payload = self.read_json_body()
+        if payload is None:
+            return
+        room_id = str(payload.get("roomId", "")).strip()
+        _, error = self.context.STORE.leave_ticket_chat(user["username"], room_id)
+        if error:
+            self.send_json({"error": error}, self.context.HTTPStatus.BAD_REQUEST)
+            return
+        self.send_json({"roomId": room_id, "left": True}, self.context.HTTPStatus.OK)
+
     def sign_ticket_agreement(self, user: dict) -> None:
         if not self.allow_request(f"ticket-agreement:{user['username']}", 10, 60 * 60):
             return

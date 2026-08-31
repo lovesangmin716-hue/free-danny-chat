@@ -3,8 +3,10 @@
 import { appScreen, getDisplayName, requestAction, setAppStatus, state } from "./core.js";
 import { closeChatRoom, openChatRoom } from "./chat.js";
 import { upsertMessengerRoom } from "./messenger.js";
+import { createTicketChatActions } from "./ticket-chat-actions.js";
 import { renderTicketChats } from "./ticket-chat-overview.js";
 import { createTicketListingFilter } from "./ticket-listing-filter.js";
+import { actionButton, appendUserName, emptyCopy, verifiedBadge } from "./ticket-ui.js";
 
 const screen = document.getElementById("ticket-transfer-screen");
 const openButton = document.getElementById("open-ticket-transfer-button");
@@ -91,6 +93,10 @@ const ticketState = {
   interestListingId: "",
 };
 const won = new Intl.NumberFormat("ko-KR");
+const { cancelInterest: cancelTicketInterest, leaveRoom: leaveTicketChat } = createTicketChatActions({
+  statusNode: screenStatus,
+  reloadDashboard: loadTicketDashboard,
+});
 
 function signatureContext() {
   return agreementSignature?.getContext("2d", { alpha: false }) || null;
@@ -159,13 +165,6 @@ function displayDate(value) {
   }).format(parsed);
 }
 
-function emptyCopy(text) {
-  const node = document.createElement("p");
-  node.className = "ticket-empty";
-  node.textContent = text;
-  return node;
-}
-
 const listingFilterController = createTicketListingFilter({
   searchButton,
   closeButton: closeSearchButton,
@@ -180,31 +179,6 @@ const listingFilterController = createTicketListingFilter({
   renderTicket: (ticket) => ticketCard(ticket),
   emptyCopy,
 });
-
-function actionButton(label, action, className = "secondary-button") {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = className;
-  button.textContent = label;
-  button.addEventListener("click", action);
-  return button;
-}
-
-function verifiedBadge(user) {
-  if (!user?.ticket_verified) return null;
-  const badge = document.createElement("span");
-  badge.className = "ticket-verified";
-  badge.textContent = "✓";
-  badge.title = "관리자가 검증한 티켓 계정";
-  badge.setAttribute("aria-label", "검증된 티켓 계정");
-  return badge;
-}
-
-function appendUserName(node, user, { handle = false } = {}) {
-  node.append(document.createTextNode(`${getDisplayName(user || {})}${handle ? ` (@${user?.username || "-"})` : ""}`));
-  const badge = verifiedBadge(user);
-  if (badge) node.appendChild(badge);
-}
 
 function ticketCard(ticket, { mode = "home" } = {}) {
   const selling = mode === "seller";
@@ -276,6 +250,12 @@ function ticketCard(ticket, { mode = "home" } = {}) {
   if (mode === "home" && !ownListing) {
     actions.appendChild(actionButton("! 신고", () => openReportModal(ticket), "secondary-button ticket-report-button"));
   }
+  if (buying && Number(ticket.viewer_interest_quantity || 0) > 0) {
+    actions.appendChild(actionButton("신청 취소", () => cancelTicketInterest(ticket.id), "secondary-button"));
+  }
+  if (buying) {
+    actions.appendChild(actionButton("채팅 나가기", () => leaveTicketChat(ticket.room?.id, "listing"), "secondary-button ticket-delete-button"));
+  }
   if (selling) {
     actions.appendChild(actionButton("글 삭제", () => deleteListing(ticket.id), "secondary-button ticket-delete-button"));
   }
@@ -322,7 +302,7 @@ function dealCard(deal) {
   title.textContent = `${displayDate(deal.game_date)} · ${deal.stadium}`;
   const badge = document.createElement("span");
   badge.className = "ticket-badge";
-  badge.textContent = deal.status === "completed" ? "거래 완료" : "거래 중";
+  badge.textContent = deal.status === "completed" ? "거래 완료" : deal.status === "cancelled" ? "거래 취소" : "거래 중";
   heading.append(title, badge);
   const counterpart = deal.role === "seller" ? deal.buyer : deal.seller;
   const meta = document.createElement("div");
@@ -346,6 +326,7 @@ function dealCard(deal) {
   if (deal.role === "seller" && deal.status === "pending") {
     actions.appendChild(actionButton("거래 완료", () => completeDeal(deal.id), ""));
   }
+  actions.appendChild(actionButton("채팅 나가기", () => leaveTicketChat(deal.room?.id, "deal"), "secondary-button ticket-delete-button"));
   card.append(heading, meta, actions);
   return card;
 }
@@ -603,6 +584,8 @@ function renderDashboard() {
     displayDate,
     actionButton,
     openRoom: openTicketRoom,
+    cancelInterest: cancelTicketInterest,
+    leaveRoom: leaveTicketChat,
     emptyCopy,
   });
   renderModeration();
