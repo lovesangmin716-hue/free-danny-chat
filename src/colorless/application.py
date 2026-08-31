@@ -163,6 +163,11 @@ class ApplicationServices:
         event = {
             "type": "message_created",
             "roomId": room_id,
+            "room": self.store.room_event_summary(
+                room_id,
+                latest_message=message,
+                latest_message_loaded=True,
+            ),
             "message": message,
             "sender": {
                 key: sender_public[key]
@@ -173,15 +178,11 @@ class ApplicationServices:
                 if key in sender_public
             },
         }
-        events = [
-            ({**event, "room": summary}, {recipient})
-            for recipient, summary in self.store.room_event_summaries(
-                room_id,
-                latest_message=message,
-                latest_message_loaded=True,
-            ).items()
-        ]
-        return CommandOutcome(visible_message, HTTPStatus.CREATED, events)
+        return CommandOutcome(
+            visible_message,
+            HTTPStatus.CREATED,
+            [(event, self.store.room_event_recipients(room_id))],
+        )
 
     def delete_message(self, user: dict, payload: dict) -> CommandOutcome:
         room_id = str(payload.get("roomId", "")).strip()
@@ -197,18 +198,15 @@ class ApplicationServices:
             "type": "message_deleted",
             "roomId": room_id,
             "messageId": message_id,
-        }
-        events = [
-            ({**event, "room": summary}, {recipient})
-            for recipient, summary in self.store.room_event_summaries(
+            "room": self.store.room_event_summary(
                 room_id,
                 latest_message=room.get("last_message"),
                 latest_message_loaded=True,
-            ).items()
-        ]
+            ),
+        }
         return CommandOutcome(
             {"deleted": True, "roomId": room_id, "messageId": message_id, "room": room},
-            events=events,
+            events=[(event, self.store.room_event_recipients(room_id))],
         )
 
     def mark_room_read(self, user: dict, payload: dict) -> CommandOutcome:

@@ -2741,23 +2741,12 @@ class AccountIdentityTestCase(unittest.TestCase):
                     },
                     lambda _value, _username: None,
                 )
-                events_by_recipient = {
-                    next(iter(recipients)): event
-                    for event, recipients in outcome.events
-                }
-                self.assertEqual(set(events_by_recipient), {second["username"], outsider["username"]})
-                self.assertEqual(
-                    events_by_recipient[second["username"]]["room"]["viewer_identity"]["username"],
-                    second["username"],
-                )
-                self.assertEqual(
-                    events_by_recipient[outsider["username"]]["room"]["viewer_identity"]["username"],
-                    outsider["username"],
-                )
-                self.assertEqual(
-                    events_by_recipient[second["username"]]["message"]["username"],
-                    outsider["username"],
-                )
+                self.assertEqual(len(outcome.events), 1)
+                event, recipients = outcome.events[0]
+                self.assertEqual(recipients, {second["username"], outsider["username"]})
+                self.assertNotIn("viewer_identity", event["room"])
+                self.assertNotIn("viewer_identity_id", event["room"])
+                self.assertEqual(event["message"]["username"], outsider["username"])
             finally:
                 store.close()
 
@@ -3335,13 +3324,11 @@ class StateStoreTestCase(unittest.TestCase):
         )
         self.assertEqual(message_outcome.events[0][0]["sender"]["username"], "alice")
         self.assertIn("profile_thumbnail_url", message_outcome.events[0][0]["sender"])
-        message_events_by_recipient = {
-            next(iter(recipients)): event
-            for event, recipients in message_outcome.events
-        }
-        self.assertEqual(set(message_events_by_recipient), {"alice", "bob", "eve"})
-        for recipient, event in message_events_by_recipient.items():
-            self.assertEqual(event["room"]["viewer_identity"]["username"], recipient)
+        self.assertEqual(len(message_outcome.events), 1)
+        message_event, message_recipients = message_outcome.events[0]
+        self.assertEqual(message_recipients, {"alice", "bob", "eve"})
+        self.assertNotIn("viewer_identity", message_event["room"])
+        self.assertNotIn("viewer_identity_id", message_event["room"])
 
         delete_outcome = services.delete_message(
             self.alice,
