@@ -2,6 +2,7 @@
 
 export function createTicketListingFilter({
   searchButton,
+  closeButton,
   form,
   dateInput,
   stadiumSelect,
@@ -86,6 +87,7 @@ export function createTicketListingFilter({
   }
 
   searchButton?.addEventListener("click", () => toggleListingSearch());
+  closeButton?.addEventListener("click", () => toggleListingSearch(false));
   form?.addEventListener("submit", (event) => {
     event.preventDefault();
     renderFilteredListings();

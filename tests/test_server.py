@@ -829,9 +829,14 @@ class StaticAppStructureTestCase(unittest.TestCase):
             "ticket-buying", "ticket-chats", "ticket-interest-modal", "ticket-interest-quantity",
         ):
             self.assertIn(f'id="{element_id}"', index_html)
-        for tab in ("home", "seller", "buyer", "chats"):
+        for tab in ("home", "seller", "buyer", "chats", "guide"):
             self.assertIn(f'data-ticket-tab="{tab}"', index_html)
             self.assertIn(f'data-ticket-pane="{tab}"', index_html)
+        self.assertLess(index_html.index('data-ticket-pane="guide"'), index_html.index('class="ticket-tabs"'))
+        self.assertIn("ticket-pane-popup", index_html)
+        self.assertIn("경기일로부터 7일이 끝난 뒤 메시지와 함께 영구 삭제", index_html)
+        self.assertNotIn("@itsyou", index_html)
+        self.assertNotIn("@itsyou", ticket_script)
         self.assertIn('class="ticket-filters hidden"', index_html)
         self.assertIn('id="ticket-filter-seat" disabled', index_html)
         self.assertIn("function filteredListings()", filter_script)
@@ -2603,6 +2608,15 @@ class AccountIdentityTestCase(unittest.TestCase):
                 self.assertEqual(dashboard["deals"][0]["status"], "completed")
                 self.assertTrue(dashboard["ticket_access"]["has_signed_listing"])
                 self.assertTrue(dashboard["ticket_access"]["verified"])
+                expired_at = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+                for ticket_room_id in (listing["id"], deal["id"]):
+                    reopened._rooms_by_id[ticket_room_id]["ticket"]["expires_at"] = expired_at
+                    reopened.repository.sync_room(reopened._rooms_by_id[ticket_room_id])
+                self.assertEqual(reopened.cleanup_expired_ticket_rooms(), set())
+                self.assertNotIn(listing["id"], reopened._rooms_by_id)
+                self.assertNotIn(deal["id"], reopened._rooms_by_id)
+                self.assertEqual(reopened.repository.list_messages(listing["id"]), [])
+                self.assertIsNone(reopened.get_messages(listing["id"], "ticket_buyer"))
             finally:
                 reopened.close()
 

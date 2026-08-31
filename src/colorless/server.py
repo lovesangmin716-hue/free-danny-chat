@@ -369,6 +369,20 @@ def cleanup_expired_uploads() -> int:
     return removed
 
 
+def cleanup_expired_storage() -> int:
+    removed = cleanup_expired_uploads()
+    store = globals().get("STORE")
+    if store is None:
+        return removed
+    for filename in store.cleanup_expired_ticket_rooms():
+        try:
+            delete_upload_object(filename)
+            removed += 1
+        except (ConnectionError, OSError, ValueError):
+            UPLOAD_GRANTS.requeue_cleanup({"filename": filename})
+    return removed
+
+
 
 
 
@@ -446,7 +460,7 @@ EVENT_BROKER = DurableEventBroker(
     STORE.presence_event_recipients,
     STORE.refresh_from_repository,
     deliver=push_event,
-    cleanup=cleanup_expired_uploads,
+    cleanup=cleanup_expired_storage,
 )
 PHONE_VERIFICATIONS = PhoneVerificationStore()
 OAUTH_STATES = OAuthStateStore()

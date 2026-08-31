@@ -39,6 +39,7 @@ const deliverySelect = document.getElementById("ticket-delivery-method");
 const descriptionInput = document.getElementById("ticket-description");
 const listingsNode = document.getElementById("ticket-listings");
 const searchButton = document.getElementById("open-ticket-search-button");
+const closeSearchButton = document.getElementById("close-ticket-search-button");
 const listingFilters = document.getElementById("ticket-listing-filters");
 const filterDateInput = document.getElementById("ticket-filter-date");
 const filterStadiumSelect = document.getElementById("ticket-filter-stadium");
@@ -167,6 +168,7 @@ function emptyCopy(text) {
 
 const listingFilterController = createTicketListingFilter({
   searchButton,
+  closeButton: closeSearchButton,
   form: listingFilters,
   dateInput: filterDateInput,
   stadiumSelect: filterStadiumSelect,
@@ -193,7 +195,7 @@ function verifiedBadge(user) {
   const badge = document.createElement("span");
   badge.className = "ticket-verified";
   badge.textContent = "✓";
-  badge.title = "@itsyou가 검증한 티켓 계정";
+  badge.title = "관리자가 검증한 티켓 계정";
   badge.setAttribute("aria-label", "검증된 티켓 계정");
   return badge;
 }
@@ -439,24 +441,24 @@ function renderAccessPanel() {
   accessPanel.classList.remove("hidden");
   if (access.status === "suspended") {
     accessTitle.textContent = "티켓 기능이 정지되었습니다";
-    accessCopy.textContent = `${access.suspension?.reason_label || "신고 접수"} 사유로 판매 게시물이 즉시 중지되었습니다. 관리자 @itsyou에게 소명해 주세요.`;
-    if (dashboard.admin_contact_available) accessActions.appendChild(actionButton("@itsyou에게 소명하기", openAdminChat));
+    accessCopy.textContent = `${access.suspension?.reason_label || "신고 접수"} 사유로 판매 게시물이 즉시 중지되었습니다. 관리자에게 소명해 주세요.`;
+    if (dashboard.admin_contact_available) accessActions.appendChild(actionButton("관리자에게 소명하기", openAdminChat));
     return;
   }
   if (access.verified) {
     accessTitle.replaceChildren(document.createTextNode("검증된 티켓 계정"), verifiedBadge({ ticket_verified: true }));
-    accessCopy.textContent = `@itsyou 검증이 완료되었습니다. 판매자 이름 옆에 레드체크가 표시됩니다.`;
+    accessCopy.textContent = "관리자 검증이 완료되었습니다. 판매자 이름 옆에 레드체크가 표시됩니다.";
   } else if (access.verification_status === "pending") {
     accessTitle.textContent = "레드체크 검증 대기 중";
-    accessCopy.textContent = "@itsyou가 요청을 검토하고 있습니다. 필요한 자료는 관리자 채팅으로 전달해 주세요.";
+    accessCopy.textContent = "관리자가 요청을 검토하고 있습니다. 필요한 자료는 관리자 채팅으로 전달해 주세요.";
   } else {
     accessTitle.textContent = "티켓 판매 계정";
     accessCopy.textContent = access.has_signed_listing
-      ? "판매글마다 화면에 직접 서명해야 합니다. @itsyou에 검증을 요청하면 승인 후 레드체크가 표시됩니다."
-      : "판매글을 등록할 때마다 화면에 직접 서명해야 합니다. 첫 판매글 등록 후 @itsyou에 레드체크 검증을 요청할 수 있습니다.";
+      ? "판매글마다 화면에 직접 서명해야 합니다. 관리자에게 검증을 요청하면 승인 후 레드체크가 표시됩니다."
+      : "판매글을 등록할 때마다 화면에 직접 서명해야 합니다. 첫 판매글 등록 후 관리자에게 레드체크 검증을 요청할 수 있습니다.";
     if (access.has_signed_listing) accessActions.appendChild(actionButton("레드체크 검증 요청", requestVerification, ""));
   }
-  if (dashboard.admin_contact_available) accessActions.appendChild(actionButton("@itsyou 관리자 채팅", openAdminChat));
+  if (dashboard.admin_contact_available) accessActions.appendChild(actionButton("관리자 채팅", openAdminChat));
 }
 
 function moderationItem(title, lines, actions = [], extras = []) {
@@ -689,7 +691,7 @@ async function signAgreement(event) {
     syncStadiumFields();
     listingForm.classList.add("hidden");
     formStatus.textContent = "";
-    screenStatus.textContent = "판매글과 손그림 서명이 @itsyou 관리자 기록에 저장되었습니다.";
+    screenStatus.textContent = "판매글과 손그림 서명이 관리자 기록에 저장되었습니다.";
     await loadTicketDashboard();
   } catch (error) {
     agreementStatus.textContent = error.message;
@@ -741,13 +743,13 @@ async function submitReport(event) {
 }
 
 async function requestVerification() {
-  const note = window.prompt("@itsyou에게 전달할 검증 메모를 입력해 주세요. 필요한 자료는 관리자 채팅으로 보낼 수 있습니다.", "");
+  const note = window.prompt("관리자에게 전달할 검증 메모를 입력해 주세요. 필요한 자료는 관리자 채팅으로 보낼 수 있습니다.", "");
   if (note === null) return;
   try {
     await requestAction("tickets.verification", "/tickets/verification", {
       method: "POST", body: JSON.stringify({ note: note.trim() }),
     });
-    screenStatus.textContent = "레드체크 검증을 @itsyou에 요청했습니다.";
+    screenStatus.textContent = "레드체크 검증을 관리자에게 요청했습니다.";
     await loadTicketDashboard({ quiet: true });
   } catch (error) {
     screenStatus.textContent = error.message;
@@ -803,7 +805,7 @@ async function designateOrSwitchIdentity() {
 function submitListing(event) {
   event.preventDefault();
   if (!ticketState.dashboard?.ticket_access?.can_sell) {
-    formStatus.textContent = "티켓 판매 기능이 정지되어 있습니다. @itsyou에 소명해 주세요.";
+    formStatus.textContent = "티켓 판매 기능이 정지되어 있습니다. 관리자에게 소명해 주세요.";
     return;
   }
   if (Number(unitPriceInput.value) > Number(purchasePriceInput.value)) {
@@ -883,16 +885,18 @@ refreshButton?.addEventListener("click", () => void loadTicketDashboard());
 identityButton?.addEventListener("click", () => void designateOrSwitchIdentity());
 openFormButton?.addEventListener("click", () => {
   if (!ticketState.dashboard?.ticket_access?.can_sell) {
-    screenStatus.textContent = "티켓 판매 기능이 정지되어 있습니다. @itsyou에 소명해 주세요.";
+    screenStatus.textContent = "티켓 판매 기능이 정지되어 있습니다. 관리자에게 소명해 주세요.";
     return;
   }
   syncStadiumFields();
   listingForm.classList.remove("hidden");
 });
 cancelFormButton?.addEventListener("click", () => listingForm.classList.add("hidden"));
+screen?.querySelectorAll("[data-ticket-cancel-form]").forEach((button) => button.addEventListener("click", () => listingForm.classList.add("hidden")));
 listingForm?.addEventListener("submit", (event) => void submitListing(event));
 stadiumSelect?.addEventListener("change", syncStadiumFields);
 screen?.querySelectorAll("[data-ticket-tab]").forEach((button) => button.addEventListener("click", () => setTicketTab(button.dataset.ticketTab)));
+screen?.querySelectorAll("[data-ticket-close-popup]").forEach((button) => button.addEventListener("click", () => setTicketTab("home")));
 agreementForm?.addEventListener("submit", (event) => void signAgreement(event));
 closeAgreementButton?.addEventListener("click", closeAgreementModal);
 agreementModal?.addEventListener("click", (event) => { if (event.target === agreementModal) closeAgreementModal(); });

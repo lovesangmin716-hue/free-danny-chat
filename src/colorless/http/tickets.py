@@ -151,7 +151,7 @@ class TicketRoutesMixin:
         if error:
             status = (
                 self.context.HTTPStatus.FORBIDDEN
-                if "@itsyou" in error
+                if "관리자 계정만" in error
                 else self.context.HTTPStatus.BAD_REQUEST
             )
             self.send_json({"error": error}, status)

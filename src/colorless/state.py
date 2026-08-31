@@ -1392,6 +1392,51 @@ class StateStore:
             expiry = expiry.replace(tzinfo=timezone.utc)
         return expiry >= datetime.now(timezone.utc)
 
+    def cleanup_expired_ticket_rooms(self) -> set[str]:
+        with self.lock:
+            expired_rooms = [
+                room
+                for room in self.state["rooms"]
+                if room.get("kind") in TICKET_ROOM_KINDS and not self._ticket_room_is_valid(room)
+            ]
+            if not expired_rooms:
+                return set()
+            room_ids = [str(room["id"]) for room in expired_rooms]
+            room_id_set = set(room_ids)
+            attachment_filenames: set[str] = set()
+            if self.repository is not None:
+                attachment_filenames.update(self.repository.delete_rooms(room_ids))
+            else:
+                for room_id in room_ids:
+                    for message in self.state["messages"].get(room_id, []):
+                        attachment = message.get("attachment")
+                        if not isinstance(attachment, dict):
+                            continue
+                        filename = Path(str(attachment.get("url", ""))).name
+                        if filename:
+                            attachment_filenames.add(filename)
+
+            self.state["rooms"] = [
+                room for room in self.state["rooms"] if room.get("id") not in room_id_set
+            ]
+            for room_id in room_ids:
+                self.state["messages"].pop(room_id, None)
+            self._messages_by_client_id = {
+                key: message
+                for key, message in self._messages_by_client_id.items()
+                if key[0] not in room_id_set
+            }
+            for filename in list(attachment_filenames):
+                remaining_rooms = self._attachment_rooms.get(filename, set()) - room_id_set
+                if remaining_rooms:
+                    self._attachment_rooms[filename] = remaining_rooms
+                    attachment_filenames.discard(filename)
+                else:
+                    self._attachment_rooms.pop(filename, None)
+            self._rebuild_indexes_locked()
+            self._save_locked("rooms", *(f"messages:{room_id}" for room_id in room_ids))
+            return attachment_filenames
+
     def _baseball_identity_for_account_locked(self, account_id: str) -> dict | None:
         return next(
             (
@@ -1540,7 +1585,7 @@ class StateStore:
             if user is None or user.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND:
                 return None, "선택한 야구 티켓 전용 ID로 전환해 주세요."
             if user.get("ticket_moderation_status", "active") != "active":
-                return None, "정지 상태에서는 검증을 요청할 수 없습니다. @itsyou에 먼저 소명해 주세요."
+                return None, "정지 상태에서는 검증을 요청할 수 없습니다. 관리자에게 먼저 소명해 주세요."
             if not self._has_ticket_signature_locked(user["id"]):
                 return None, "손그림 서명이 포함된 판매글을 먼저 등록한 뒤 검증을 요청해 주세요."
             if user.get("ticket_verified"):
@@ -1815,7 +1860,7 @@ class StateStore:
             if seller is None or seller.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND:
                 return None, "선택한 야구 티켓 전용 ID로 전환해 주세요."
             if seller.get("ticket_moderation_status", "active") != "active":
-                return None, "티켓 판매 기능이 정지되었습니다. @itsyou에 소명해 주세요."
+                return None, "티켓 판매 기능이 정지되었습니다. 관리자에게 소명해 주세요."
             created_at = utc_now_iso()
             matchup = f"{home_team} vs {normalized_away_team}"
             seat = f"{normalized_seat_grade} · {normalized_seat_detail}"
@@ -1953,7 +1998,7 @@ class StateStore:
             if listing_ticket.get("status") != "open":
                 return None, False, "현재 판매 중인 티켓만 1:1 거래를 열 수 있습니다."
             if seller.get("ticket_moderation_status", "active") != "active":
-                return None, False, "티켓 판매 기능이 정지되었습니다. @itsyou에 소명해 주세요."
+                return None, False, "티켓 판매 기능이 정지되었습니다. 관리자에게 소명해 주세요."
             buyer = self._users_by_id.get(buyer_user_id)
             if (
                 buyer is None
@@ -2037,7 +2082,7 @@ class StateStore:
             if deal.get("seller_id") != seller["id"]:
                 return None, None, "판매자만 거래 완료를 처리할 수 있습니다."
             if seller.get("ticket_moderation_status", "active") != "active":
-                return None, None, "티켓 판매 기능이 정지되었습니다. @itsyou에 소명해 주세요."
+                return None, None, "티켓 판매 기능이 정지되었습니다. 관리자에게 소명해 주세요."
             if deal.get("status") == "completed":
                 listing = self._rooms_by_id.get(str(deal.get("listing_id", "")))
                 listing_summary = (

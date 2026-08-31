@@ -255,6 +255,29 @@ class NormalizedSupabaseRepository:
             raise ConcurrentUpdateError("room revision conflict")
         room["_revision"] = int(revision)
 
+    def delete_rooms(self, room_ids: list[str]) -> set[str]:
+        unique_ids = list(dict.fromkeys(room_id for room_id in room_ids if room_id))
+        if not unique_ids:
+            return set()
+        rows = self.all_rows(
+            "messages",
+            {
+                "select": "data",
+                "room_id": f"in.({','.join(unique_ids)})",
+                "order": "sequence.asc",
+            },
+        )
+        attachment_filenames = {
+            Path(str(attachment.get("url", ""))).name
+            for row in rows
+            if isinstance(row.get("data"), dict)
+            and isinstance((attachment := row["data"].get("attachment")), dict)
+            and Path(str(attachment.get("url", ""))).name
+        }
+        query = urlencode({"id": f"in.({','.join(unique_ids)})"})
+        self.transport(f"/rest/v1/rooms?{query}", method="DELETE")
+        return attachment_filenames
+
     def sync_read_position(self, room_id: str, user_id: str, message_id: str) -> None:
         self.upsert(
             "read_positions",
@@ -1273,6 +1296,30 @@ class NormalizedSqliteRepository:
                     (room["id"], user_id, message_id, message_id),
                 )
         room["_revision"] = new_revision
+
+    def delete_rooms(self, room_ids: list[str]) -> set[str]:
+        unique_ids = list(dict.fromkeys(room_id for room_id in room_ids if room_id))
+        if not unique_ids:
+            return set()
+        placeholders = ",".join("?" for _ in unique_ids)
+        with self.connection() as database:
+            rows = database.execute(
+                f"SELECT data_json FROM messages WHERE room_id IN ({placeholders})",
+                unique_ids,
+            ).fetchall()
+            attachment_filenames = set()
+            for row in rows:
+                try:
+                    message = json.loads(str(row[0]))
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                attachment = message.get("attachment") if isinstance(message, dict) else None
+                if isinstance(attachment, dict):
+                    filename = Path(str(attachment.get("url", ""))).name
+                    if filename:
+                        attachment_filenames.add(filename)
+            database.execute(f"DELETE FROM rooms WHERE id IN ({placeholders})", unique_ids)
+        return attachment_filenames
 
     def sync_read_position(self, room_id: str, user_id: str, message_id: str) -> None:
         with self.connection() as database:
