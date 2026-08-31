@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#ffffff" />
     <title>Colorless</title>
     <link rel="preload" href="assets/fonts/The%20Jamsil%203%20Regular.woff2?v=4e887c501a6c" as="font" type="font/woff2" crossorigin />
-    <script defer src="assets/js/main.js?v=b4efca1ec702"></script>
+    <script defer src="assets/js/main.js?v=9cb3155c1de5"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -327,6 +327,13 @@
       .ticket-tab.active { background: var(--black); color: var(--white); }
       .ticket-pane { display: grid; gap: 14px; }
       .ticket-pane-heading { align-items: center; display: flex; gap: 12px; justify-content: space-between; }
+      .ticket-filters { border: 1px solid var(--black); display: grid; gap: 10px; padding: 12px; }
+      .ticket-filter-grid { align-items: end; display: grid; gap: 8px; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }
+      .ticket-filter-field { display: grid; gap: 5px; min-width: 0; }
+      .ticket-filter-field label { font-size: 11px; font-weight: 700; }
+      .ticket-filter-field input, .ticket-filter-field select { background: var(--white); border: 1px solid var(--black); min-height: 42px; min-width: 0; padding: 0 10px; width: 100%; }
+      .ticket-filter-reset { min-height: 42px; white-space: nowrap; }
+      .ticket-filter-status { color: var(--gray); font-size: 12px; margin: 0; min-height: 1.4em; }
       .ticket-list { display: grid; gap: 12px; }
       .ticket-card { border: 1px solid var(--black); display: grid; gap: 11px; padding: 16px; }
       .ticket-card-heading { align-items: start; display: flex; gap: 12px; justify-content: space-between; }
@@ -380,6 +387,8 @@
       .app.ticket-transfer-active .chat-room:not(.hidden) { height: 100dvh; inset: 0; max-width: none; position: fixed; width: 100%; z-index: 230; }
       .app.ticket-transfer-active .chat-room-back { display: inline-flex; }
       @media (max-width: 520px) {
+        .ticket-filter-grid { grid-template-columns: 1fr; }
+        .ticket-filter-reset { width: 100%; }
         .ticket-form-grid { grid-template-columns: 1fr; }
         .ticket-field-wide { grid-column: auto; }
         .ticket-commenter { grid-template-columns: minmax(0, 1fr) 58px; }
@@ -1063,6 +1072,15 @@
                 <h3>양도 티켓</h3>
                 <button type="button" class="secondary-button" id="open-ticket-form-button">티켓 올리기</button>
               </div>
+              <form class="ticket-filters" id="ticket-listing-filters" aria-label="양도 티켓 필터">
+                <div class="ticket-filter-grid">
+                  <div class="ticket-filter-field"><label for="ticket-filter-date">날짜</label><input type="date" id="ticket-filter-date" /></div>
+                  <div class="ticket-filter-field"><label for="ticket-filter-stadium">경기장</label><select id="ticket-filter-stadium"><option value="">전체 경기장</option></select></div>
+                  <div class="ticket-filter-field"><label for="ticket-filter-seat">좌석정보</label><input type="search" id="ticket-filter-seat" list="ticket-filter-seat-options" maxlength="120" autocomplete="off" placeholder="등급·구역·열 검색" /><datalist id="ticket-filter-seat-options"></datalist></div>
+                  <button type="button" class="secondary-button ticket-filter-reset" id="reset-ticket-filters">초기화</button>
+                </div>
+                <p class="ticket-filter-status" id="ticket-filter-status" role="status" aria-live="polite"></p>
+              </form>
               <form class="ticket-form hidden" id="ticket-listing-form">
                 <div class="ticket-form-grid">
                   <div class="ticket-field"><label for="ticket-game-date">경기 날짜</label><input type="date" id="ticket-game-date" required /></div>

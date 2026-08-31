@@ -816,6 +816,23 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('requestAction("profile.remove-legacy-image"', profile_script)
         self.assertIn("convertCroppedProfileImageToPixels", bootstrap_script)
 
+    def test_ticket_listings_filter_by_date_stadium_and_seat_information(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        ticket_script = (FRONTEND_APP_DIR / "ticket-transfer.js").read_text(encoding="utf-8")
+
+        for element_id in (
+            "ticket-filter-date", "ticket-filter-stadium", "ticket-filter-seat",
+            "ticket-filter-seat-options", "reset-ticket-filters", "ticket-filter-status",
+        ):
+            self.assertIn(f'id="{element_id}"', index_html)
+        self.assertIn("function filteredListings()", ticket_script)
+        self.assertIn("ticket.game_date !== date", ticket_script)
+        self.assertIn("ticket.stadium !== stadium", ticket_script)
+        self.assertIn("ticket.seat_grade, ticket.seat_detail, ticket.seat", ticket_script)
+        self.assertIn("function syncSeatFilterOptions()", ticket_script)
+        self.assertIn("function resetListingFilters()", ticket_script)
+        self.assertIn('filterSeatInput?.addEventListener("input", renderFilteredListings)', ticket_script)
+
     def test_presence_events_patch_indexed_rows_on_one_animation_frame(self) -> None:
         messenger_script = (FRONTEND_APP_DIR / "messenger.js").read_text(encoding="utf-8")
 

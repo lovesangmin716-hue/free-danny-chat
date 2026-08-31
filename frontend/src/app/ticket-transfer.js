@@ -36,6 +36,13 @@ const quantityInput = document.getElementById("ticket-quantity");
 const deliverySelect = document.getElementById("ticket-delivery-method");
 const descriptionInput = document.getElementById("ticket-description");
 const listingsNode = document.getElementById("ticket-listings");
+const listingFilters = document.getElementById("ticket-listing-filters");
+const filterDateInput = document.getElementById("ticket-filter-date");
+const filterStadiumSelect = document.getElementById("ticket-filter-stadium");
+const filterSeatInput = document.getElementById("ticket-filter-seat");
+const filterSeatOptions = document.getElementById("ticket-filter-seat-options");
+const filterResetButton = document.getElementById("reset-ticket-filters");
+const filterStatus = document.getElementById("ticket-filter-status");
 const sellingNode = document.getElementById("ticket-selling");
 const dealsNode = document.getElementById("ticket-deals");
 const accessPanel = document.getElementById("ticket-access-panel");
@@ -302,6 +309,68 @@ function populateSelect(select, values, selectedValue = select.value) {
   if (values.includes(selectedValue)) select.value = selectedValue;
 }
 
+function populateStadiumFilter() {
+  const stadiums = ticketState.dashboard?.stadiums || [];
+  const selectedValue = filterStadiumSelect.value;
+  filterStadiumSelect.replaceChildren(
+    Object.assign(document.createElement("option"), { value: "", textContent: "전체 경기장" }),
+    ...stadiums.map((stadium) => Object.assign(document.createElement("option"), {
+      value: stadium, textContent: stadium,
+    })),
+  );
+  filterStadiumSelect.value = stadiums.includes(selectedValue) ? selectedValue : "";
+}
+
+function syncSeatFilterOptions() {
+  const dashboard = ticketState.dashboard;
+  if (!dashboard) return;
+  const stadium = filterStadiumSelect.value;
+  const grades = stadium
+    ? dashboard.seat_grades?.[stadium] || []
+    : [...new Set(Object.values(dashboard.seat_grades || {}).flat())].sort((left, right) => left.localeCompare(right, "ko"));
+  filterSeatOptions.replaceChildren(...grades.map((grade) => Object.assign(document.createElement("option"), {
+    value: grade,
+  })));
+}
+
+function normalizedSeatText(value) {
+  return String(value || "").toLocaleLowerCase("ko-KR").replace(/\s+/g, "");
+}
+
+function filteredListings() {
+  const listings = ticketState.dashboard?.listings || [];
+  const date = filterDateInput.value;
+  const stadium = filterStadiumSelect.value;
+  const seatQuery = normalizedSeatText(filterSeatInput.value);
+  return listings.filter((ticket) => {
+    if (date && ticket.game_date !== date) return false;
+    if (stadium && ticket.stadium !== stadium) return false;
+    if (!seatQuery) return true;
+    const seatText = normalizedSeatText([ticket.seat_grade, ticket.seat_detail, ticket.seat].filter(Boolean).join(" "));
+    return seatText.includes(seatQuery);
+  });
+}
+
+function renderFilteredListings() {
+  const listings = ticketState.dashboard?.listings || [];
+  const filtered = filteredListings();
+  const hasFilters = Boolean(filterDateInput.value || filterStadiumSelect.value || filterSeatInput.value.trim());
+  filterStatus.textContent = hasFilters
+    ? `조건에 맞는 티켓 ${filtered.length}개 · 전체 ${listings.length}개`
+    : `전체 티켓 ${listings.length}개`;
+  listingsNode.replaceChildren(...(filtered.length
+    ? filtered.map((ticket) => ticketCard(ticket))
+    : [emptyCopy(listings.length ? "조건에 맞는 티켓이 없습니다." : "현재 양도 중인 티켓이 없습니다.")]));
+}
+
+function resetListingFilters() {
+  filterDateInput.value = "";
+  filterStadiumSelect.value = "";
+  filterSeatInput.value = "";
+  syncSeatFilterOptions();
+  renderFilteredListings();
+}
+
 function syncStadiumFields() {
   const dashboard = ticketState.dashboard;
   if (!dashboard) return;
@@ -486,11 +555,11 @@ function renderDashboard() {
 
   populateSelect(stadiumSelect, dashboard.stadiums || []);
   populateSelect(deliverySelect, dashboard.delivery_methods || []);
+  populateStadiumFilter();
+  syncSeatFilterOptions();
   syncStadiumFields();
   renderAccessPanel();
-  listingsNode.replaceChildren(...(dashboard.listings?.length
-    ? dashboard.listings.map((ticket) => ticketCard(ticket))
-    : [emptyCopy("현재 양도 중인 티켓이 없습니다.")]));
+  renderFilteredListings();
   sellingNode.replaceChildren(...(dashboard.selling?.length
     ? dashboard.selling.map((ticket) => ticketCard(ticket, { selling: true }))
     : [emptyCopy("내가 올린 티켓이 없습니다.")]));
@@ -786,6 +855,14 @@ openFormButton?.addEventListener("click", () => {
 cancelFormButton?.addEventListener("click", () => listingForm.classList.add("hidden"));
 listingForm?.addEventListener("submit", (event) => void submitListing(event));
 stadiumSelect?.addEventListener("change", syncStadiumFields);
+listingFilters?.addEventListener("submit", (event) => event.preventDefault());
+filterDateInput?.addEventListener("input", renderFilteredListings);
+filterStadiumSelect?.addEventListener("change", () => {
+  syncSeatFilterOptions();
+  renderFilteredListings();
+});
+filterSeatInput?.addEventListener("input", renderFilteredListings);
+filterResetButton?.addEventListener("click", resetListingFilters);
 screen?.querySelectorAll("[data-ticket-tab]").forEach((button) => button.addEventListener("click", () => setTicketTab(button.dataset.ticketTab)));
 agreementForm?.addEventListener("submit", (event) => void signAgreement(event));
 closeAgreementButton?.addEventListener("click", closeAgreementModal);
