@@ -621,6 +621,8 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertNotIn('item.addEventListener("click", () => openDirectChat(friend.id))', messenger_script)
         self.assertIn("chatIdentityVisibility", core_script)
         self.assertIn("function renderContextActionBar", action_bar_script)
+        self.assertIn("function preserveRealtimeViewerIdentity", messenger_script)
+        self.assertIn("viewer_identity_id: existingRoom.viewer_identity_id", messenger_script)
 
     def test_my_tab_owns_profile_status_and_logout_while_lists_own_search(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -2725,6 +2727,37 @@ class AccountIdentityTestCase(unittest.TestCase):
                 self.assertEqual(sent[0]["username"], second["username"])
                 messages = store.get_messages(room["id"], primary["username"])
                 self.assertEqual(messages[-1]["text"], "전체 ID 채팅")
+
+                services = server.ApplicationServices(
+                    store,
+                    server.PresenceStore(store.repository, "identity-message-events"),
+                )
+                outcome = services.create_message(
+                    outsider,
+                    {
+                        "roomId": room["id"],
+                        "text": "상대가 보낸 티켓 채팅",
+                        "clientMessageId": "identity-viewer-event",
+                    },
+                    lambda _value, _username: None,
+                )
+                events_by_recipient = {
+                    next(iter(recipients)): event
+                    for event, recipients in outcome.events
+                }
+                self.assertEqual(set(events_by_recipient), {second["username"], outsider["username"]})
+                self.assertEqual(
+                    events_by_recipient[second["username"]]["room"]["viewer_identity"]["username"],
+                    second["username"],
+                )
+                self.assertEqual(
+                    events_by_recipient[outsider["username"]]["room"]["viewer_identity"]["username"],
+                    outsider["username"],
+                )
+                self.assertEqual(
+                    events_by_recipient[second["username"]]["message"]["username"],
+                    outsider["username"],
+                )
             finally:
                 store.close()
 
@@ -3302,6 +3335,13 @@ class StateStoreTestCase(unittest.TestCase):
         )
         self.assertEqual(message_outcome.events[0][0]["sender"]["username"], "alice")
         self.assertIn("profile_thumbnail_url", message_outcome.events[0][0]["sender"])
+        message_events_by_recipient = {
+            next(iter(recipients)): event
+            for event, recipients in message_outcome.events
+        }
+        self.assertEqual(set(message_events_by_recipient), {"alice", "bob", "eve"})
+        for recipient, event in message_events_by_recipient.items():
+            self.assertEqual(event["room"]["viewer_identity"]["username"], recipient)
 
         delete_outcome = services.delete_message(
             self.alice,

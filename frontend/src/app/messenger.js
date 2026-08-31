@@ -273,6 +273,15 @@ function upsertRoomAfterMessageDeletion(incomingRoom) {
   });
 }
 
+function preserveRealtimeViewerIdentity(existingRoom, incomingRoom) {
+  if (!existingRoom?.viewer_identity_id || !incomingRoom) return incomingRoom;
+  return {
+    ...incomingRoom,
+    viewer_identity_id: existingRoom.viewer_identity_id,
+    viewer_identity: existingRoom.viewer_identity,
+  };
+}
+
 function removeMessengerRoom(roomId) {
   const previousLength = state.messenger.rooms.length;
   state.messenger.rooms = state.messenger.rooms.filter((room) => room.id !== roomId);
@@ -387,7 +396,7 @@ function registerRealtimeHandlers() {
     appStore.transact("realtime.message-created", () => {
       const existingRoom = state.roomById.get(payload.roomId);
       room = upsertMessengerRoom({
-        ...payload.room,
+        ...preserveRealtimeViewerIdentity(existingRoom, payload.room),
         name: existingRoom?.name || payload.room?.name,
         peer: existingRoom?.peer || payload.room?.peer,
       });
@@ -412,7 +421,12 @@ function registerRealtimeHandlers() {
   realtimeEvents.register("message_deleted", async (payload) => {
     recordSyncRevision(payload.revision);
     appStore.transact("realtime.message-deleted", () => {
-      if (payload.room) upsertRoomAfterMessageDeletion(payload.room);
+      if (payload.room) {
+        upsertRoomAfterMessageDeletion(preserveRealtimeViewerIdentity(
+          state.roomById.get(payload.roomId),
+          payload.room,
+        ));
+      }
       const latestMessageId = payload.room?.last_message?.id || "";
       state.lastSeenRoomMessageIds[payload.roomId] = latestMessageId;
       if (payload.roomId === state.selectedRoomId && payload.messageId) {

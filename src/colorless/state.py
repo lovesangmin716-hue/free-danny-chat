@@ -3364,13 +3364,24 @@ class StateStore:
                 if (user := self._users_by_id.get(user_id)) is not None
             }
 
-    def room_event_summaries(self, room_id: str) -> dict[str, dict]:
+    def room_event_summaries(
+        self,
+        room_id: str,
+        *,
+        latest_message: dict | None = None,
+        latest_message_loaded: bool = False,
+    ) -> dict[str, dict]:
         with self.lock:
             room = self._rooms_by_id.get(room_id)
             if room is None:
                 return {}
             return {
-                user["username"]: self._room_summary_for_account_locked(room, user)
+                user["username"]: self._room_summary_for_account_locked(
+                    room,
+                    user,
+                    latest_message=latest_message,
+                    latest_message_loaded=latest_message_loaded,
+                )
                 for user_id in room.get("participant_ids", [])
                 if (user := self._users_by_id.get(user_id)) is not None
             }
