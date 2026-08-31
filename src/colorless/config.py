@@ -58,17 +58,6 @@ MAX_PROFILE_IMAGE_BYTES = 3 * 1024 * 1024
 MAX_PROFILE_THUMBNAIL_BYTES = 256 * 1024
 MAX_JSON_REQUEST_BYTES = 1024 * 1024
 MAX_FORM_REQUEST_BYTES = 64 * 1024
-MAX_SHORTS_SEEN_IDS = 500
-SHORTS_CATALOG_PAGE_SIZE = max(1, min(200, int(os.getenv("SHORTS_CATALOG_PAGE_SIZE", "20"))))
-SHORTS_CATALOG_SCAN_SIZE = max(100, SHORTS_CATALOG_PAGE_SIZE)
-SHORTS_CATALOG_TTL_SECONDS = max(15 * 60, int(os.getenv("SHORTS_CATALOG_TTL_SECONDS", "21600")))
-SHORTS_CATALOG_RETENTION_SECONDS = max(
-    SHORTS_CATALOG_TTL_SECONDS,
-    int(os.getenv("SHORTS_CATALOG_RETENTION_SECONDS", "604800")),
-)
-SHORTS_COLLECTION_INTERVAL_SECONDS = max(10, int(os.getenv("SHORTS_COLLECTION_INTERVAL_SECONDS", "1800")))
-SHORTS_COLLECTION_LEASE_SECONDS = max(30, int(os.getenv("SHORTS_COLLECTION_LEASE_SECONDS", "120")))
-SHORTS_DAILY_QUOTA_BUDGET = max(100, int(os.getenv("SHORTS_DAILY_QUOTA_BUDGET", "5000")))
 MAX_REQUEST_THREADS = max(16, min(1024, int(os.getenv("MAX_REQUEST_THREADS", "64"))))
 MAX_BODY_READERS = max(1, min(MAX_REQUEST_THREADS - 1, int(os.getenv("MAX_BODY_READERS", "16"))))
 HEADER_READ_TIMEOUT_SECONDS = max(1.0, min(60.0, float(os.getenv("HEADER_READ_TIMEOUT_SECONDS", "5"))))
@@ -87,8 +76,8 @@ CONTENT_SECURITY_POLICY = "; ".join(
         "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style",
         f"img-src 'self' data: blob: {SUPABASE_STORAGE_ORIGIN}".rstrip(),
         "font-src 'self'",
-        f"connect-src 'self' https://accounts.google.com https://www.googleapis.com {SUPABASE_STORAGE_ORIGIN}".rstrip(),
-        "frame-src https://accounts.google.com https://www.youtube-nocookie.com",
+        f"connect-src 'self' https://accounts.google.com {SUPABASE_STORAGE_ORIGIN}".rstrip(),
+        "frame-src https://accounts.google.com",
         "form-action 'self' https://accounts.google.com https://kauth.kakao.com",
         f"media-src 'self' blob: {SUPABASE_STORAGE_ORIGIN}".rstrip(),
         "worker-src 'self' blob:",
@@ -102,7 +91,7 @@ COMMON_SECURITY_HEADERS = (
     (
         "Permissions-Policy",
         'accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(self), payment=(), usb=(), '
-        'autoplay=(self "https://www.youtube-nocookie.com"), fullscreen=(self "https://www.youtube-nocookie.com")',
+        "autoplay=(), fullscreen=(self)",
     ),
     ("Cross-Origin-Opener-Policy", "same-origin-allow-popups"),
 )
@@ -180,7 +169,6 @@ KAKAO_REDIRECT_URI = os.getenv("KAKAO_REDIRECT_URI", "").strip()
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "").strip()
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
 SOCIAL_DEMO_LOGIN_ENABLED = os.getenv("SOCIAL_DEMO_LOGIN_ENABLED", "true").lower() != "false"
 SOCIAL_DEMO_ADMIN_PASSWORD = os.getenv("SOCIAL_DEMO_ADMIN_PASSWORD", "").strip()
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
@@ -208,33 +196,3 @@ APP_NAME = "Colorless"
 AGE_GROUPS = {"10대", "20대", "30대", "40대", "50대 이상"}
 GENDERS = {"여성", "남성"}
 FRIEND_CODE_PATTERN = re.compile(r"(?:CL-[A-Z0-9]{8}|[a-z][a-z0-9_]{3,19})")
-SHORTS_PROFILE_TOPICS = {
-    ("10대", "여성"): ("유머", "먹방", "아이돌", "뷰티"),
-    ("10대", "남성"): ("유머", "먹방", "테크", "스포츠"),
-    ("20대", "여성"): ("유머", "먹방", "연예", "여행"),
-    ("20대", "남성"): ("유머", "먹방", "연예", "자동차"),
-    ("30대", "여성"): ("유머", "먹방", "재테크", "여행"),
-    ("30대", "남성"): ("유머", "먹방", "테크", "재테크"),
-    ("40대", "여성"): ("유머", "먹방", "건강", "여행"),
-    ("40대", "남성"): ("유머", "먹방", "경제", "여행"),
-    ("50대 이상", "여성"): ("유머", "먹방", "건강", "취미"),
-    ("50대 이상", "남성"): ("유머", "먹방", "건강", "역사"),
-}
-SHORTS_AGE_TRENDING_TOPICS = {
-    "10대": ("유머", "먹방", "아이돌", "테크"),
-    "20대": ("유머", "먹방", "연예", "여행"),
-    "30대": ("유머", "먹방", "재테크", "여행"),
-    "40대": ("유머", "먹방", "건강", "여행"),
-    "50대 이상": ("유머", "먹방", "건강", "취미"),
-}
-YOUTH_SHORTS_BLOCKLIST = ("로보카 폴리", "뽀로로", "핑크퐁", "옐언니", "키즈", "어린이", "유아", "아기", "동요", "nursery", "kids")
-EMERGENCY_SHORTS = (
-    {"id": "k_ANHTu0XlA", "title": "2080년 한국 학생", "channel_title": "김켈리 Kellyfornia"},
-    {"id": "7F1vyoPlh98", "title": "같은 기술 다른 느낌", "channel_title": "웃또또"},
-    {"id": "UloIWifOjt0", "title": "한국 유머 쇼츠", "channel_title": "world with Funny video"},
-)
-POPULAR_VIDEO_CATEGORIES = (
-    "24", "23", "10", "17", "20", "22", "26", "1", "2", "19", "25", "27", "28",
-    "15", "21", "29", "18", "30", "31", "32", "33", "34", "35", "36", "37", "38",
-    "39", "40", "41", "42", "43", "44",
-)

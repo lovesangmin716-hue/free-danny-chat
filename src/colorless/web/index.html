@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#ffffff" />
     <title>Colorless</title>
     <link rel="preload" href="assets/fonts/The%20Jamsil%203%20Regular.woff2?v=4e887c501a6c" as="font" type="font/woff2" crossorigin />
-    <script defer src="assets/js/main.js?v=5134c0ddb06f"></script>
+    <script defer src="assets/js/main.js?v=81999a7a133b"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -229,8 +229,6 @@
       .header-search input { min-height: 44px; min-width: 0; width: 100%; }
       .header-search button { background: var(--white); color: var(--black); min-height: 44px; min-width: 44px; padding: 0; }
 
-      .app.shorts-mode .app-header { display: none; }
-
       .app-actions {
         display: flex;
         flex: 0 0 auto;
@@ -253,7 +251,7 @@
         border-top: 1px solid var(--black);
         display: grid;
         flex: 0 0 auto;
-        grid-template-columns: repeat(4, 1fr) 48px;
+        grid-template-columns: repeat(3, 1fr);
       }
 
       .list-tabs button {
@@ -272,9 +270,6 @@
 
       .list-tabs button:last-child { border-right: 0; }
       .list-tabs button.active { background: var(--black); color: var(--white); }
-      .shorts-sound-toggle { font-size: 16px; min-width: 48px; padding: 0; }
-      .app:not(.shorts-mode) .list-tabs { grid-template-columns: repeat(4, 1fr); }
-      .app.shorts-mode .shorts-sound-toggle { background: var(--black); color: var(--white); }
 
       .list-content {
         flex: 1;
@@ -296,9 +291,10 @@
       .identity-panel { border-top: 1px solid var(--black); display: grid; gap: 10px; padding-top: 14px; }
       .identity-panel-copy { color: var(--gray); font-size: 12px; line-height: 1.45; margin: 0; overflow-wrap: anywhere; }
       .identity-panel select { background: var(--white); border: 1px solid var(--black); min-height: 44px; padding: 0 10px; width: 100%; }
-      .identity-create-form { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
+      .identity-switch-row { align-items: center; display: grid; gap: 6px; grid-template-columns: minmax(0, 1fr) 32px; }
+      .identity-switch-row .identity-add-button { align-items: center; display: inline-flex; font-size: 18px; height: 32px; justify-content: center; min-height: 32px; min-width: 32px; padding: 0; width: 32px; }
+      .identity-create-form { display: grid; gap: 8px; }
       .identity-create-form input { min-width: 0; }
-      .identity-create-form button, .identity-create-form .identity-form-status { grid-column: 1 / -1; }
       .identity-form-status { color: var(--gray); font-size: 12px; margin: 0; min-height: 1.4em; }
       .my-status-row { align-items: center; border-block: 1px solid var(--light-gray); display: flex; justify-content: space-between; padding: 14px 0; }
       .my-status-copy { display: grid; gap: 3px; }
@@ -328,55 +324,6 @@
       .work-mode-feedback { bottom: 12px; color: var(--gray); font-size: 12px; left: 0; margin: 0; position: fixed; right: 0; text-align: center; }
       .work-mode-hint { color: var(--gray); font-size: 11px; margin: 0; position: fixed; right: 18px; top: 14px; }
 
-      .shorts-view {
-        height: 100%;
-        inset: 0;
-        overflow-anchor: none;
-        overflow-y: auto;
-        overscroll-behavior-y: contain;
-        position: absolute;
-        scrollbar-width: none;
-      }
-
-      .shorts-view::-webkit-scrollbar { display: none; }
-      .shorts-feed { height: 100%; overflow-anchor: none; position: relative; }
-
-      .short-card {
-        align-items: end;
-        background: var(--black);
-        display: grid;
-        height: 100%;
-        min-height: 0;
-        overflow: hidden;
-        overflow-anchor: none;
-        position: relative;
-      }
-
-      .short-card iframe {
-        border: 0;
-        height: 100%;
-        inset: 0;
-        pointer-events: none;
-        position: absolute;
-        overflow-anchor: none;
-        width: 100%;
-      }
-
-      .short-card-copy {
-        background: linear-gradient(transparent, rgba(0, 0, 0, 0.9));
-        color: var(--white);
-        display: grid;
-        gap: 6px;
-        padding: 56px 18px calc(72px + env(safe-area-inset-bottom));
-        position: relative;
-        width: 100%;
-      }
-
-      .short-card-copy h2, .short-card-copy p { margin: 0; }
-      .short-card-copy h2 { font-size: 18px; }
-      .short-card-copy p { color: #d0d0d0; font-size: 13px; line-height: 1.5; }
-      .short-card-copy button { margin-top: 6px; min-height: 42px; }
-
       .short-share-bar {
         background: var(--white);
         border-top: 1px solid var(--black);
@@ -403,36 +350,14 @@
       .short-share-send { align-items: center; background: var(--white); border: 0; border-left: 1px solid var(--black); color: var(--black); display: grid; flex: 0 0 44px; min-height: 44px; padding: 0; place-items: center; }
       .short-share-send:not(:disabled) { background: var(--black); color: var(--white); }
       .short-share-send:disabled { color: var(--gray); opacity: 1; }
-      .short-message-toggle { background: var(--white); border: 0; border-left: 1px solid var(--black); color: transparent; display: grid; flex: 0 0 16px; font-size: 0; grid-template-rows: repeat(2, 1fr); line-height: 1; min-height: 36px; padding: 3px 2px; }
-      .short-message-toggle span { align-items: center; display: grid; place-items: center; }
-      .short-message-toggle.enabled .short-message-on, .short-message-toggle:not(.enabled) .short-message-off { background: var(--black); color: var(--white); }
-      .short-share-bar.replying { padding-left: 0; padding-right: 0; }
-      .short-share-bar.replying .short-share-list { padding-right: 0; }
-      .short-message-notice { align-items: center; background: var(--white); border: 0; color: var(--black); display: grid; flex: 1; gap: 8px; grid-template-columns: 34px minmax(0, 1fr); min-width: 0; padding: 0; text-align: left; }
-      .short-message-notice .avatar { height: 34px; width: 34px; }
-      .short-message-copy { display: grid; gap: 2px; min-width: 0; }
-      .short-message-copy strong, .short-message-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .short-message-copy strong { font-size: 12px; }
-      .short-message-copy span { color: var(--gray); font-size: 11px; }
-      .short-inline-reply { background: var(--white); border: 1px solid var(--black); color: var(--black); flex: 1; font: inherit; height: 34px; min-width: 0; padding: 0 9px; width: 100%; }
-      .short-share-empty { color: #d0d0d0; font-size: 12px; margin: 0; padding: 7px 0; }
       .short-share-feedback { color: var(--white); font-size: 11px; margin: 0; min-height: 14px; }
       .context-action { background: var(--white); border: 1px solid var(--black); color: var(--black); flex: 0 0 auto; gap: 5px; min-height: 36px; padding: 0 10px; white-space: nowrap; }
       .context-action .ui-icon { height: 18px; width: 18px; }
       .context-action[aria-pressed="true"] { background: var(--black); color: var(--white); }
       .context-chip { align-items: center; background: #f3f3f3; border: 0; color: var(--black); display: inline-flex; flex: 0 0 auto; min-height: 36px; max-width: 150px; overflow: hidden; padding: 0 10px; text-overflow: ellipsis; white-space: nowrap; }
+      .context-chip[aria-pressed="true"] { background: var(--black); color: var(--white); }
       .context-summary { color: var(--gray); flex: 0 0 auto; font-size: 12px; padding: 0 4px; white-space: nowrap; }
       .context-search { border: 0; min-height: 36px; padding: 0 9px; }
-
-      .short-empty-card {
-        align-content: center;
-        background: var(--white);
-        color: var(--black);
-        gap: 12px;
-        padding: 22px;
-      }
-
-      .short-empty-card p { color: var(--gray); }
 
       .list-item {
         align-items: center;
@@ -905,9 +830,6 @@
       <section class="list-content">
         <div class="chat-list" id="chat-list"></div>
         <div class="friend-list hidden" id="friend-list"></div>
-        <section class="shorts-view hidden" id="shorts-view" tabindex="0" aria-label="YouTube 쇼츠">
-          <div class="shorts-feed" id="shorts-feed"></div>
-        </section>
         <section class="my-view hidden" id="my-view" aria-label="MY">
           <div class="my-card">
             <div class="my-profile-summary">
@@ -921,14 +843,8 @@
               <strong id="identity-panel-title">활동 ID</strong>
               <p class="identity-panel-copy" id="account-identifier"></p>
               <label class="sr-only" for="identity-switcher">현재 활동 ID</label>
-              <select id="identity-switcher" aria-label="현재 활동 ID"></select>
-              <form class="identity-create-form" id="identity-create-form">
-                <input id="identity-username" maxlength="24" autocomplete="off" placeholder="사용자 이름" required />
-                <input id="identity-display-name" maxlength="24" autocomplete="nickname" placeholder="표시 이름" required />
-                <input id="identity-friend-code" maxlength="20" autocomplete="off" placeholder="친구 ID" required />
-                <button type="submit" class="secondary-button" id="identity-create-button">새 활동 ID 만들기</button>
-                <p class="identity-form-status" id="identity-form-status" role="status" aria-live="polite"></p>
-              </form>
+              <div class="identity-switch-row"><select id="identity-switcher" aria-label="현재 활동 ID"></select><button type="button" class="secondary-button identity-add-button" id="open-identity-create-button" aria-label="활동 ID 추가">+</button></div>
+              <p class="identity-form-status" id="identity-form-status" role="status" aria-live="polite"></p>
             </div>
             <div class="my-status-row">
               <div class="my-status-copy">
@@ -953,6 +869,17 @@
           </div>
         </section>
       </section>
+      <div class="sheet-backdrop hidden" id="identity-create-modal" role="dialog" aria-modal="true" aria-labelledby="identity-create-title">
+        <section class="user-sheet">
+          <header class="sheet-header"><h2 id="identity-create-title">새 활동 ID</h2><button type="button" class="sheet-close" id="close-identity-create-button">닫기</button></header>
+          <form class="identity-create-form sheet-content" id="identity-create-form">
+            <label for="identity-display-name">이름</label><input id="identity-display-name" maxlength="24" autocomplete="nickname" placeholder="표시할 이름" required />
+            <label for="identity-username">ID</label><input id="identity-username" maxlength="24" autocomplete="off" placeholder="사용할 ID" required />
+            <button type="submit" id="identity-create-button">만들기</button>
+            <p class="identity-form-status" id="identity-create-status" role="status" aria-live="polite"></p>
+          </form>
+        </section>
+      </div>
       <section class="ticket-transfer-screen hidden" id="ticket-transfer-screen" aria-label="야구 티켓 양도" aria-hidden="true">
         <header class="ticket-header">
           <button type="button" class="ticket-header-button" id="close-ticket-transfer-button" aria-label="티켓 양도 닫기">←</button>
@@ -1088,8 +1015,7 @@
       <aside class="short-share-bar" id="short-share-bar" aria-label="컨텍스트 작업">
         <span class="short-share-label">최근 대화</span>
         <div class="short-share-list" id="short-share-list"></div>
-        <button class="short-message-toggle" id="short-message-toggle" type="button" aria-label="쇼츠 메시지 알림"><span class="short-message-on">ON</span><span class="short-message-off">OFF</span></button>
-        <button class="short-share-send" id="short-share-send" type="button" data-icon="send" data-icon-only aria-label="쇼츠 보내기" disabled>쇼츠 보내기</button>
+        <button class="short-share-send" id="short-share-send" type="button" data-icon="message-circle" data-icon-only aria-label="채팅 시작" disabled>채팅 시작</button>
         <p class="short-share-feedback" id="short-share-feedback" aria-live="polite"></p>
       </aside>
       <section class="desktop-chat-empty" aria-hidden="true">
@@ -1185,9 +1111,7 @@
       <nav class="list-tabs" aria-label="메신저 탭">
         <button type="button" class="active" id="chats-tab" data-icon="message-circle" aria-label="채팅">채팅</button>
         <button type="button" id="friends-tab" data-icon="users" aria-label="친구">친구</button>
-        <button type="button" id="shorts-tab" data-icon="play" aria-label="쇼츠">쇼츠</button>
         <button type="button" id="my-tab" data-icon="user" aria-label="MY">MY</button>
-        <button type="button" class="shorts-sound-toggle" id="shorts-sound-toggle" data-icon="volume-x" data-icon-only aria-label="쇼츠 소리 켜기">쇼츠 소리 켜기</button>
       </nav>
 
       <section class="work-mode-screen hidden" id="work-mode-screen" tabindex="-1" aria-label="Work mode" aria-hidden="true">

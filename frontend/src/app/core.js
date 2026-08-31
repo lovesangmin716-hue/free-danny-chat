@@ -22,6 +22,15 @@ function registerCoreHooks(hooks) {
   }
 }
 
+function storedChatIdentityVisibility() {
+  try {
+    const value = JSON.parse(localStorage.getItem("colorless-chat-identity-visibility") || "{}");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch (_) {
+    return {};
+  }
+}
+
 const initialState = {
   session: null,
   providers: {},
@@ -31,22 +40,17 @@ const initialState = {
   actionBarByTab: {
     chats: { mode: "idle", query: "", filter: "all", selection: [] },
     friends: { mode: "idle", query: "", filter: "all", selection: [] },
-    shorts: { mode: "idle", query: "", filter: "all", selection: [] },
     my: { mode: "idle", query: "", filter: "all", selection: [] },
   },
+  chatIdentityVisibility: storedChatIdentityVisibility(),
   chatSearchResults: [],
   chatSearchLoading: false,
   chatSearchRequestId: 0,
   chatSearchTimer: null,
   newChatOriginTab: "",
-  shortMessageNotice: null,
-  shortMessageTimer: null,
-  shortMessagePaused: false,
-  shortInlineReply: null,
   workModeEnabled: localStorage.getItem("colorless-work-mode") === "on",
   workModeMessage: null,
   workModeSending: false,
-  shortsMessagesEnabled: localStorage.getItem("colorless-shorts-messages") !== "off",
   selectedRoomId: "",
   messages: [],
   messageIndexes: new Map(),
@@ -131,24 +135,6 @@ selectedProfilePalette: "default",
   statusPickerOpener: null,
   authEpoch: 0,
   authRequestBusy: false,
-  youtube: {
-    accessToken: "",
-    videos: [],
-    activeIndex: 0,
-    seedTitle: "",
-    message: "",
-    guestVideos: [],
-    guestCursor: "",
-    guestLoading: false,
-    guestError: "",
-    feedVersion: 0,
-    renderedFeedVersion: -1,
-    virtualStart: -1,
-    virtualEnd: -1,
-    virtualHeight: 0,
-    soundEnabled: false,
-    tokenClient: null,
-  },
   isGuest: false,
   palettePickerOpen: false,
 lastPixelTapIndex: -1,
@@ -156,9 +142,6 @@ lastPixelTapIndex: -1,
   profilePixelCursor: 0,
   profilePixelPreviousCursor: 0,
   lastPixelTapAt: 0,
-  shortScrollFrame: null,
-  shortResizeFrame: null,
-  shortSnapTimer: null,
 };
 const appStore = ColorlessPlatform.createStore(initialState);
 const state = appStore.state;
@@ -181,8 +164,6 @@ const PROFILE_IMAGE_WEBP_QUALITIES = [0.86, 0.74, 0.62];
 const PIXEL_SIDE = 32;
 const PROFILE_PIXEL_COUNT = PIXEL_SIDE * PIXEL_SIDE;
 const PROFILE_PIXEL_CACHE_MAX = 128;
-const MAX_SHORTS_FEED_ITEMS = 200;
-const SHORTS_DOM_WINDOW_SIZE = 5;
 const CHAT_MESSAGE_PAGE_SIZE = 30;
 const CHAT_MESSAGE_MEMORY_LIMIT = 300;
 const CHAT_MESSAGE_VIRTUAL_OVERSCAN_PX = 640;
@@ -263,9 +244,7 @@ const openListSearchButton = document.getElementById("open-list-search-button");
 const closeListSearchButton = document.getElementById("close-list-search-button");
 const chatsTab = document.getElementById("chats-tab");
 const friendsTab = document.getElementById("friends-tab");
-const shortsTab = document.getElementById("shorts-tab");
 const myTab = document.getElementById("my-tab");
-const shortsSoundToggle = document.getElementById("shorts-sound-toggle");
 const chatList = document.getElementById("chat-list");
 const friendList = document.getElementById("friend-list");
 const myView = document.getElementById("my-view");
@@ -304,11 +283,8 @@ const chatAttachmentRemove = document.getElementById("chat-attachment-remove");
 const messageReadMenu = document.getElementById("message-read-menu");
 const messageReadMenuTitle = document.getElementById("message-read-menu-title");
 const messageReadMenuCopy = document.getElementById("message-read-menu-copy");
-const shortsView = document.getElementById("shorts-view");
-const shortsFeed = document.getElementById("shorts-feed");
 const shortShareBar = document.getElementById("short-share-bar");
 const shortShareList = document.getElementById("short-share-list");
-const shortMessageToggle = document.getElementById("short-message-toggle");
 const shortShareSend = document.getElementById("short-share-send");
 const shortShareFeedback = document.getElementById("short-share-feedback");
 const appStatus = document.getElementById("app-status");
@@ -794,7 +770,6 @@ export {
   IMAGE_SOURCE_BYTES_MAX,
   IMAGE_TOTAL_PIXELS_MAX,
   IMAGE_WEBP_QUALITY,
-  MAX_SHORTS_FEED_ITEMS,
   PIXEL_SIDE,
   PROFILE_IMAGE_SIDE,
   PROFILE_IMAGE_SOURCE_BYTES_MAX,
@@ -804,7 +779,6 @@ export {
   PROFILE_PALETTE_NAMES,
   PROFILE_PIXEL_COUNT,
   PROFILE_THUMBNAIL_SIDE,
-  SHORTS_DOM_WINDOW_SIZE,
   api,
   appHeader,
   appScreen,
@@ -923,15 +897,10 @@ export {
   setAuthRequestBusy,
   setAuthStatus,
   setProviderStatus,
-  shortMessageToggle,
   shortShareBar,
   shortShareFeedback,
   shortShareList,
   shortShareSend,
-  shortsFeed,
-  shortsSoundToggle,
-  shortsTab,
-  shortsView,
   showApp,
   showAuth,
   showStatusEmojiRequirement,

@@ -4,14 +4,24 @@ import { appStore, chatList, chatRoom, chatRoomAvatar, chatRoomPresence, createA
 import { renderRoomSettings } from "./room-settings.js";
 import { addMessageReader, appendChatMessageNode, appendChatMessageState, applyMessageReaderToCurrentMessages, closeChatRoom, loadChatMessages, openChatRoom, openChatRoomAtMessage, removeChatMessageState, renderAllChatMessages, renderChatRoom, scheduleRoomRead, updatePresence } from "./chat.js";
 import { dismissWorkModeMessage, showWorkModeMessage, workModeMessage } from "./work-mode.js";
-import { renderShortShareBar, showShortMessageNotice } from "./shorts.js";
-import { renderFriendActionBar, selectFriendForActionBar } from "./action-bar.js";
+import { renderContextActionBar, renderFriendActionBar, selectFriendForActionBar } from "./action-bar.js";
 import { addFriend, loadFriendsPage, loadMessenger, loadRoomsPage, openNewChat, recordSyncRevision, startLiveSync, stopLiveSync, syncLiveState } from "./app.js";
 import { ColorlessPlatform } from "./platform/index.js";
 
 // Room, friend, presence, directory, and realtime synchronization behavior.
+function ownedIdentityUsernames() {
+  return new Set((state.session?.identities || [state.messenger.user]).map((identity) => identity?.username).filter(Boolean));
+}
+
+function roomViewerUsername(room) {
+  return room?.viewer_identity?.username || state.messenger.user?.username || "";
+}
+
 function recentChatRooms() {
-  return state.messenger.rooms.filter((room) => ["direct", "group"].includes(room.kind || "group")).sort((first, second) => {
+  return state.messenger.rooms.filter((room) => (
+    ["direct", "group", "ticket_listing", "ticket_deal"].includes(room.kind || "group")
+    && state.chatIdentityVisibility[room.viewer_identity_id] !== false
+  )).sort((first, second) => {
     const firstHasMessage = Boolean(first.last_message);
     const secondHasMessage = Boolean(second.last_message);
     if (firstHasMessage !== secondHasMessage) return firstHasMessage ? -1 : 1;
@@ -149,21 +159,24 @@ function scheduleChatSearch(value) {
 }
 
 function renderChatSearchResults(query) {
-  if (state.chatSearchLoading && !state.chatSearchResults.length) {
+  const visibleResults = state.chatSearchResults.filter(
+    (result) => state.chatIdentityVisibility[result.room?.viewer_identity_id] !== false,
+  );
+  if (state.chatSearchLoading && !visibleResults.length) {
     const loading = document.createElement("p");
     loading.className = "empty-list";
     loading.textContent = "대화를 검색하는 중이에요.";
     chatList.appendChild(loading);
     return;
   }
-  if (!state.chatSearchResults.length) {
+  if (!visibleResults.length) {
     const empty = document.createElement("p");
     empty.className = "empty-list";
     empty.textContent = `“${query}” 검색 결과가 없어요.`;
     chatList.appendChild(empty);
     return;
   }
-  for (const result of state.chatSearchResults) {
+  for (const result of visibleResults) {
     const room = result.room;
     if (!room?.id) continue;
     const item = document.createElement("button");
@@ -338,9 +351,6 @@ function flushPresencePatches() {
     for (const username of usernames) patchRoomPresence(username);
     return;
   }
-  if (state.activeList === "shorts") {
-    for (const username of usernames) patchRoomPresence(username);
-  }
 }
 
 function schedulePresencePatch(username) {
@@ -352,13 +362,11 @@ function schedulePresencePatch(username) {
 
 let realtimeHandlersRegistered = false;
 
-function realtimeViewContext() {
-  return { isShortsView: state.activeList === "shorts" };
-}
+function realtimeViewContext() { return {}; }
 
-function renderRealtimeLists(isShortsView) {
-  if (!isShortsView) renderChats();
-  renderShortShareBar();
+function renderRealtimeLists() {
+  renderChats();
+  renderContextActionBar();
 }
 
 function registerRealtimeHandlers() {
@@ -370,9 +378,9 @@ function registerRealtimeHandlers() {
     recordSyncRevision(payload.revision);
     await loadMessenger();
   });
-  realtimeEvents.register("message_created", async (payload, { isShortsView }) => {
+  realtimeEvents.register("message_created", async (payload) => {
     recordSyncRevision(payload.revision);
-    const isIncoming = payload.message?.username !== state.messenger.user?.username;
+    const isIncoming = !ownedIdentityUsernames().has(payload.message?.username);
     if (!isIncoming) return;
     const isTicketRoom = ["ticket_listing", "ticket_deal"].includes(payload.room?.kind);
     let room;
@@ -387,7 +395,7 @@ function registerRealtimeHandlers() {
       if (payload.roomId === state.selectedRoomId && payload.message?.id) {
         const visibleMessage = addMessageReader(
           payload.message,
-          state.messenger.user?.username,
+          roomViewerUsername(room),
           room,
         );
         if (appendChatMessageState(visibleMessage)) appendChatMessageNode(visibleMessage, true);
@@ -396,13 +404,12 @@ function registerRealtimeHandlers() {
     if (!isTicketRoom) showWorkModeMessage(room, payload.message, payload.sender);
     if (payload.roomId === state.selectedRoomId && payload.message?.id) {
       scheduleRoomRead(payload.roomId);
-    } else if (!isShortsView && !isTicketRoom) {
+    } else if (!isTicketRoom) {
       renderChats();
     }
-    if (!state.shortInlineReply && room && !isTicketRoom) showShortMessageNotice(room, payload.message);
-    else if (!state.shortInlineReply) renderShortShareBar();
+    renderContextActionBar();
   });
-  realtimeEvents.register("message_deleted", async (payload, { isShortsView }) => {
+  realtimeEvents.register("message_deleted", async (payload) => {
     recordSyncRevision(payload.revision);
     appStore.transact("realtime.message-deleted", () => {
       if (payload.room) upsertRoomAfterMessageDeletion(payload.room);
@@ -418,47 +425,46 @@ function registerRealtimeHandlers() {
       await loadRoomsPage({ reset: true, render: false });
     } catch (_) {
     }
-    renderRealtimeLists(isShortsView);
+    renderRealtimeLists();
   });
   realtimeEvents.register("room_read", (payload) => {
     recordSyncRevision(payload.revision);
     if (payload.roomId !== state.selectedRoomId) return;
     applyMessageReaderToCurrentMessages(payload.username, "realtime.room-read");
   });
-  realtimeEvents.register("room_updated", (payload, { isShortsView }) => {
+  realtimeEvents.register("room_updated", (payload) => {
     recordSyncRevision(payload.revision);
     let room;
     appStore.transact("realtime.room-updated", () => { room = upsertMessengerRoom(payload.room); }, { event: payload.type });
     if (room?.id === state.selectedRoomId) renderChatRoom();
-    renderRealtimeLists(isShortsView);
+    renderRealtimeLists();
     if (!roomSettingsSheet.classList.contains("hidden")) renderRoomSettings();
   });
-  realtimeEvents.register("room_created", (payload, { isShortsView }) => {
+  realtimeEvents.register("room_created", (payload) => {
     recordSyncRevision(payload.revision);
     let room;
     appStore.transact("realtime.room-created", () => { room = upsertMessengerRoom(payload.room); }, { event: payload.type });
-    renderRealtimeLists(isShortsView);
+    renderRealtimeLists();
     if (room?.id === state.selectedRoomId) renderChatRoom();
   });
-  realtimeEvents.register("friends_updated", async (payload, { isShortsView }) => {
+  realtimeEvents.register("friends_updated", async (payload) => {
     recordSyncRevision(payload.revision);
-    await loadFriendsPage({ reset: true, render: !isShortsView });
-    if (isShortsView && !state.shortInlineReply) renderShortShareBar();
+    await loadFriendsPage({ reset: true, render: true });
   });
-  realtimeEvents.register("room_left", (payload, { isShortsView }) => {
+  realtimeEvents.register("room_left", (payload) => {
     recordSyncRevision(payload.revision);
     appStore.transact("realtime.room-left", () => {
-      const selfLeft = payload.username === state.messenger.user?.username;
+      const selfLeft = ownedIdentityUsernames().has(payload.username);
       if (selfLeft || !payload.room) removeMessengerRoom(payload.roomId);
       else upsertMessengerRoom(payload.room);
     }, { event: payload.type });
-    const selfLeft = payload.username === state.messenger.user?.username;
+    const selfLeft = ownedIdentityUsernames().has(payload.username);
     if ((selfLeft || !payload.room) && payload.roomId === state.selectedRoomId) closeChatRoom();
     if (!selfLeft && payload.room?.id === state.selectedRoomId) {
       renderChatRoom();
       void loadChatMessages({ markRead: false });
     }
-    renderRealtimeLists(isShortsView);
+    renderRealtimeLists();
   });
   realtimeEvents.register("presence_updated", (payload) => {
     recordSyncRevision(payload.revision);
@@ -478,10 +484,9 @@ function connectEvents() {
     onUnhandled: async (payload, context) => {
       recordSyncRevision(payload?.revision);
       await Promise.all([
-        loadFriendsPage({ reset: true, render: !context.isShortsView }),
-        loadRoomsPage({ reset: true, render: !context.isShortsView }),
+        loadFriendsPage({ reset: true, render: true }),
+        loadRoomsPage({ reset: true, render: true }),
       ]);
-      if (context.isShortsView && !state.shortInlineReply) renderShortShareBar();
     },
     onOpen: () => {
       if (state.eventSource !== source) return;

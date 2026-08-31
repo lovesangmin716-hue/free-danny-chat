@@ -132,9 +132,16 @@ class MessagingRoutesMixin:
 
         subscriber: queue.Queue = self.context.queue.Queue(maxsize=self.context.MAX_SSE_QUEUE_SIZE)
         token = self.read_session_token()
+        account_context = self.context.STORE.get_account_context(user["username"]) or {}
+        identity_usernames = {
+            str(identity.get("username", ""))
+            for identity in account_context.get("identities", [])
+            if identity.get("username")
+        } or {user["username"]}
         with self.context.SUBSCRIBERS_LOCK:
             self.context.SUBSCRIBERS[subscriber] = user["username"]
-            self.context.SUBSCRIBERS_BY_USERNAME.setdefault(user["username"], set()).add(subscriber)
+            for identity_username in identity_usernames:
+                self.context.SUBSCRIBERS_BY_USERNAME.setdefault(identity_username, set()).add(subscriber)
         self.context.SSE_METRICS.increment("active")
         self.context.SSE_METRICS.increment("accepted_total")
 
@@ -182,17 +189,20 @@ class MessagingRoutesMixin:
                 )
                 self.wfile.flush()
             elif last_sent_revision:
-                for replayed in self.context.EVENT_BROKER.replay_batches(
-                    user["username"], last_sent_revision, limit=500
-                ):
-                    for event in replayed:
-                        revision = int(event.get("revision", 0))
-                        if revision <= last_sent_revision:
-                            continue
-                        payload = self.context.json.dumps(event, ensure_ascii=False)
-                        self.wfile.write(f"id: {revision}\ndata: {payload}\n\n".encode("utf-8"))
-                        self.wfile.flush()
-                        last_sent_revision = revision
+                replay_events = {}
+                for identity_username in identity_usernames:
+                    for replayed in self.context.EVENT_BROKER.replay_batches(
+                        identity_username, last_sent_revision, limit=500
+                    ):
+                        for event in replayed:
+                            replay_events[int(event.get("revision", 0))] = event
+                for revision, event in sorted(replay_events.items()):
+                    if revision <= last_sent_revision:
+                        continue
+                    payload = self.context.json.dumps(event, ensure_ascii=False)
+                    self.wfile.write(f"id: {revision}\ndata: {payload}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+                    last_sent_revision = revision
 
             while True:
                 if self.context.SESSIONS.get_username(token) != user["username"]:
@@ -225,11 +235,12 @@ class MessagingRoutesMixin:
             self.close_connection = True
             with self.context.SUBSCRIBERS_LOCK:
                 self.context.SUBSCRIBERS.pop(subscriber, None)
-                username_subscribers = self.context.SUBSCRIBERS_BY_USERNAME.get(user["username"])
-                if username_subscribers is not None:
-                    username_subscribers.discard(subscriber)
-                    if not username_subscribers:
-                        self.context.SUBSCRIBERS_BY_USERNAME.pop(user["username"], None)
+                for identity_username in identity_usernames:
+                    username_subscribers = self.context.SUBSCRIBERS_BY_USERNAME.get(identity_username)
+                    if username_subscribers is not None:
+                        username_subscribers.discard(subscriber)
+                        if not username_subscribers:
+                            self.context.SUBSCRIBERS_BY_USERNAME.pop(identity_username, None)
             username, went_offline = "", False
             if presence_connected:
                 try:

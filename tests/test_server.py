@@ -37,7 +37,7 @@ SRC_DIR = REPO_ROOT / "src"
 FRONTEND_SOURCE_DIR = REPO_ROOT / "frontend" / "src"
 FRONTEND_APP_DIR = FRONTEND_SOURCE_DIR / "app"
 sys.path.insert(0, str(SRC_DIR))
-from colorless import integrations, observability, shorts
+from colorless import integrations, observability
 
 SERVER_PATH = SRC_DIR / "colorless" / "server.py"
 SPEC = importlib.util.spec_from_file_location("colorless._test_server", SERVER_PATH)
@@ -64,7 +64,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertEqual(server.DurableEventBroker.__module__, "colorless.realtime")
         self.assertEqual(server.ChatHandler.serve_session.__module__, "colorless.http.messaging")
         self.assertEqual(server.ChatHandler.start_google_login.__module__, "colorless.http.auth")
-        self.assertEqual(server.ChatHandler.serve_public_shorts.__module__, "colorless.http.shorts")
+        self.assertFalse(hasattr(server.ChatHandler, "serve_public_shorts"))
         self.assertEqual(server.ChatHandler.serve_ticket_dashboard.__module__, "colorless.http.tickets")
         self.assertEqual(server.ChatHandler.serve_upload.__module__, "colorless.http.uploads")
 
@@ -470,19 +470,10 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('self.send_header("Accept-Ranges", "bytes")', upload_routes)
 
     def test_shorts_players_wait_for_readiness_and_preload_adjacent_cards(self) -> None:
-        shorts_script = (FRONTEND_APP_DIR / "shorts.js").read_text(encoding="utf-8")
         bootstrap_script = (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8")
-        shorts_routes = (server.PACKAGE_DIR / "http" / "shorts.py").read_text(encoding="utf-8")
-
-        self.assertIn('autoplay: "0"', shorts_script)
-        self.assertIn('mute: "1"', shorts_script)
-        self.assertIn('playsinline: "1"', shorts_script)
-        self.assertIn("youtube-nocookie.com/embed", shorts_script)
-        self.assertIn('payload?.event !== "onReady"', shorts_script)
-        self.assertIn("if (distance > 1)", shorts_script)
-        self.assertIn('window.addEventListener("message", handleShortPlayerMessage)', bootstrap_script)
-        self.assertIn("payload.cycled", shorts_script)
-        self.assertIn('"cycled": cycled', shorts_routes)
+        self.assertFalse((FRONTEND_APP_DIR / "shorts.js").exists())
+        self.assertFalse((server.PACKAGE_DIR / "http" / "shorts.py").exists())
+        self.assertNotIn("handleShortPlayerMessage", bootstrap_script)
 
     def test_desktop_headers_share_one_height_and_message_times_cluster_for_five_minutes(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -528,7 +519,6 @@ class StaticAppStructureTestCase(unittest.TestCase):
     def test_primary_actions_use_accessible_svg_icons(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         icons_script = (FRONTEND_APP_DIR / "platform" / "icons.js").read_text(encoding="utf-8")
-        shorts_script = (FRONTEND_APP_DIR / "shorts.js").read_text(encoding="utf-8")
 
         self.assertIn("function decorateIconButton", icons_script)
         self.assertIn('classList.add("ui-icon")', icons_script)
@@ -547,7 +537,6 @@ class StaticAppStructureTestCase(unittest.TestCase):
             self.assertIsNotNone(button, button_id)
             self.assertIn("data-icon=", button.group(0))
             self.assertIn("aria-label=", button.group(0))
-        self.assertNotIn('shortShareSend.textContent = ">"', shorts_script)
 
     def test_status_emoji_picker_is_optional_after_login_and_accepts_only_one_emoji(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -623,7 +612,6 @@ class StaticAppStructureTestCase(unittest.TestCase):
         core_script = (FRONTEND_APP_DIR / "core.js").read_text(encoding="utf-8")
         action_bar_script = (FRONTEND_APP_DIR / "action-bar.js").read_text(encoding="utf-8")
         messenger_script = (FRONTEND_APP_DIR / "messenger.js").read_text(encoding="utf-8")
-        shorts_script = (FRONTEND_APP_DIR / "shorts.js").read_text(encoding="utf-8")
 
         self.assertIn("actionBarByTab", core_script)
         self.assertIn("function renderChatActionBar", action_bar_script)
@@ -631,9 +619,8 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("function handleContextActionPrimary", action_bar_script)
         self.assertIn('item.addEventListener("click", () => selectFriendForActionBar(friend.id))', messenger_script)
         self.assertNotIn('item.addEventListener("click", () => openDirectChat(friend.id))', messenger_script)
-        self.assertIn("selectedShareRoomIds", shorts_script)
-        self.assertIn("Promise.all(rooms.map", shorts_script)
-        self.assertIn('shortShareBar.setAttribute("aria-label", "새 메시지 빠른 답장")', shorts_script)
+        self.assertIn("chatIdentityVisibility", core_script)
+        self.assertIn("function renderContextActionBar", action_bar_script)
 
     def test_my_tab_owns_profile_status_and_logout_while_lists_own_search(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -692,38 +679,17 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
     def test_two_hundred_shorts_use_a_fixed_virtual_dom_window(self) -> None:
         core_script = (FRONTEND_APP_DIR / "core.js").read_text(encoding="utf-8")
-        shorts_script = (FRONTEND_APP_DIR / "shorts.js").read_text(encoding="utf-8")
         bootstrap_script = (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8")
         app_script = (FRONTEND_APP_DIR / "app.js").read_text(encoding="utf-8")
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
-
-        window_size = int(re.search(r"SHORTS_DOM_WINDOW_SIZE = (\d+)", core_script).group(1))
-        self.assertLessEqual(window_size, 5)
-        for active_index in range(200):
-            start = min(max(0, active_index - window_size // 2), max(0, 200 - window_size))
-            self.assertLessEqual(len(range(start, start + window_size)), 5)
-        self.assertIn("function shortVirtualRange", shorts_script)
-        self.assertIn("Math.round(shortsView.scrollTop / height)", shorts_script)
-        self.assertNotIn("getBoundingClientRect", shorts_script)
-        self.assertIn('card.style.position = "absolute"', shorts_script)
-        self.assertIn("const preservedScrollTop = shortsView.scrollTop", shorts_script)
-        self.assertIn("function scheduleShortScrollSnap", shorts_script)
-        self.assertIn("frame.tabIndex = -1", shorts_script)
-        self.assertIn("overflow-anchor: none", index_html)
-        self.assertIn("const distance = Math.abs(cardIndex - state.youtube.activeIndex)", shorts_script)
-        self.assertIn("if (distance > 1)", shorts_script)
-        self.assertIn("releaseAllShortFrames", shorts_script)
-        self.assertIn('document.addEventListener("visibilitychange", handleShortVisibilityChange)', bootstrap_script)
-        self.assertIn('state.activeList === "shorts" && listName !== "shorts"', app_script)
-        create_card = re.search(r"function createShortCard\(.*?\n\}", shorts_script, re.DOTALL)
-        self.assertIsNotNone(create_card)
-        self.assertNotIn("createShortFrame", create_card.group(0))
+        self.assertNotIn("SHORTS_DOM_WINDOW_SIZE", core_script)
+        self.assertNotIn("handleShortVisibilityChange", bootstrap_script)
+        self.assertNotIn('state.activeList === "shorts"', app_script)
+        self.assertNotIn('id="shorts-tab"', index_html)
 
     def test_shorts_embed_identifies_its_web_origin(self) -> None:
-        shorts_script = (FRONTEND_APP_DIR / "shorts.js").read_text(encoding="utf-8")
-        self.assertIn("origin: window.location.origin", shorts_script)
-        self.assertIn("widget_referrer: window.location.href", shorts_script)
-        self.assertIn('frame.referrerPolicy = "strict-origin-when-cross-origin"', shorts_script)
+        self.assertFalse((FRONTEND_APP_DIR / "shorts.js").exists())
+        self.assertNotIn("youtube-nocookie.com", server.CONTENT_SECURITY_POLICY)
 
     def test_large_images_use_a_cancellable_worker_pipeline(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -1599,7 +1565,7 @@ class AuthenticationHttpIntegrationTestCase(unittest.TestCase):
                     self.assertIn("frame-ancestors 'none'", csp)
                     self.assertIn("https://accounts.google.com", csp)
                     self.assertIn("style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style", csp)
-                    self.assertIn("https://www.youtube-nocookie.com", csp)
+                    self.assertNotIn("https://www.youtube-nocookie.com", csp)
                     self.assertNotIn("*", csp)
                     if path == "/auth/providers":
                         self.assertEqual(response.getheader("Strict-Transport-Security"), "max-age=31536000")
@@ -1727,6 +1693,7 @@ class OperationsObservabilityTestCase(unittest.TestCase):
             server_thread.join(timeout=5)
 
 
+@unittest.skip("YouTube Shorts 기능이 제거됨")
 class ShortsCatalogTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory(prefix="colorless-shorts-catalog-")
@@ -2689,6 +2656,23 @@ class AccountIdentityTestCase(unittest.TestCase):
                 assert outsider is not None
                 self.assertIsNone(sessions.switch_identity(token, outsider["id"]))
                 self.assertEqual(sessions.get_username(token), second["username"])
+
+                _, error = store.add_friend(second["username"], outsider["id"])
+                self.assertIsNone(error)
+                room, created, error = store.create_or_get_direct_room(second["username"], outsider["id"])
+                self.assertIsNone(error)
+                self.assertTrue(created)
+                assert room is not None
+                rooms = store.get_rooms_page(primary, limit=20)["items"]
+                aggregated = next(item for item in rooms if item["id"] == room["id"])
+                self.assertEqual(aggregated["viewer_identity_id"], second["id"])
+                self.assertEqual(aggregated["viewer_identity"]["username"], second["username"])
+                sent = store.add_message(room["id"], primary["username"], "전체 ID 채팅")
+                self.assertIsNotNone(sent)
+                assert sent is not None
+                self.assertEqual(sent[0]["username"], second["username"])
+                messages = store.get_messages(room["id"], primary["username"])
+                self.assertEqual(messages[-1]["text"], "전체 ID 채팅")
             finally:
                 store.close()
 
@@ -3806,7 +3790,6 @@ class StateStoreTestCase(unittest.TestCase):
         )
         self.assertIsNone(error)
         self.assertIsNotNone(updated)
-        self.store.save_shorts_feed("alice", ["video-a", "video-b"], "cursor-next")
         sessions = server.SessionStore(state_store=self.store)
         token = sessions.create("alice")
         token_hash = server.hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -3816,7 +3799,7 @@ class StateStoreTestCase(unittest.TestCase):
         try:
             normalized_counts = {
                 table: database.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-                for table in ("users", "friendships", "rooms", "room_members", "sessions", "shorts_seen")
+                for table in ("users", "friendships", "rooms", "room_members", "sessions")
             }
             legacy_users = json.loads(
                 database.execute("SELECT state_json FROM state_parts WHERE id='users'").fetchone()[0]
@@ -3827,7 +3810,6 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertEqual(normalized_counts["friendships"], 1)
         self.assertEqual(normalized_counts["room_members"], 2)
         self.assertEqual(normalized_counts["sessions"], 1)
-        self.assertEqual(normalized_counts["shorts_seen"], 2)
         self.assertEqual(legacy_users, [])
 
         state_path = self.store.path
@@ -3836,7 +3818,6 @@ class StateStoreTestCase(unittest.TestCase):
         restored = self.store.get_user_record("alice")
         assert restored is not None
         self.assertEqual(restored["display_name"], "Alice Normalized")
-        self.assertEqual(self.store.get_shorts_feed("alice"), (["video-a", "video-b"], "cursor-next"))
         self.assertEqual(self.store.get_session_username(token_hash, server.SESSION_TTL_SECONDS), "alice")
         self.assertIsNotNone(self.store.get_messages(self.room_id, "alice"))
 
@@ -4092,16 +4073,6 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertIn(messages[7]["id"], {message["id"] for message in around["items"]})
         self.assertEqual(around["around"], messages[7]["id"])
 
-    def test_shorts_history_is_bounded_and_persisted(self) -> None:
-        seen_ids = [f"video-{index}" for index in range(600)]
-        self.store.save_shorts_feed("alice", seen_ids, "next")
-
-        saved_ids, cursor = self.store.get_shorts_feed("alice")
-        self.assertEqual(len(saved_ids), server.MAX_SHORTS_SEEN_IDS)
-        self.assertEqual(saved_ids[0], "video-100")
-        self.assertEqual(cursor, "next")
-        self.assertTrue(self.store.flush())
-
     def test_session_hash_survives_state_store_restart(self) -> None:
         sessions = server.SessionStore(state_store=self.store)
         token = sessions.create("alice")
@@ -4139,7 +4110,7 @@ class StateStoreTestCase(unittest.TestCase):
 
         self.store._write_state = slow_write
         started = time.perf_counter()
-        self.store.save_shorts_feed("alice", ["video"], "")
+        self.store.update_custom_palette("alice", ["#123456"])
         elapsed = time.perf_counter() - started
 
         self.assertLess(elapsed, 0.05)

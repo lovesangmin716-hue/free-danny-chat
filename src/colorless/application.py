@@ -208,10 +208,11 @@ class ApplicationServices:
             raise CommandFailure("채팅방을 찾을 수 없습니다.", HTTPStatus.NOT_FOUND)
         events = []
         if changed:
+            reader_username = room.get("viewer_identity", {}).get("username") or user["username"]
             event = {
                 "type": "room_read",
                 "roomId": room_id,
-                "username": user["username"],
+                "username": reader_username,
                 "roomKind": room.get("kind", "direct"),
             }
             events.append((event, self.store.room_event_recipients(room_id)))

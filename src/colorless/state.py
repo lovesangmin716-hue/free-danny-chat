@@ -22,7 +22,6 @@ from .config import (
     MAX_IDENTITIES_PER_ACCOUNT,
     MAX_MESSAGES_PER_ROOM,
     MAX_SESSIONS,
-    MAX_SHORTS_SEEN_IDS,
     MIN_GROUP_PARTICIPANTS,
     SESSION_CLEANUP_INTERVAL_SECONDS,
     SESSION_REFRESH_THRESHOLD_SECONDS,
@@ -366,6 +365,7 @@ BASEBALL_SEAT_GRADES = {
 }
 TICKET_DELIVERY_METHODS = ("모바일 티켓", "현장 전달", "택배", "기타")
 TICKET_ROOM_KINDS = {"ticket_listing", "ticket_deal"}
+MESSENGER_ROOM_KINDS = {"direct", "group", *TICKET_ROOM_KINDS}
 KOREA_TIMEZONE = timezone(timedelta(hours=9))
 # Older deployed versions of colorless_insert_message interpret keep_count=0
 # as "keep one". This effectively-unbounded positive sentinel preserves full
@@ -429,7 +429,6 @@ class StateStore:
             "friendships": [],
             "rooms": rooms,
             "messages": {room["id"]: [] for room in rooms},
-            "shorts_feeds": {},
             "sessions": {},
         }
 
@@ -532,8 +531,6 @@ class StateStore:
             "rooms": state["rooms"],
             "sessions": state["sessions"],
         }
-        for username, feed in state["shorts_feeds"].items():
-            parts[f"shorts:{username}"] = feed
         for room_id, messages in state["messages"].items():
             parts[f"messages:{room_id}"] = messages
         return parts
@@ -541,8 +538,6 @@ class StateStore:
     def _state_part_locked(self, part_id: str) -> object:
         if part_id.startswith("messages:"):
             return self.state["messages"].get(part_id.removeprefix("messages:"), [])
-        if part_id.startswith("shorts:"):
-            return self.state["shorts_feeds"].get(part_id.removeprefix("shorts:"), {})
         return self.state[part_id]
 
     def _register_user_locked(self, user: dict) -> None:
@@ -705,7 +700,6 @@ class StateStore:
         state.setdefault("friendships", [])
         state.setdefault("rooms", [])
         state.setdefault("messages", {})
-        state.setdefault("shorts_feeds", {})
         state.setdefault("sessions", {})
 
         if (
@@ -714,7 +708,6 @@ class StateStore:
             or not isinstance(state["friendships"], list)
             or not isinstance(state["rooms"], list)
             or not isinstance(state["messages"], dict)
-            or not isinstance(state["shorts_feeds"], dict)
             or not isinstance(state["sessions"], dict)
         ):
             return self._default_state()
@@ -927,19 +920,6 @@ class StateStore:
         state["sessions"] = dict(
             sorted(sessions.items(), key=lambda item: item[1]["created_at"])[-MAX_SESSIONS:]
         )
-        state["shorts_feeds"] = {
-            username: {
-                "next_cursor": str(feed.get("next_cursor", ""))[:200],
-                "seen_ids": [
-                    video_id
-                    for video_id in feed.get("seen_ids", [])
-                    if isinstance(video_id, str) and 1 <= len(video_id) <= 64
-                ][-MAX_SHORTS_SEEN_IDS:],
-            }
-            for username, feed in state["shorts_feeds"].items()
-            if username in valid_usernames and isinstance(feed, dict) and isinstance(feed.get("seen_ids", []), list)
-        }
-
         return state
 
     def _state_from_parts(self, parts: dict[str, object]) -> dict | None:
@@ -951,14 +931,11 @@ class StateStore:
             "friendships": parts["friendships"],
             "rooms": parts["rooms"],
             "messages": {},
-            "shorts_feeds": {},
             "sessions": parts["sessions"],
         }
         for part_id, value in parts.items():
             if part_id.startswith("messages:"):
                 state["messages"][part_id.removeprefix("messages:")] = value
-            elif part_id.startswith("shorts:"):
-                state["shorts_feeds"][part_id.removeprefix("shorts:")] = value
         return self._migrate_state(state)
 
     def _load_persisted_parts(self) -> tuple[dict[str, object], dict | None]:
@@ -1215,26 +1192,6 @@ class StateStore:
             if self.state["sessions"].pop(token_hash, None) is not None:
                 self._save_locked("sessions")
 
-    def get_shorts_feed(self, username: str) -> tuple[list[str], str]:
-        with self.lock:
-            user = self._users_by_username.get(username)
-            if self.repository is not None and user is not None:
-                return self.repository.get_shorts_feed(user["id"])
-            feed = self.state["shorts_feeds"].get(username, {})
-            return list(feed.get("seen_ids", [])), str(feed.get("next_cursor", ""))
-
-    def save_shorts_feed(self, username: str, seen_ids: list[str], next_cursor: str) -> None:
-        bounded_seen_ids = list(dict.fromkeys(seen_ids))[-MAX_SHORTS_SEEN_IDS:]
-        with self.lock:
-            self.state["shorts_feeds"][username] = {
-                "seen_ids": bounded_seen_ids,
-                "next_cursor": next_cursor[:200],
-            }
-            user = self._users_by_username.get(username)
-            if self.repository is not None and user is not None:
-                self.repository.save_shorts_feed(user["id"], bounded_seen_ids, next_cursor[:200])
-            self._save_locked(f"shorts:{username}")
-
     def _user_public(self, user: dict) -> dict:
         account = self._accounts_by_id.get(user.get("account_id", ""), {})
         provider = account.get("auth_provider", user.get("auth_provider", "local"))
@@ -1292,7 +1249,6 @@ class StateStore:
             )
             return {
                 "account": {
-                    "id": account["id"],
                     "created_at": account.get("created_at", ""),
                     "identity_limit": MAX_IDENTITIES_PER_ACCOUNT,
                     "is_ticket_admin": self._is_ticket_admin_user(active_user),
@@ -1317,7 +1273,7 @@ class StateStore:
             return None, "사용자 이름은 2자 이상이어야 합니다."
         if len(normalized_display_name) < 2:
             return None, "표시 이름은 2자 이상이어야 합니다."
-        if not FRIEND_CODE_PATTERN.fullmatch(normalized_friend_code):
+        if normalized_friend_code and not FRIEND_CODE_PATTERN.fullmatch(normalized_friend_code):
             return None, "친구 ID는 영문 소문자, 숫자, 밑줄로 4~20자여야 합니다."
         with self.lock:
             owner = self._users_by_username.get(owner_username)
@@ -1335,6 +1291,8 @@ class StateStore:
                 return None, f"활동 ID는 최대 {MAX_IDENTITIES_PER_ACCOUNT}개까지 만들 수 있습니다."
             if normalized_username in self._users_by_username:
                 return None, "이미 존재하는 사용자 이름입니다."
+            if not normalized_friend_code:
+                normalized_friend_code = self._new_friend_code_locked()
             if normalized_friend_code in self._users_by_friend_code:
                 return None, "이미 사용 중인 친구 ID입니다."
             identity = {
@@ -2570,18 +2528,59 @@ class StateStore:
     def _friend_ids_locked(self, user_id: str) -> set[str]:
         return set(self._friend_ids_by_user.get(user_id, set()))
 
+    def _account_identities_locked(self, user: dict) -> list[dict]:
+        stored_user = (
+            self._users_by_id.get(str(user.get("id", "")))
+            or self._users_by_username.get(str(user.get("username", "")))
+            or user
+        )
+        return [
+            identity
+            for identity in self._users_by_account_id.get(str(stored_user.get("account_id", "")), [])
+            if not identity.get("disabled_at")
+        ]
+
+    def _room_identity_locked(self, room: dict, user: dict) -> dict | None:
+        participant_ids = set(room.get("participant_ids", []))
+        if user.get("id") in participant_ids:
+            return user
+        return next(
+            (
+                identity
+                for identity in self._account_identities_locked(user)
+                if identity.get("id") in participant_ids
+            ),
+            None,
+        )
+
+    def _room_summary_for_account_locked(
+        self,
+        room: dict,
+        user: dict,
+        **kwargs,
+    ) -> dict:
+        viewer = self._room_identity_locked(room, user) or user
+        summary = self._room_summary(room, viewer, **kwargs)
+        summary["viewer_identity_id"] = viewer["id"]
+        summary["viewer_identity"] = {
+            "id": viewer["id"],
+            "username": viewer["username"],
+            "display_name": viewer.get("display_name") or viewer["username"],
+        }
+        return summary
+
     def _can_access_room_locked(self, room: dict, user: dict) -> bool:
         kind = room.get("kind")
+        acting_identity = self._room_identity_locked(room, user)
         if kind in TICKET_ROOM_KINDS:
             if (
-                user.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND
+                acting_identity is None
+                or acting_identity.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND
                 or not self._ticket_room_is_valid(room)
             ):
                 return False
-            if kind == "ticket_listing":
-                return user["id"] in room.get("participant_ids", [])
-            return user["id"] in room.get("participant_ids", [])
-        return bool(room.get("is_public")) or user["id"] in room.get("participant_ids", [])
+            return True
+        return bool(room.get("is_public")) or acting_identity is not None
 
     def can_access_room(self, room_id: str, username: str) -> bool:
         with self.lock:
@@ -2592,9 +2591,9 @@ class StateStore:
     def list_rooms(self, viewer: dict | None = None) -> list[dict]:
         with self.lock:
             rooms = [
-                self._room_summary(room, viewer)
+                self._room_summary_for_account_locked(room, viewer) if viewer is not None else self._room_summary(room, None)
                 for room in self.state["rooms"]
-                if room.get("kind", "group") in {"direct", "group"}
+                if room.get("kind", "group") in MESSENGER_ROOM_KINDS
                 and (viewer is None or self._can_access_room_locked(room, viewer))
             ]
         return sorted(rooms, key=lambda room: room["updated_at"], reverse=True)
@@ -2615,6 +2614,8 @@ class StateStore:
             self.seed_demo_network(user["username"])
         with self.lock:
             friend_ids = self._friend_ids_locked(user["id"])
+            account_identities = self._account_identities_locked(user)
+            account_identity_ids = {identity["id"] for identity in account_identities}
             raw_friends = [
                 copy.deepcopy(friend)
                 for friend_id in friend_ids
@@ -2622,16 +2623,21 @@ class StateStore:
             ]
             raw_rooms = [
                 copy.deepcopy(room)
-                for room_id in self._room_ids_by_user.get(user["id"], set())
+                for room_id in set().union(*(
+                    self._room_ids_by_user.get(identity_id, set())
+                    for identity_id in account_identity_ids
+                ))
                 if (room := self._rooms_by_id.get(room_id)) is not None
-                and room.get("kind") in {"direct", "group"}
+                and room.get("kind") in MESSENGER_ROOM_KINDS
+                and self._can_access_room_locked(room, user)
             ]
             presence_users = {friend["username"]: friend for friend in raw_friends}
             for room in raw_rooms:
                 if room.get("kind") != "direct":
                     continue
+                viewer = self._room_identity_locked(room, user) or user
                 for peer_id in room.get("participant_ids", []):
-                    if peer_id == user["id"]:
+                    if peer_id == viewer["id"]:
                         continue
                     peer = self._users_by_id.get(peer_id)
                     if peer is not None:
@@ -2643,7 +2649,7 @@ class StateStore:
             for friend, raw_friend in zip(friends, raw_friends):
                 friend["presence"] = presences[raw_friend["username"]]
             rooms = [
-                self._room_summary(
+                self._room_summary_for_account_locked(
                     room,
                     user,
                     latest_message=latest_messages.get(room["id"]),
@@ -2713,11 +2719,18 @@ class StateStore:
     ) -> dict:
         cursor_key = decode_page_cursor(cursor, 2) if cursor else ()
         with self.lock:
+            account_identity_ids = {
+                identity["id"] for identity in self._account_identities_locked(user)
+            }
             rooms = [
                 room
-                for room_id in self._room_ids_by_user.get(user["id"], set())
+                for room_id in set().union(*(
+                    self._room_ids_by_user.get(identity_id, set())
+                    for identity_id in account_identity_ids
+                ))
                 if (room := self._rooms_by_id.get(room_id)) is not None
-                and room.get("kind") in {"direct", "group"}
+                and room.get("kind") in MESSENGER_ROOM_KINDS
+                and self._can_access_room_locked(room, user)
                 and (not updated_since or str(room.get("updated_at", "")) > updated_since)
             ]
             rooms.sort(key=lambda room: (str(room.get("updated_at", "")), room["id"]), reverse=True)
@@ -2732,9 +2745,10 @@ class StateStore:
             peers = {
                 peer["id"]: copy.deepcopy(peer)
                 for room in page
+                for viewer in [self._room_identity_locked(room, user) or user]
                 if room.get("kind") == "direct"
                 for peer_id in room.get("participant_ids", [])
-                if peer_id != user["id"] and (peer := self._users_by_id.get(peer_id)) is not None
+                if peer_id != viewer["id"] and (peer := self._users_by_id.get(peer_id)) is not None
             }
             next_cursor = (
                 encode_page_cursor(str(page[-1].get("updated_at", "")), page[-1]["id"])
@@ -2744,7 +2758,7 @@ class StateStore:
         peer_presences = self._presences_for_users(list(peers.values()))
         with self.lock:
             items = [
-                self._room_summary(
+                self._room_summary_for_account_locked(
                     room,
                     user,
                     include_members=False,
@@ -2821,10 +2835,22 @@ class StateStore:
                 "has_more": False,
                 "reset_required": True,
             }
-        events = (
-            self.repository.events_for_user_after(username, after_revision, limit=limit + 1)
-            if self.repository is not None else []
-        )
+        with self.lock:
+            user = self._users_by_username.get(username)
+            identity_usernames = (
+                [identity["username"] for identity in self._account_identities_locked(user)]
+                if user is not None else [username]
+            )
+        events_by_revision: dict[int, dict] = {}
+        if self.repository is not None:
+            for identity_username in identity_usernames:
+                for event in self.repository.events_for_user_after(
+                    identity_username,
+                    after_revision,
+                    limit=limit + 1,
+                ):
+                    events_by_revision[int(event.get("revision", 0))] = event
+        events = sorted(events_by_revision.values(), key=lambda event: int(event.get("revision", 0)))
         has_more = len(events) > limit
         events = events[:limit]
         compact_events = [self._compact_sync_event(event) for event in events]
@@ -2929,6 +2955,7 @@ class StateStore:
             room = self._rooms_by_id.get(room_id)
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None
+            user = self._room_identity_locked(room, user) or user
             if self.repository is None:
                 messages = list(self.state["messages"].get(room_id, []))[-MAX_MESSAGES_PER_ROOM:]
                 return self._messages_with_read_state_locked(
@@ -2946,6 +2973,7 @@ class StateStore:
             room = self._rooms_by_id.get(room_id)
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None
+            user = self._room_identity_locked(room, user) or user
             return self._messages_with_read_state_locked(
                 room,
                 user,
@@ -2974,6 +3002,7 @@ class StateStore:
             room = self._rooms_by_id.get(room_id)
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return message
+            user = self._room_identity_locked(room, user) or user
 
             response_message = {**message, "read": False}
             if room.get("kind") == "group":
@@ -3005,6 +3034,7 @@ class StateStore:
             room = self._rooms_by_id.get(room_id)
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None
+            user = self._room_identity_locked(room, user) or user
             if self.repository is None:
                 all_messages = list(self.state["messages"].get(room_id, []))
                 if around:
@@ -3060,6 +3090,7 @@ class StateStore:
                     room = self._rooms_by_id.get(room_id)
                     if user is None or room is None or not self._can_access_room_locked(room, user):
                         return None
+                    user = self._room_identity_locked(room, user) or user
                     page_messages = self._messages_with_read_state_locked(
                         room,
                         user,
@@ -3083,6 +3114,7 @@ class StateStore:
             room = self._rooms_by_id.get(room_id)
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None
+            user = self._room_identity_locked(room, user) or user
             page_messages = self._messages_with_read_state_locked(
                 room,
                 user,
@@ -3102,11 +3134,17 @@ class StateStore:
             user = self._users_by_username.get(username)
             if user is None:
                 return None
+            account_identity_ids = {
+                identity["id"] for identity in self._account_identities_locked(user)
+            }
             rooms = [
                 room
-                for room_id in self._room_ids_by_user.get(user["id"], set())
+                for room_id in set().union(*(
+                    self._room_ids_by_user.get(identity_id, set())
+                    for identity_id in account_identity_ids
+                ))
                 if (room := self._rooms_by_id.get(room_id)) is not None
-                and room.get("kind") in {"direct", "group"}
+                and room.get("kind") in MESSENGER_ROOM_KINDS
                 and self._can_access_room_locked(room, user)
             ]
             rooms_by_id = {room["id"]: room for room in rooms}
@@ -3149,7 +3187,7 @@ class StateStore:
                 and self._can_access_room_locked(room, user)
             }
             room_summaries = {
-                room_id: self._room_summary(
+                room_id: self._room_summary_for_account_locked(
                     rooms_by_id[room_id],
                     user,
                     latest_message=latest_messages.get(room_id),
@@ -3174,7 +3212,10 @@ class StateStore:
         with self.lock:
             user = self._users_by_username.get(username)
             room = self._rooms_by_id.get(room_id)
-            if user is None or room is None or message.get("username") != username:
+            if user is None or room is None or not self._can_access_room_locked(room, user):
+                return message
+            user = self._room_identity_locked(room, user) or user
+            if message.get("username") != user["username"]:
                 return message
 
             response_message = {**message, "read": False}
@@ -3213,6 +3254,7 @@ class StateStore:
             room = self._rooms_by_id.get(room_id)
             if user is None or room is None or not self._can_access_room_locked(room, user):
                 return None, False
+            user = self._room_identity_locked(room, user) or user
             messages = self._room_messages_locked(room_id, limit=1)
             if not messages:
                 return self._room_summary(room, user), False
@@ -3251,7 +3293,7 @@ class StateStore:
             if room is None:
                 return {}
             return {
-                user["username"]: self._room_summary(room, user)
+                user["username"]: self._room_summary_for_account_locked(room, user)
                 for user_id in room.get("participant_ids", [])
                 if (user := self._users_by_id.get(user_id)) is not None
             }
@@ -3797,6 +3839,8 @@ class StateStore:
             user = self._users_by_username.get(username)
             if room is None or user is None or not self._can_access_room_locked(room, user):
                 return None
+            user = self._room_identity_locked(room, user) or user
+            username = user["username"]
 
             idempotency_key = (room_id, username, client_message_id)
             existing_message = self._messages_by_client_id.get(idempotency_key) if client_message_id else None
@@ -3808,8 +3852,9 @@ class StateStore:
                     or existing_message.get("attachment") != attachment
                 ):
                     raise ValueError("client message id was reused with different content")
-                return existing_message, self._room_summary(
+                return existing_message, self._room_summary_for_account_locked(
                     room,
+                    user,
                     latest_message=existing_message,
                     latest_message_loaded=True,
                 ), False
@@ -3868,8 +3913,9 @@ class StateStore:
                     room_messages.pop()
                     existing_message = self.repository.message_by_client_id(room_id, user["id"], client_message_id) if client_message_id else None
                     if existing_message is not None:
-                        return existing_message, self._room_summary(
+                        return existing_message, self._room_summary_for_account_locked(
                             room,
+                            user,
                             latest_message=existing_message,
                             latest_message_loaded=True,
                         ), False
@@ -3879,8 +3925,9 @@ class StateStore:
                 self._save_locked("rooms")
             else:
                 self._save_locked("rooms", f"messages:{room_id}")
-            return message, self._room_summary(
+            return message, self._room_summary_for_account_locked(
                 room,
+                user,
                 latest_message=message,
                 latest_message_loaded=True,
             ), True
@@ -3896,6 +3943,8 @@ class StateStore:
             user = self._users_by_username.get(username)
             if room is None or user is None or not self._can_access_room_locked(room, user):
                 return None, None, "not_found"
+            user = self._room_identity_locked(room, user) or user
+            username = user["username"]
 
             messages = self._room_messages_locked(room_id)
             message_index = next(

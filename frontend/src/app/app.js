@@ -1,21 +1,23 @@
 "use strict";
 
-import { CHAT_MESSAGE_PAGE_SIZE, appScreen, appTitle, chatList, chatsTab, createAvatar, createNewChatButton, directorySheet, friendCodeInput, friendList, friendsTab, getDisplayName, myDisplayName, myFriendCode, myProfileAvatar, myTab, myView, newChatGroupName, newChatGroupNameField, newChatMemberList, newChatSearch, newChatSheet, openDirectoryButton, openLoginButton, openNewChatButton, realtimeEvents, registerCoreHooks, renderStatusEmojiControl, requestAction, setAppStatus, shortShareBar, shortsSoundToggle, shortsTab, shortsView, showApp, state, syncAppStatusForActiveTab } from "./core.js";
+import { CHAT_MESSAGE_PAGE_SIZE, appScreen, appTitle, chatList, chatsTab, createAvatar, createNewChatButton, directorySheet, friendCodeInput, friendList, friendsTab, getDisplayName, myDisplayName, myFriendCode, myProfileAvatar, myTab, myView, newChatGroupName, newChatGroupNameField, newChatMemberList, newChatSearch, newChatSheet, openDirectoryButton, openLoginButton, openNewChatButton, realtimeEvents, registerCoreHooks, renderStatusEmojiControl, requestAction, setAppStatus, shortShareBar, showApp, state, syncAppStatusForActiveTab } from "./core.js";
 import { connectEvents, rebuildPresenceIndexes, registerRealtimeHandlers, renderChats, renderDirectory, renderFriends, upsertMessengerRoom } from "./messenger.js";
 import { openChatRoom, rebuildMessageIndexes, renderChatRoom, retryDelay } from "./chat.js";
 import { captureChatVirtualAnchor, chatVirtualScrollTopForAnchor } from "./chat-virtual.js";
 import { renderWorkModeControl, syncWorkModeVisibility } from "./work-mode.js";
-import { loadGuestShorts, releaseAllShortFrames, renderShortShareBar, renderShorts } from "./shorts.js";
-import { activeActionBarState, renderFriendActionBar, renderHeaderSearch } from "./action-bar.js";
+import { activeActionBarState, renderContextActionBar, renderFriendActionBar, renderHeaderSearch } from "./action-bar.js";
 
 const accountIdentifier = document.getElementById("account-identifier");
 const identitySwitcher = document.getElementById("identity-switcher");
 const identityCreateForm = document.getElementById("identity-create-form");
 const identityUsername = document.getElementById("identity-username");
 const identityDisplayName = document.getElementById("identity-display-name");
-const identityFriendCode = document.getElementById("identity-friend-code");
 const identityCreateButton = document.getElementById("identity-create-button");
 const identityFormStatus = document.getElementById("identity-form-status");
+const identityCreateStatus = document.getElementById("identity-create-status");
+const identityCreateModal = document.getElementById("identity-create-modal");
+const openIdentityCreateButton = document.getElementById("open-identity-create-button");
+const closeIdentityCreateButton = document.getElementById("close-identity-create-button");
 const ticketAdminButton = document.getElementById("open-ticket-admin-button");
 
 // Application orchestration and feature-level state transitions.
@@ -24,8 +26,7 @@ const APP_CHAT_PAGE_SIZE = typeof CHAT_MESSAGE_PAGE_SIZE === "number" ? CHAT_MES
 function renderMessenger() {
   const user = state.messenger.user || state.session?.user;
   appScreen.classList.remove("guest-mode");
-  appScreen.classList.toggle("shorts-mode", state.activeList === "shorts");
-  appTitle.textContent = ({ chats: "채팅", friends: "친구", shorts: "쇼츠", my: "MY" })[state.activeList] || "채팅";
+  appTitle.textContent = ({ chats: "채팅", friends: "친구", my: "MY" })[state.activeList] || "채팅";
   openLoginButton.classList.add("hidden");
   renderStatusEmojiControl();
   syncAppStatusForActiveTab();
@@ -34,21 +35,15 @@ function renderMessenger() {
   openNewChatButton.classList.toggle("hidden", state.activeList !== "chats");
   chatsTab.classList.toggle("active", state.activeList === "chats");
   friendsTab.classList.toggle("active", state.activeList === "friends");
-  shortsTab.classList.toggle("active", state.activeList === "shorts");
   myTab.classList.toggle("active", state.activeList === "my");
-  shortsSoundToggle.classList.toggle("hidden", state.activeList !== "shorts");
   chatList.classList.toggle("hidden", state.activeList !== "chats");
   friendList.classList.toggle("hidden", state.activeList !== "friends");
-  shortsView.classList.toggle("hidden", state.activeList !== "shorts");
   myView.classList.toggle("hidden", state.activeList !== "my");
   if (state.activeList === "chats") renderChats();
   if (state.activeList === "friends") renderFriends();
-  if (state.activeList === "shorts") {
-    renderShorts();
-  }
   if (state.activeList === "my") renderMy();
   syncWorkModeVisibility();
-  renderShortShareBar();
+  renderContextActionBar();
   shortShareBar.classList.toggle("hidden", state.activeList === "my");
   if (!directorySheet.classList.contains("hidden")) renderDirectory();
 }
@@ -64,7 +59,7 @@ function renderMy() {
     user.profile_thumbnail_url || user.profile_image_url,
   ));
   myDisplayName.textContent = getDisplayName(user);
-  myFriendCode.textContent = user.friend_code ? `친구 ID · ${user.friend_code}` : "친구 ID 없음";
+  myFriendCode.textContent = `@${user.username}`;
   const identities = state.session?.identities || [user];
   const activeIdentityId = state.session?.active_identity_id || user.id;
   identitySwitcher.replaceChildren(...identities.map((identity) => {
@@ -76,10 +71,8 @@ function renderMy() {
   }));
   identitySwitcher.disabled = identities.length < 2;
   const account = state.session?.account;
-  accountIdentifier.textContent = account?.id
-    ? `사용자 고유식별 번호 · ${account.id} · ${identities.length}/${account.identity_limit || 3}`
-    : `${identities.length}/3개의 활동 ID 사용 중`;
-  identityCreateForm.classList.toggle("hidden", identities.length >= Number(account?.identity_limit || 3));
+  accountIdentifier.textContent = `${identities.length}/${account?.identity_limit || 3}개의 활동 ID 사용 중`;
+  openIdentityCreateButton.classList.toggle("hidden", identities.length >= Number(account?.identity_limit || 3));
   ticketAdminButton?.classList.toggle("hidden", !account?.is_ticket_admin);
   renderStatusEmojiControl();
   renderWorkModeControl();
@@ -106,14 +99,13 @@ async function switchIdentity() {
 async function createIdentity(event) {
   event.preventDefault();
   identityCreateButton.disabled = true;
-  identityFormStatus.textContent = "새 활동 ID를 만들고 있어요.";
+  identityCreateStatus.textContent = "새 활동 ID를 만들고 있어요.";
   try {
     const payload = await requestAction("identities.create", "/identities", {
       method: "POST",
       body: JSON.stringify({
         username: identityUsername.value.trim(),
         displayName: identityDisplayName.value.trim(),
-        friendCode: identityFriendCode.value.trim(),
       }),
     });
     state.session = {
@@ -124,9 +116,10 @@ async function createIdentity(event) {
     };
     identityCreateForm.reset();
     identityFormStatus.textContent = "새 활동 ID를 만들었어요.";
+    identityCreateModal.classList.add("hidden");
     renderMy();
   } catch (error) {
-    identityFormStatus.textContent = error.message;
+    identityCreateStatus.textContent = error.message;
   } finally {
     identityCreateButton.disabled = false;
   }
@@ -134,6 +127,14 @@ async function createIdentity(event) {
 
 identitySwitcher.addEventListener("change", () => void switchIdentity());
 identityCreateForm.addEventListener("submit", (event) => void createIdentity(event));
+openIdentityCreateButton.addEventListener("click", () => {
+  identityCreateForm.reset();
+  identityCreateStatus.textContent = "";
+  identityCreateModal.classList.remove("hidden");
+  identityDisplayName.focus();
+});
+closeIdentityCreateButton.addEventListener("click", () => identityCreateModal.classList.add("hidden"));
+identityCreateModal.addEventListener("click", (event) => { if (event.target === identityCreateModal) identityCreateModal.classList.add("hidden"); });
 
 function mergeEntitiesById(current, incoming, reset = false) {
   const entities = new Map((reset ? [] : current).map((item) => [item.id, item]));
@@ -217,7 +218,7 @@ async function loadRoomsPage({ reset = false, render = false } = {}) {
     applyMessengerData({ rooms: page.items || [] }, { resetFriends: false, resetRooms: reset });
     if (render) {
       renderChats();
-      renderShortShareBar();
+      renderContextActionBar();
     }
     return page.items || [];
   } finally {
@@ -267,7 +268,6 @@ async function syncLiveState() {
   if (!state.session?.user || state.liveSyncBusy) return;
   state.liveSyncBusy = true;
   try {
-    const isShortsView = state.activeList === "shorts";
     let hasMore = true;
     while (hasMore) {
       const payload = await requestAction(
@@ -279,7 +279,7 @@ async function syncLiveState() {
         break;
       }
       for (const event of payload.events || []) {
-        await realtimeEvents.dispatch(event, { isShortsView });
+        await realtimeEvents.dispatch(event, {});
         recordSyncRevision(event.revision);
       }
       recordSyncRevision(payload.revision);
@@ -370,24 +370,8 @@ async function loadOlderChatMessages() {
 
 function setActiveList(listName) {
   if (state.activeList === listName) return;
-  if (state.activeList === "shorts" && listName !== "shorts") releaseAllShortFrames();
-  if (listName === "shorts") {
-    state.youtube.feedVersion += 1;
-    state.youtube.guestVideos = [];
-    state.youtube.guestCursor = "";
-    state.youtube.guestError = "";
-    state.youtube.guestLoading = false;
-    state.youtube.renderedFeedVersion = -1;
-    state.youtube.virtualStart = -1;
-    state.youtube.virtualEnd = -1;
-    state.youtube.virtualHeight = 0;
-    shortsView.scrollTop = 0;
-  }
   state.activeList = listName;
   renderMessenger();
-  if (listName === "shorts") {
-    loadGuestShorts(true);
-  }
 }
 
 function openDirectory() {
@@ -426,7 +410,7 @@ function closeNewChat() {
     origin.selection = [];
   }
   state.newChatOriginTab = "";
-  renderShortShareBar(true);
+  renderContextActionBar();
 }
 
 function newChatActionBarState() {
@@ -570,12 +554,10 @@ async function openDirectChat(userId) {
     renderMessenger();
     await openChatRoom(data.room.id);
     loadMessenger(false).then(() => {
-      if (state.activeList === "shorts") renderShortShareBar();
-      else {
-        renderChats();
-        renderFriends();
-        renderChatRoom();
-      }
+      renderContextActionBar();
+      renderChats();
+      renderFriends();
+      renderChatRoom();
     }).catch(() => {});
     setAppStatus(data.created ? `${data.room.name} 님과의 채팅방을 만들었어요.` : "기존 채팅방을 열었어요.", "success");
     return data.room;

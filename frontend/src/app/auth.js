@@ -81,7 +81,7 @@ async function logout() {
   try {
     await requestAction("auth.logout", "/logout", { method: "POST" });
     showAuth();
-    setAuthStatus("로그아웃했어요. 쇼츠를 보려면 로그인해 주세요.");
+    setAuthStatus("로그아웃했어요.");
   } catch (error) {
     setAuthStatus(error.message, "error");
   }

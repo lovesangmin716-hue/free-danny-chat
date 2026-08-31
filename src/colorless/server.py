@@ -44,7 +44,6 @@ from .config import (
     DEFAULT_ENTITY_PAGE_SIZE,
     DEFAULT_MESSAGES_PAGE_SIZE,
     DOWNLOAD_URL_TTL_SECONDS,
-    EMERGENCY_SHORTS,
     EVENT_POLL_INTERVAL_SECONDS,
     FRIEND_CODE_PATTERN,
     GENDERS,
@@ -71,7 +70,6 @@ from .config import (
     MAX_PROFILE_THUMBNAIL_BYTES,
     MAX_REQUEST_THREADS,
     MAX_SESSIONS,
-    MAX_SHORTS_SEEN_IDS,
     MAX_SSE_CONNECTIONS,
     MAX_SSE_QUEUE_SIZE,
     MAX_SYNC_EVENTS,
@@ -84,7 +82,6 @@ from .config import (
     PHONE_CODE_TTL_SECONDS,
     PHONE_TOKEN_TTL_SECONDS,
     PHONE_VERIFICATION_MODE,
-    POPULAR_VIDEO_CATEGORIES,
     PORT,
     PRESENCE_TTL_SECONDS,
     PROFILE_ART_THUMBNAIL_PATH_PATTERN,
@@ -105,15 +102,6 @@ from .config import (
     SESSION_REFRESH_THRESHOLD_SECONDS,
     SESSION_TTL_SECONDS,
     SESSION_VALIDATION_CACHE_SECONDS,
-    SHORTS_AGE_TRENDING_TOPICS,
-    SHORTS_CATALOG_PAGE_SIZE,
-    SHORTS_CATALOG_RETENTION_SECONDS,
-    SHORTS_CATALOG_SCAN_SIZE,
-    SHORTS_CATALOG_TTL_SECONDS,
-    SHORTS_COLLECTION_INTERVAL_SECONDS,
-    SHORTS_COLLECTION_LEASE_SECONDS,
-    SHORTS_DAILY_QUOTA_BUDGET,
-    SHORTS_PROFILE_TOPICS,
     SOCIAL_DEMO_ADMIN_PASSWORD,
     SOCIAL_DEMO_LOGIN_ENABLED,
     SSE_HEARTBEAT_SECONDS,
@@ -133,8 +121,6 @@ from .config import (
     UPLOAD_READ_TIMEOUT_SECONDS,
     USER_ID_PATTERN,
     VOICE_ATTACHMENT_TYPES,
-    YOUTH_SHORTS_BLOCKLIST,
-    YOUTUBE_API_KEY,
 )
 
 from .observability import (
@@ -214,18 +200,6 @@ from .runtime import (
 )
 from .cache import BoundedTTLCache
 from .integrations import OUTBOUND_HTTP_CLIENT, fetch_bytes, fetch_json, supabase_headers, verify_google_id_token_credential
-from .shorts import (
-    ShortsCatalogCollector,
-    YoutubeCatalogError,
-    collect_youtube_catalog_job,
-    fetch_youtube_catalog_json,
-    korean_shorts_search_queries,
-    shorts_search_queries_for,
-    shorts_search_query_for,
-    trending_shorts_search_query,
-    youtube_catalog_item,
-    youtube_duration_seconds,
-)
 from .persistence import ConcurrentUpdateError, NormalizedSqliteRepository, NormalizedSupabaseRepository
 from .state import StateStore
 from .realtime import DurableEventBroker
@@ -234,7 +208,6 @@ from .http import (
     AuthRoutesMixin,
     HandlerContext,
     MessagingRoutesMixin,
-    ShortsRoutesMixin,
     TicketRoutesMixin,
     UploadRoutesMixin,
 )
@@ -253,7 +226,6 @@ SUBSCRIBERS: dict[queue.Queue, str] = {}
 SUBSCRIBERS_BY_USERNAME: dict[str, set[queue.Queue]] = {}
 SUBSCRIBERS_LOCK = threading.Lock()
 SSE_CONNECTION_SLOTS = threading.BoundedSemaphore(MAX_SSE_CONNECTIONS)
-SHORTS_FEED_LOCK = threading.Lock()
 
 
 
@@ -396,22 +368,24 @@ def push_event(event: dict, recipients: set[str]) -> None:
         return
     with SUBSCRIBERS_LOCK:
         dead_subscribers: list[queue.Queue] = []
-        for username in recipients:
-            for subscriber in SUBSCRIBERS_BY_USERNAME.get(username, ()):
-                try:
-                    subscriber.put_nowait(event)
-                    SSE_METRICS.increment("events_enqueued_total")
-                except queue.Full:
-                    SSE_METRICS.increment("queue_drops_total")
-                    dead_subscribers.append(subscriber)
+        subscribers = {
+            subscriber
+            for username in recipients
+            for subscriber in SUBSCRIBERS_BY_USERNAME.get(username, ())
+        }
+        for subscriber in subscribers:
+            try:
+                subscriber.put_nowait(event)
+                SSE_METRICS.increment("events_enqueued_total")
+            except queue.Full:
+                SSE_METRICS.increment("queue_drops_total")
+                dead_subscribers.append(subscriber)
         for subscriber in dead_subscribers:
-            username = SUBSCRIBERS.pop(subscriber, None)
-            if username:
-                username_subscribers = SUBSCRIBERS_BY_USERNAME.get(username)
-                if username_subscribers is not None:
-                    username_subscribers.discard(subscriber)
-                    if not username_subscribers:
-                        SUBSCRIBERS_BY_USERNAME.pop(username, None)
+            SUBSCRIBERS.pop(subscriber, None)
+            for username, username_subscribers in list(SUBSCRIBERS_BY_USERNAME.items()):
+                username_subscribers.discard(subscriber)
+                if not username_subscribers:
+                    SUBSCRIBERS_BY_USERNAME.pop(username, None)
             try:
                 while True:
                     subscriber.get_nowait()
@@ -453,7 +427,6 @@ SESSIONS = SessionStore(state_store=STORE)
 PRESENCE = PresenceStore(STORE.repository, INSTANCE_ID)
 STORE.bind_presence(PRESENCE)
 UPLOAD_GRANTS = UploadGrantStore()
-SHORTS_COLLECTOR = ShortsCatalogCollector(STORE.repository, INSTANCE_ID, start=False)
 EVENT_BROKER = DurableEventBroker(
     STORE.repository,
     INSTANCE_ID,
@@ -472,7 +445,6 @@ APPLICATION = ApplicationServices(STORE, PRESENCE, lambda: UPLOAD_GRANTS)
 
 class ChatHandler(
     AuthRoutesMixin,
-    ShortsRoutesMixin,
     MessagingRoutesMixin,
     TicketRoutesMixin,
     UploadRoutesMixin,
@@ -721,7 +693,6 @@ class ChatHandler(
                 {
                     "sse": SSE_METRICS.snapshot(),
                     "requests": self.server.request_metrics.snapshot(),
-                    "shorts_catalog": SHORTS_COLLECTOR.snapshot(),
                     "runtime": {
                         "active_threads": threading.active_count(),
                         "rss_bytes": process_rss_bytes(),
@@ -897,12 +868,6 @@ class ChatHandler(
                 },
                 HTTPStatus.OK,
             )
-            return
-        if path == "/youtube/shorts":
-            user = self.require_auth_record()
-            if user is None:
-                return
-            self.serve_public_shorts(query, user)
             return
         if path == "/auth/google/start":
             self.start_google_login()
@@ -1658,7 +1623,6 @@ class ChatServer(ThreadingHTTPServer):
 
 def main() -> None:
     configure_supabase_upload_bucket()
-    SHORTS_COLLECTOR.start()
     server = ChatServer((HOST, PORT), ChatHandler)
     print(f"{APP_NAME} running at http://{HOST}:{PORT}")
     try:
@@ -1667,7 +1631,6 @@ def main() -> None:
         pass
     finally:
         server.server_close()
-        SHORTS_COLLECTOR.close()
         EVENT_BROKER.close()
         STORE.close()
 

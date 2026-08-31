@@ -5,7 +5,6 @@ import { createRoomAvatar, currentRoom, renderChats, roomParticipantDisplayName,
 import { clearChatAttachment, discardUploadedAttachment, renderChatAttachmentPreview, renderChatAttachmentTray, uploadChatAttachment } from "./attachments.js";
 import { formatVoiceDuration } from "./voice.js";
 import { chatVirtualRange, createChatVirtualSpacer, measureRenderedChatMessages } from "./chat-virtual.js";
-import { clearShortMessageNotice, renderShortShareBar, resumeShortMessageNotice } from "./shorts.js";
 import { loadOlderChatMessages, mergeEntitiesById } from "./app.js";
 import { ColorlessImageProcessing } from "./platform/image-processing.js";
 
@@ -21,6 +20,14 @@ const CHAT_MEMORY_LIMIT = typeof CHAT_MESSAGE_MEMORY_LIMIT === "number" ? CHAT_M
 let messageReadSwipe = null;
 let suppressMessageClick = false;
 
+function currentRoomIdentity() {
+  return currentRoom()?.viewer_identity || state.messenger.user || null;
+}
+
+function currentRoomUsername() {
+  return currentRoomIdentity()?.username || "";
+}
+
 function shouldShowMessageTime(message, nextMessage) {
   if (!nextMessage || nextMessage.username !== message.username) return true;
   const timestamp = Date.parse(message.timestamp);
@@ -30,8 +37,9 @@ function shouldShowMessageTime(message, nextMessage) {
 }
 
 function messageSenderDisplayName(room, message) {
-  if (message.username === state.messenger.user?.username) {
-    return state.messenger.user?.display_name || state.messenger.user?.username || message.username;
+  if (message.username === currentRoomUsername()) {
+    const identity = currentRoomIdentity();
+    return identity?.display_name || identity?.username || message.username;
   }
   if (room?.peer?.username === message.username) {
     return room.peer.display_name || room.peer.username;
@@ -41,7 +49,7 @@ function messageSenderDisplayName(room, message) {
 
 function roomReadParticipants(room) {
   const participants = [
-    state.messenger.user,
+    currentRoomIdentity(),
     room?.peer,
     ...(room?.participants || []),
   ];
@@ -77,7 +85,7 @@ function addMessageReader(message, username, room = currentRoom()) {
     ...message,
     read_by: readBy,
     unread_by: unreadBy,
-    read: message.username === state.messenger.user?.username ? unreadBy.length === 0 : Boolean(message.read),
+    read: message.username === currentRoomUsername() ? unreadBy.length === 0 : Boolean(message.read),
   };
 }
 
@@ -104,7 +112,7 @@ function applyMessageReaderToCurrentMessages(username, transactionName = "messag
 }
 
 function nextOwnMessageIndex(messageIndex) {
-  const username = state.messenger.user?.username;
+  const username = currentRoomUsername();
   for (let index = messageIndex + 1; index < state.messages.length; index += 1) {
     if (state.messages[index].username === username) return index;
   }
@@ -112,7 +120,7 @@ function nextOwnMessageIndex(messageIndex) {
 }
 
 function previousOwnMessageIndex(messageIndex) {
-  const username = state.messenger.user?.username;
+  const username = currentRoomUsername();
   for (let index = messageIndex - 1; index >= 0; index -= 1) {
     if (state.messages[index].username === username) return index;
   }
@@ -120,7 +128,7 @@ function previousOwnMessageIndex(messageIndex) {
 }
 
 function shouldShowMessageReadReceipt(message, messageIndex) {
-  if (message.username !== state.messenger.user?.username) return false;
+  if (message.username !== currentRoomUsername()) return false;
   if (message.pending || message.failed) return true;
   const nextIndex = nextOwnMessageIndex(messageIndex);
   if (nextIndex < 0) return true;
@@ -164,7 +172,7 @@ function syncMessageReadReceiptVisibility(messageIndex) {
 }
 
 function createChatMessageRow(message, nextMessage = null, messageIndex = -1) {
-  const mine = message.username === state.messenger.user?.username;
+  const mine = message.username === currentRoomUsername();
   const row = document.createElement("article");
   row.className = `message-row ${mine ? "mine" : "theirs"}${message.pending ? " pending" : ""}${message.failed ? " failed" : ""}`;
   row.dataset.messageId = message.id;
@@ -304,7 +312,7 @@ function beginMessageReadSwipe(event) {
     message,
     row,
     revealed: false,
-    canErase: message.username === state.messenger.user?.username,
+    canErase: message.username === currentRoomUsername(),
     startedAt: performance.now(),
     lastX: event.clientX,
     directionAnchorX: event.clientX,
@@ -471,8 +479,7 @@ async function deleteChatMessage(message, row) {
     if (state.selectedRoomId === roomId && removeChatMessageState(message.id)) {
       renderAllChatMessages();
     }
-    if (state.activeList !== "shorts") renderChats();
-    renderShortShareBar();
+    renderChats();
     setAppStatus("메시지를 지웠어요.", "success");
   } catch (error) {
     row.classList.remove("erasing", "erase-committing");
@@ -662,7 +669,7 @@ function scheduleRoomRead(roomId) {
       body: JSON.stringify({ roomId }),
     }).then(() => {
       if (state.selectedRoomId === roomId) {
-        applyMessageReaderToCurrentMessages(state.messenger.user?.username, "messages.mark-read");
+        applyMessageReaderToCurrentMessages(currentRoomUsername(), "messages.mark-read");
       }
     }).catch(() => {});
   }, 120);
@@ -797,7 +804,6 @@ async function openChatRoomAtMessage(room, messageId) {
 }
 
 function closeChatRoom() {
-  const wasReplyingToShortNotice = state.activeList === "shorts" && state.shortMessagePaused;
   state.selectedRoomId = "";
   unloadChatMessages();
   state.renderedMessageRoomId = "";
@@ -812,7 +818,6 @@ function closeChatRoom() {
   syncAppStatusForActiveTab();
   roomSettingsSheet.classList.add("hidden");
   updatePresence();
-  if (wasReplyingToShortNotice) resumeShortMessageNotice();
 }
 
 function createClientMessageId() {
@@ -864,7 +869,7 @@ function sendChatMessage(event) {
     : "";
   const pendingMessage = {
     id: pendingId,
-    username: state.messenger.user?.username,
+    username: currentRoomUsername(),
     text,
     attachment: attachmentFile ? {
       name: attachmentFile.name,
@@ -921,13 +926,8 @@ function sendChatMessage(event) {
         room.last_message = message;
         room.updated_at = message.timestamp;
         state.messenger.rooms.sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)));
-        if (state.activeList !== "shorts") renderChats();
+        renderChats();
       }
-      if (state.shortMessageNotice?.roomId === roomId) {
-        clearShortMessageNotice();
-        if (state.activeList === "shorts") renderShortShareBar();
-      }
-      if (state.activeList === "shorts") renderShortShareBar();
     } catch (error) {
       if (uploadedAttachment) void discardUploadedAttachment(uploadedAttachment);
       if (state.selectedRoomId === roomId) {
