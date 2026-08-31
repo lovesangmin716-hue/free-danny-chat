@@ -145,7 +145,6 @@ class FixtureServer(AbstractContextManager):
             "STATE_FILE": str(data_dir / "state.json"),
             "UPLOADS_DIR": str(data_dir / "uploads"),
             "STRUCTURED_LOGS_ENABLED": "false",
-            "YOUTUBE_API_KEY": "",
         })
         spec = importlib.util.spec_from_file_location(
             f"colorless._operations_{time.time_ns()}",
@@ -198,7 +197,6 @@ class FixtureServer(AbstractContextManager):
         if self.server_thread is not None:
             self.server_thread.join(timeout=5)
         if self.server_module is not None:
-            self.server_module.SHORTS_COLLECTOR.close()
             self.server_module.EVENT_BROKER.close()
             self.server_module.STORE.close()
         self.temp_dir.cleanup()
@@ -370,16 +368,14 @@ def run_profile(
             break
         time.sleep(0.05)
 
-    route_latencies: dict[str, list[float]] = {"message": [], "read": [], "shorts": []}
+    route_latencies: dict[str, list[float]] = {"message": [], "read": []}
     statuses: list[int] = []
     lock = threading.Lock()
 
     def exercise(index: int) -> tuple[str, Response]:
         request_client = ApiClient(base_url, client.cookie)
         operation = index % 4
-        if index < 800 and index % 20 == 4:
-            route, response = "shorts", request_client.request("/youtube/shorts")
-        elif operation == 0:
+        if operation == 0:
             route = "message"
             response = request_client.request(
                 "/messages",
@@ -491,7 +487,7 @@ def run_profile(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run login, messaging, SSE, upload, Shorts and dependency-failure operations scenarios."
+        description="Run login, messaging, SSE, upload, and dependency-failure operations scenarios."
     )
     parser.add_argument("--profile", choices=sorted(PROFILES), default="smoke")
     parser.add_argument("--base-url", help="Existing HTTP target. Omit to start an isolated local fixture server.")

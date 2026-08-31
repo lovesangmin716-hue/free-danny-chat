@@ -94,7 +94,6 @@ def build_fixture(store, count: int) -> dict:
             "friendships": friendships,
             "rooms": rooms,
             "messages": {},
-            "shorts_feeds": {},
             "sessions": {},
         })
         store._rebuild_indexes_locked()
@@ -172,7 +171,6 @@ def run(count: int, iterations: int) -> dict:
             return report
         finally:
             store.close()
-            server.SHORTS_COLLECTOR.close()
             server.EVENT_BROKER.close()
             server.STORE.close()
 
