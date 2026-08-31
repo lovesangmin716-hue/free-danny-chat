@@ -3,6 +3,8 @@
 import { appScreen, getDisplayName, requestAction, setAppStatus, state } from "./core.js";
 import { closeChatRoom, openChatRoom } from "./chat.js";
 import { upsertMessengerRoom } from "./messenger.js";
+import { renderTicketChats } from "./ticket-chat-overview.js";
+import { createTicketListingFilter } from "./ticket-listing-filter.js";
 
 const screen = document.getElementById("ticket-transfer-screen");
 const openButton = document.getElementById("open-ticket-transfer-button");
@@ -36,15 +38,17 @@ const quantityInput = document.getElementById("ticket-quantity");
 const deliverySelect = document.getElementById("ticket-delivery-method");
 const descriptionInput = document.getElementById("ticket-description");
 const listingsNode = document.getElementById("ticket-listings");
+const searchButton = document.getElementById("open-ticket-search-button");
 const listingFilters = document.getElementById("ticket-listing-filters");
 const filterDateInput = document.getElementById("ticket-filter-date");
 const filterStadiumSelect = document.getElementById("ticket-filter-stadium");
-const filterSeatInput = document.getElementById("ticket-filter-seat");
-const filterSeatOptions = document.getElementById("ticket-filter-seat-options");
+const filterSeatSelect = document.getElementById("ticket-filter-seat");
 const filterResetButton = document.getElementById("reset-ticket-filters");
 const filterStatus = document.getElementById("ticket-filter-status");
 const sellingNode = document.getElementById("ticket-selling");
+const buyingNode = document.getElementById("ticket-buying");
 const dealsNode = document.getElementById("ticket-deals");
+const ticketChatsNode = document.getElementById("ticket-chats");
 const accessPanel = document.getElementById("ticket-access-panel");
 const accessTitle = document.getElementById("ticket-access-title");
 const accessCopy = document.getElementById("ticket-access-copy");
@@ -66,16 +70,24 @@ const reportPriceNotice = document.getElementById("ticket-report-price-notice");
 const reportSubmit = document.getElementById("submit-ticket-report-button");
 const reportStatus = document.getElementById("ticket-report-status");
 const closeReportButton = document.getElementById("close-ticket-report-button");
+const interestModal = document.getElementById("ticket-interest-modal");
+const interestForm = document.getElementById("ticket-interest-form");
+const interestSummary = document.getElementById("ticket-interest-summary");
+const interestQuantity = document.getElementById("ticket-interest-quantity");
+const interestSubmit = document.getElementById("submit-ticket-interest-button");
+const interestStatus = document.getElementById("ticket-interest-status");
+const closeInterestButton = document.getElementById("close-ticket-interest-button");
 
 const ticketState = {
   dashboard: null,
-  activeTab: "listings",
+  activeTab: "home",
   loading: false,
   timer: null,
   reportListingId: "",
   pendingListingPayload: null,
   signatureDrawing: false,
   signatureDrawn: false,
+  interestListingId: "",
 };
 const won = new Intl.NumberFormat("ko-KR");
 
@@ -153,6 +165,20 @@ function emptyCopy(text) {
   return node;
 }
 
+const listingFilterController = createTicketListingFilter({
+  searchButton,
+  form: listingFilters,
+  dateInput: filterDateInput,
+  stadiumSelect: filterStadiumSelect,
+  seatSelect: filterSeatSelect,
+  resetButton: filterResetButton,
+  statusNode: filterStatus,
+  listingsNode,
+  getDashboard: () => ticketState.dashboard,
+  renderTicket: (ticket) => ticketCard(ticket),
+  emptyCopy,
+});
+
 function actionButton(label, action, className = "secondary-button") {
   const button = document.createElement("button");
   button.type = "button";
@@ -178,7 +204,10 @@ function appendUserName(node, user, { handle = false } = {}) {
   if (badge) node.appendChild(badge);
 }
 
-function ticketCard(ticket, { selling = false } = {}) {
+function ticketCard(ticket, { mode = "home" } = {}) {
+  const selling = mode === "seller";
+  const buying = mode === "buyer";
+  const ownListing = ticket.seller?.id === ticketState.dashboard?.baseball_identity?.id;
   const card = document.createElement("article");
   card.className = "ticket-card";
   const heading = document.createElement("div");
@@ -206,6 +235,12 @@ function ticketCard(ticket, { selling = false } = {}) {
     Object.assign(document.createElement("span"), { textContent: seat || "좌석 정보 없음" }),
     sellerLine,
   );
+  if (buying && Number(ticket.viewer_interest_quantity || 0) > 0) {
+    meta.appendChild(Object.assign(document.createElement("span"), {
+      className: "ticket-requested-quantity",
+      textContent: `내 희망 수량 ${ticket.viewer_interest_quantity}장`,
+    }));
+  }
   const price = document.createElement("div");
   price.className = "ticket-card-price";
   const purchasePrice = Number(ticket.purchase_price ?? ticket.unit_price ?? 0);
@@ -228,8 +263,15 @@ function ticketCard(ticket, { selling = false } = {}) {
   }
   const actions = document.createElement("div");
   actions.className = "ticket-card-actions";
-  actions.appendChild(actionButton(selling ? "오픈채팅 보기" : "오픈채팅 참여", () => openTicketRoom(ticket.room)));
-  if (!selling) {
+  if (selling || buying || ownListing || Number(ticket.viewer_interest_quantity || 0) > 0) {
+    const quantityLabel = !selling && Number(ticket.viewer_interest_quantity || 0) > 0
+      ? `오픈채팅 · ${ticket.viewer_interest_quantity}장 신청`
+      : "오픈채팅 보기";
+    actions.appendChild(actionButton(quantityLabel, () => openTicketRoom(ticket.room)));
+  } else {
+    actions.appendChild(actionButton("신청하고 오픈채팅", () => openInterestModal(ticket), ""));
+  }
+  if (mode === "home" && !ownListing) {
     actions.appendChild(actionButton("! 신고", () => openReportModal(ticket), "secondary-button ticket-report-button"));
   }
   if (selling) {
@@ -243,7 +285,7 @@ function ticketCard(ticket, { selling = false } = {}) {
     const label = document.createElement("strong");
     label.textContent = `구매 희망자 ${ticket.commenters?.length || 0}명`;
     commenters.appendChild(label);
-    if (!ticket.commenters?.length) commenters.appendChild(emptyCopy("오픈채팅에 메시지를 남긴 구매자가 아직 없습니다."));
+    if (!ticket.commenters?.length) commenters.appendChild(emptyCopy("티켓을 신청한 구매자가 아직 없습니다."));
     for (const buyer of ticket.commenters || []) {
       const row = document.createElement("div");
       row.className = "ticket-commenter";
@@ -252,11 +294,15 @@ function ticketCard(ticket, { selling = false } = {}) {
       const quantity = document.createElement("input");
       quantity.type = "number";
       quantity.min = "1";
-      quantity.max = String(Math.max(1, Number(ticket.remaining_quantity || 1)));
-      quantity.value = "1";
+      quantity.max = String(Math.max(1, Math.min(Number(ticket.remaining_quantity || 1), Number(buyer.requested_quantity || 1))));
+      quantity.value = quantity.max;
       quantity.setAttribute("aria-label", `${getDisplayName(buyer)} 거래 수량`);
+      const requested = document.createElement("span");
+      requested.className = "ticket-requested-quantity";
+      requested.textContent = `${buyer.requested_quantity || 1}장 희망`;
       const dealButton = actionButton("1:1 거래", () => openDeal(ticket.id, buyer.id, Number(quantity.value)), "");
       dealButton.disabled = ticket.status !== "open" || Number(ticket.remaining_quantity || 0) < 1;
+      name.appendChild(requested);
       row.append(name, quantity, dealButton);
       commenters.appendChild(row);
     }
@@ -309,68 +355,6 @@ function populateSelect(select, values, selectedValue = select.value) {
   if (values.includes(selectedValue)) select.value = selectedValue;
 }
 
-function populateStadiumFilter() {
-  const stadiums = ticketState.dashboard?.stadiums || [];
-  const selectedValue = filterStadiumSelect.value;
-  filterStadiumSelect.replaceChildren(
-    Object.assign(document.createElement("option"), { value: "", textContent: "전체 경기장" }),
-    ...stadiums.map((stadium) => Object.assign(document.createElement("option"), {
-      value: stadium, textContent: stadium,
-    })),
-  );
-  filterStadiumSelect.value = stadiums.includes(selectedValue) ? selectedValue : "";
-}
-
-function syncSeatFilterOptions() {
-  const dashboard = ticketState.dashboard;
-  if (!dashboard) return;
-  const stadium = filterStadiumSelect.value;
-  const grades = stadium
-    ? dashboard.seat_grades?.[stadium] || []
-    : [...new Set(Object.values(dashboard.seat_grades || {}).flat())].sort((left, right) => left.localeCompare(right, "ko"));
-  filterSeatOptions.replaceChildren(...grades.map((grade) => Object.assign(document.createElement("option"), {
-    value: grade,
-  })));
-}
-
-function normalizedSeatText(value) {
-  return String(value || "").toLocaleLowerCase("ko-KR").replace(/\s+/g, "");
-}
-
-function filteredListings() {
-  const listings = ticketState.dashboard?.listings || [];
-  const date = filterDateInput.value;
-  const stadium = filterStadiumSelect.value;
-  const seatQuery = normalizedSeatText(filterSeatInput.value);
-  return listings.filter((ticket) => {
-    if (date && ticket.game_date !== date) return false;
-    if (stadium && ticket.stadium !== stadium) return false;
-    if (!seatQuery) return true;
-    const seatText = normalizedSeatText([ticket.seat_grade, ticket.seat_detail, ticket.seat].filter(Boolean).join(" "));
-    return seatText.includes(seatQuery);
-  });
-}
-
-function renderFilteredListings() {
-  const listings = ticketState.dashboard?.listings || [];
-  const filtered = filteredListings();
-  const hasFilters = Boolean(filterDateInput.value || filterStadiumSelect.value || filterSeatInput.value.trim());
-  filterStatus.textContent = hasFilters
-    ? `조건에 맞는 티켓 ${filtered.length}개 · 전체 ${listings.length}개`
-    : `전체 티켓 ${listings.length}개`;
-  listingsNode.replaceChildren(...(filtered.length
-    ? filtered.map((ticket) => ticketCard(ticket))
-    : [emptyCopy(listings.length ? "조건에 맞는 티켓이 없습니다." : "현재 양도 중인 티켓이 없습니다.")]));
-}
-
-function resetListingFilters() {
-  filterDateInput.value = "";
-  filterStadiumSelect.value = "";
-  filterSeatInput.value = "";
-  syncSeatFilterOptions();
-  renderFilteredListings();
-}
-
 function syncStadiumFields() {
   const dashboard = ticketState.dashboard;
   if (!dashboard) return;
@@ -399,6 +383,49 @@ function showAgreementModal() {
 function closeAgreementModal() {
   agreementModal.classList.add("hidden");
   ticketState.pendingListingPayload = null;
+}
+
+function openInterestModal(ticket) {
+  ticketState.interestListingId = ticket.id;
+  interestStatus.textContent = "";
+  interestQuantity.min = "1";
+  interestQuantity.max = String(Math.max(1, Number(ticket.remaining_quantity || 1)));
+  interestQuantity.value = String(Math.min(
+    Math.max(1, Number(ticket.viewer_interest_quantity || 1)),
+    Number(interestQuantity.max),
+  ));
+  interestSummary.textContent = `${displayDate(ticket.game_date)} · ${ticket.stadium} · ${ticket.seat || ticket.seat_grade}`;
+  interestModal.classList.remove("hidden");
+  window.setTimeout(() => interestQuantity.focus(), 0);
+}
+
+function closeInterestModal() {
+  ticketState.interestListingId = "";
+  interestModal.classList.add("hidden");
+}
+
+async function submitTicketInterest(event) {
+  event.preventDefault();
+  if (!ticketState.interestListingId) return;
+  interestSubmit.disabled = true;
+  interestStatus.textContent = "희망 수량을 저장하고 있어요.";
+  try {
+    const payload = await requestAction("tickets.join", "/tickets/join", {
+      method: "POST",
+      body: JSON.stringify({
+        listingId: ticketState.interestListingId,
+        quantity: Number(interestQuantity.value),
+      }),
+    });
+    const listing = payload.listing;
+    closeInterestModal();
+    await loadTicketDashboard({ quiet: true });
+    await openTicketRoom(listing?.room);
+  } catch (error) {
+    interestStatus.textContent = error.message;
+  } finally {
+    interestSubmit.disabled = false;
+  }
 }
 
 function renderAccessPanel() {
@@ -532,7 +559,7 @@ function renderDashboard() {
   identitySetup.classList.toggle("hidden", dashboard.active_identity_matches || dashboard.is_admin);
   content.classList.toggle("hidden", !dashboard.active_identity_matches && !dashboard.is_admin);
   moderationTab.classList.toggle("hidden", !dashboard.is_admin);
-  if (dashboard.is_admin && ticketState.activeTab === "listings") {
+  if (dashboard.is_admin && ticketState.activeTab === "home") {
     ticketState.activeTab = "moderation";
   }
 
@@ -555,17 +582,27 @@ function renderDashboard() {
 
   populateSelect(stadiumSelect, dashboard.stadiums || []);
   populateSelect(deliverySelect, dashboard.delivery_methods || []);
-  populateStadiumFilter();
-  syncSeatFilterOptions();
+  listingFilterController.configure();
   syncStadiumFields();
   renderAccessPanel();
-  renderFilteredListings();
+  listingFilterController.render();
   sellingNode.replaceChildren(...(dashboard.selling?.length
-    ? dashboard.selling.map((ticket) => ticketCard(ticket, { selling: true }))
+    ? dashboard.selling.map((ticket) => ticketCard(ticket, { mode: "seller" }))
     : [emptyCopy("내가 올린 티켓이 없습니다.")]));
+  buyingNode.replaceChildren(...(dashboard.buying?.length
+    ? dashboard.buying.map((ticket) => ticketCard(ticket, { mode: "buyer" }))
+    : [emptyCopy("신청한 티켓이 없습니다.")]));
   dealsNode.replaceChildren(...(dashboard.deals?.length
     ? dashboard.deals.map(dealCard)
     : [emptyCopy("진행 중이거나 완료된 거래가 없습니다.")]));
+  renderTicketChats({
+    dashboard,
+    container: ticketChatsNode,
+    displayDate,
+    actionButton,
+    openRoom: openTicketRoom,
+    emptyCopy,
+  });
   renderModeration();
   openFormButton.disabled = dashboard.is_admin || dashboard.ticket_access?.status === "suspended";
   setTicketTab(ticketState.activeTab);
@@ -855,14 +892,6 @@ openFormButton?.addEventListener("click", () => {
 cancelFormButton?.addEventListener("click", () => listingForm.classList.add("hidden"));
 listingForm?.addEventListener("submit", (event) => void submitListing(event));
 stadiumSelect?.addEventListener("change", syncStadiumFields);
-listingFilters?.addEventListener("submit", (event) => event.preventDefault());
-filterDateInput?.addEventListener("input", renderFilteredListings);
-filterStadiumSelect?.addEventListener("change", () => {
-  syncSeatFilterOptions();
-  renderFilteredListings();
-});
-filterSeatInput?.addEventListener("input", renderFilteredListings);
-filterResetButton?.addEventListener("click", resetListingFilters);
 screen?.querySelectorAll("[data-ticket-tab]").forEach((button) => button.addEventListener("click", () => setTicketTab(button.dataset.ticketTab)));
 agreementForm?.addEventListener("submit", (event) => void signAgreement(event));
 closeAgreementButton?.addEventListener("click", closeAgreementModal);
@@ -876,5 +905,8 @@ agreementSignature?.addEventListener("lostpointercapture", () => { ticketState.s
 reportForm?.addEventListener("submit", (event) => void submitReport(event));
 closeReportButton?.addEventListener("click", closeReportModal);
 reportModal?.addEventListener("click", (event) => { if (event.target === reportModal) closeReportModal(); });
+interestForm?.addEventListener("submit", (event) => void submitTicketInterest(event));
+closeInterestButton?.addEventListener("click", closeInterestModal);
+interestModal?.addEventListener("click", (event) => { if (event.target === interestModal) closeInterestModal(); });
 
 export { closeTicketTransfer, loadTicketDashboard, openTicketTransfer };

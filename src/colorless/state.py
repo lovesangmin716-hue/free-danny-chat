@@ -848,6 +848,31 @@ class StateStore:
                 for user_id in room["participant_ids"]
                 if isinstance(user_id, str) and user_id in user_ids
             ))[:MAX_GROUP_PARTICIPANTS]
+            if room.get("kind") == "ticket_listing":
+                ticket = room["ticket"]
+                raw_interests = ticket.get("interests") if isinstance(ticket.get("interests"), dict) else {}
+                interests = {}
+                for user_id in room["participant_ids"]:
+                    if user_id == ticket.get("seller_id"):
+                        continue
+                    raw_interest = raw_interests.get(user_id, {})
+                    raw_quantity = raw_interest.get("quantity", 1) if isinstance(raw_interest, dict) else 1
+                    try:
+                        requested_quantity = max(1, min(20, int(raw_quantity)))
+                    except (TypeError, ValueError):
+                        requested_quantity = 1
+                    interests[user_id] = {
+                        "quantity": requested_quantity,
+                        "joined_at": str(
+                            raw_interest.get("joined_at", room["created_at"])
+                            if isinstance(raw_interest, dict) else room["created_at"]
+                        ),
+                        "updated_at": str(
+                            raw_interest.get("updated_at", room["updated_at"])
+                            if isinstance(raw_interest, dict) else room["updated_at"]
+                        ),
+                    }
+                ticket["interests"] = interests
             if not room["participant_ids"] and not room["is_public"] and not room.get("archived_at"):
                 creator = users_by_name.get(room["created_by"])
                 room["participant_ids"] = [creator["id"]] if creator else []
@@ -1606,22 +1631,39 @@ class StateStore:
         include_commenters: bool = False,
     ) -> dict:
         ticket = copy.deepcopy(room.get("ticket", {}))
+        interests = ticket.pop("interests", {}) if isinstance(ticket.get("interests"), dict) else {}
         ticket["signature_saved"] = bool(ticket.pop("seller_signature", None))
         ticket.pop("reports", None)
         seller = self._users_by_id.get(str(ticket.get("seller_id", "")))
+        viewer_interest = interests.get(viewer.get("id", ""), {})
         summary = {
             "id": room["id"],
             **ticket,
-            "room": self._room_summary(room, viewer, include_members=False),
+            "viewer_interest_quantity": int(viewer_interest.get("quantity", 0) or 0),
+            "room": self._room_summary(
+                room,
+                viewer,
+                include_members=False,
+                latest_message=None,
+                latest_message_loaded=viewer.get("id") not in room.get("participant_ids", []),
+            ),
             "seller": self._user_list_summary(seller) if seller is not None else None,
         }
         if include_commenters:
-            summary["commenters"] = [
-                self._user_list_summary(commenter)
-                for user_id in room.get("participant_ids", [])
-                if user_id != ticket.get("seller_id")
-                and (commenter := self._users_by_id.get(user_id)) is not None
-            ]
+            commenters = []
+            for user_id in room.get("participant_ids", []):
+                if user_id == ticket.get("seller_id"):
+                    continue
+                commenter = self._users_by_id.get(user_id)
+                if commenter is None:
+                    continue
+                interest = interests.get(user_id, {})
+                commenters.append({
+                    **self._user_list_summary(commenter),
+                    "requested_quantity": int(interest.get("quantity", 1) or 1),
+                    "joined_at": str(interest.get("joined_at", "")),
+                })
+            summary["commenters"] = commenters
         return summary
 
     def _ticket_deal_summary_locked(self, room: dict, viewer: dict) -> dict:
@@ -1669,7 +1711,7 @@ class StateStore:
             if is_admin:
                 context["moderation"] = self._ticket_admin_dashboard_locked()
             if not is_admin and (baseball_identity is None or baseball_identity["id"] != viewer["id"]):
-                return {**context, "listings": [], "selling": [], "deals": []}
+                return {**context, "listings": [], "selling": [], "buying": [], "deals": []}
 
             valid_listings = [
                 room
@@ -1693,6 +1735,13 @@ class StateStore:
                 if room.get("ticket", {}).get("seller_id") == viewer["id"]
                 and room.get("ticket", {}).get("status") != "deleted"
             ]
+            buying = [
+                self._ticket_listing_summary_locked(room, viewer)
+                for room in valid_listings
+                if viewer["id"] in room.get("participant_ids", [])
+                and room.get("ticket", {}).get("seller_id") != viewer["id"]
+                and room.get("ticket", {}).get("status") != "deleted"
+            ]
             deal_rooms = [
                 room
                 for room in self.state["rooms"]
@@ -1704,8 +1753,9 @@ class StateStore:
 
         listings.sort(key=lambda item: (str(item.get("game_date", "")), str(item.get("created_at", ""))))
         selling.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
+        buying.sort(key=lambda item: str(item.get("room", {}).get("updated_at", item.get("created_at", ""))), reverse=True)
         deals.sort(key=lambda item: str(item.get("updated_at", item.get("created_at", ""))), reverse=True)
-        return {**context, "listings": listings, "selling": selling, "deals": deals}
+        return {**context, "listings": listings, "selling": selling, "buying": buying, "deals": deals}
 
     def create_ticket_listing(
         self,
@@ -1792,6 +1842,7 @@ class StateStore:
                 "delivery_method": normalized_delivery,
                 "description": normalized_description,
                 "status": "open",
+                "interests": {},
                 "reports": [],
                 "seller_signature": {
                     "version": TICKET_SELLER_AGREEMENT_VERSION,
@@ -1813,6 +1864,49 @@ class StateStore:
                 self.repository.sync_room(room)
             self._save_locked("rooms")
             return self._ticket_listing_summary_locked(room, seller, include_commenters=True), None
+
+    def join_ticket_listing(
+        self,
+        username: str,
+        listing_id: str,
+        quantity: int,
+    ) -> tuple[dict | None, str | None]:
+        with self.lock:
+            buyer = self._users_by_username.get(username)
+            listing = self._rooms_by_id.get(listing_id)
+            if buyer is None or buyer.get("identity_kind") != BASEBALL_TICKET_IDENTITY_KIND:
+                return None, "선택한 야구 티켓 전용 ID로 전환해 주세요."
+            if listing is None or listing.get("kind") != "ticket_listing" or not self._ticket_room_is_valid(listing):
+                return None, "유효한 티켓 게시글을 찾을 수 없습니다."
+            ticket = listing.get("ticket", {})
+            if ticket.get("seller_id") == buyer["id"]:
+                return None, "판매자는 자신의 오픈채팅에 이미 참여 중입니다."
+            remaining = int(ticket.get("remaining_quantity", 0))
+            if ticket.get("status") != "open" or remaining < 1:
+                return None, "현재 신청할 수 있는 티켓이 없습니다."
+            if not 1 <= quantity <= min(20, remaining):
+                return None, f"희망 수량은 현재 남은 티켓 {remaining}장 이내로 선택해 주세요."
+            seller = self._users_by_id.get(str(ticket.get("seller_id", "")))
+            if seller is None or seller.get("ticket_moderation_status", "active") != "active":
+                return None, "현재 신청할 수 없는 판매글입니다."
+
+            now = utc_now_iso()
+            interests = ticket.setdefault("interests", {})
+            previous = interests.get(buyer["id"], {}) if isinstance(interests.get(buyer["id"]), dict) else {}
+            interests[buyer["id"]] = {
+                "quantity": quantity,
+                "joined_at": str(previous.get("joined_at", now)),
+                "updated_at": now,
+            }
+            if buyer["id"] not in listing.get("participant_ids", []):
+                listing.setdefault("participant_ids", []).append(buyer["id"])
+                self._room_ids_by_user.setdefault(buyer["id"], set()).add(listing_id)
+            ticket["updated_at"] = now
+            listing["updated_at"] = now
+            if self.repository is not None:
+                self.repository.sync_room(listing)
+            self._save_locked("rooms")
+            return self._ticket_listing_summary_locked(listing, buyer), None
 
     def delete_ticket_listing(self, username: str, listing_id: str) -> tuple[dict | None, str | None]:
         with self.lock:
@@ -2258,6 +2352,7 @@ class StateStore:
             public_ticket = copy.deepcopy(room.get("ticket", {}))
             public_ticket.pop("seller_signature", None)
             public_ticket.pop("reports", None)
+            public_ticket.pop("interests", None)
             summary["ticket"] = public_ticket
         return summary
 
@@ -2439,9 +2534,7 @@ class StateStore:
             ):
                 return False
             if kind == "ticket_listing":
-                if room.get("ticket", {}).get("status") == "deleted":
-                    return user["id"] in room.get("participant_ids", [])
-                return True
+                return user["id"] in room.get("participant_ids", [])
             return user["id"] in room.get("participant_ids", [])
         return bool(room.get("is_public")) or user["id"] in room.get("participant_ids", [])
 
@@ -3660,12 +3753,6 @@ class StateStore:
             if room is None or user is None or not self._can_access_room_locked(room, user):
                 return None
 
-            ticket_participant_added = False
-            if room.get("kind") == "ticket_listing" and user["id"] not in room.get("participant_ids", []):
-                room.setdefault("participant_ids", []).append(user["id"])
-                self._room_ids_by_user.setdefault(user["id"], set()).add(room_id)
-                ticket_participant_added = True
-
             idempotency_key = (room_id, username, client_message_id)
             existing_message = self._messages_by_client_id.get(idempotency_key) if client_message_id else None
             if existing_message is None and client_message_id and self.repository is not None:
@@ -3734,9 +3821,6 @@ class StateStore:
                     message, user["id"], room, DURABLE_MESSAGE_KEEP_COUNT
                 ):
                     room_messages.pop()
-                    if ticket_participant_added:
-                        room["participant_ids"].remove(user["id"])
-                        self._room_ids_by_user.get(user["id"], set()).discard(room_id)
                     existing_message = self.repository.message_by_client_id(room_id, user["id"], client_message_id) if client_message_id else None
                     if existing_message is not None:
                         return existing_message, self._room_summary(

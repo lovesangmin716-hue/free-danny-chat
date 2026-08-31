@@ -816,22 +816,34 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('requestAction("profile.remove-legacy-image"', profile_script)
         self.assertIn("convertCroppedProfileImageToPixels", bootstrap_script)
 
-    def test_ticket_listings_filter_by_date_stadium_and_seat_information(self) -> None:
+    def test_ticket_hub_separates_roles_and_requires_quantity_before_open_chat(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         ticket_script = (FRONTEND_APP_DIR / "ticket-transfer.js").read_text(encoding="utf-8")
+        filter_script = (FRONTEND_APP_DIR / "ticket-listing-filter.js").read_text(encoding="utf-8")
+        chat_overview_script = (FRONTEND_APP_DIR / "ticket-chat-overview.js").read_text(encoding="utf-8")
+        server_script = SERVER_PATH.read_text(encoding="utf-8")
 
         for element_id in (
             "ticket-filter-date", "ticket-filter-stadium", "ticket-filter-seat",
-            "ticket-filter-seat-options", "reset-ticket-filters", "ticket-filter-status",
+            "open-ticket-search-button", "reset-ticket-filters", "ticket-filter-status",
+            "ticket-buying", "ticket-chats", "ticket-interest-modal", "ticket-interest-quantity",
         ):
             self.assertIn(f'id="{element_id}"', index_html)
-        self.assertIn("function filteredListings()", ticket_script)
-        self.assertIn("ticket.game_date !== date", ticket_script)
-        self.assertIn("ticket.stadium !== stadium", ticket_script)
-        self.assertIn("ticket.seat_grade, ticket.seat_detail, ticket.seat", ticket_script)
-        self.assertIn("function syncSeatFilterOptions()", ticket_script)
-        self.assertIn("function resetListingFilters()", ticket_script)
-        self.assertIn('filterSeatInput?.addEventListener("input", renderFilteredListings)', ticket_script)
+        for tab in ("home", "seller", "buyer", "chats"):
+            self.assertIn(f'data-ticket-tab="{tab}"', index_html)
+            self.assertIn(f'data-ticket-pane="{tab}"', index_html)
+        self.assertIn('class="ticket-filters hidden"', index_html)
+        self.assertIn('id="ticket-filter-seat" disabled', index_html)
+        self.assertIn("function filteredListings()", filter_script)
+        self.assertIn("ticket.game_date !== date", filter_script)
+        self.assertIn("ticket.stadium !== stadium", filter_script)
+        self.assertIn("ticket.seat_grade === seatGrade", filter_script)
+        self.assertIn("function syncSeatFilterOptions()", filter_script)
+        self.assertIn("function resetListingFilters()", filter_script)
+        self.assertIn("function renderTicketChats(", chat_overview_script)
+        self.assertIn("function submitTicketInterest(event)", ticket_script)
+        self.assertIn('requestAction("tickets.join", "/tickets/join"', ticket_script)
+        self.assertIn('if path == "/tickets/join":', server_script)
 
     def test_presence_events_patch_indexed_rows_on_one_animation_frame(self) -> None:
         messenger_script = (FRONTEND_APP_DIR / "messenger.js").read_text(encoding="utf-8")
@@ -2459,6 +2471,18 @@ class AccountIdentityTestCase(unittest.TestCase):
                 self.assertTrue(listing["signature_saved"])
                 self.assertNotIn("seller_signature", listing)
                 self.assertNotIn("seller_signature", listing["room"]["ticket"])
+                self.assertNotIn("interests", listing["room"]["ticket"])
+
+                self.assertFalse(store.can_access_room(listing["id"], buyer["username"]))
+                self.assertIsNone(store.add_message(listing["id"], buyer["username"], "신청 전 메시지"))
+                rejected_join, error = store.join_ticket_listing(buyer["username"], listing["id"], 4)
+                self.assertIsNone(rejected_join)
+                self.assertIn("남은 티켓 3장", error)
+                joined_listing, error = store.join_ticket_listing(buyer["username"], listing["id"], 2)
+                self.assertIsNone(error)
+                assert joined_listing is not None
+                self.assertEqual(joined_listing["viewer_interest_quantity"], 2)
+                self.assertTrue(store.can_access_room(listing["id"], buyer["username"]))
 
                 for text in ("A", "B", "C"):
                     message_result = store.add_message(listing["id"], buyer["username"], text)
@@ -2469,6 +2493,7 @@ class AccountIdentityTestCase(unittest.TestCase):
                 seller_dashboard = store.get_ticket_dashboard(seller["username"])
                 assert seller_dashboard is not None
                 self.assertEqual(seller_dashboard["selling"][0]["commenters"][0]["id"], buyer["id"])
+                self.assertEqual(seller_dashboard["selling"][0]["commenters"][0]["requested_quantity"], 2)
                 self.assertEqual(seller_dashboard["home_teams"]["대전"], "한화 이글스")
                 self.assertEqual(set(seller_dashboard["seat_grades"]), set(seller_dashboard["stadiums"]))
                 self.assertIn("중앙네이비석", seller_dashboard["seat_grades"]["잠실(LG)"])
@@ -2485,6 +2510,10 @@ class AccountIdentityTestCase(unittest.TestCase):
                 for stadium, seats in side_specific_seats.items():
                     with self.subTest(stadium=stadium):
                         self.assertTrue(set(seats).issubset(seller_dashboard["seat_grades"][stadium]))
+                buyer_dashboard = store.get_ticket_dashboard(buyer["username"])
+                assert buyer_dashboard is not None
+                self.assertEqual(buyer_dashboard["buying"][0]["id"], listing["id"])
+                self.assertEqual(buyer_dashboard["buying"][0]["viewer_interest_quantity"], 2)
 
                 deal, created, error = store.open_ticket_deal(
                     seller["username"], listing["id"], buyer["id"], 2
@@ -2570,6 +2599,7 @@ class AccountIdentityTestCase(unittest.TestCase):
                 dashboard = reopened.get_ticket_dashboard("ticket_seller")
                 assert dashboard is not None
                 self.assertEqual(dashboard["selling"][0]["remaining_quantity"], 1)
+                self.assertEqual(dashboard["selling"][0]["commenters"][0]["requested_quantity"], 2)
                 self.assertEqual(dashboard["deals"][0]["status"], "completed")
                 self.assertTrue(dashboard["ticket_access"]["has_signed_listing"])
                 self.assertTrue(dashboard["ticket_access"]["verified"])

@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#ffffff" />
     <title>Colorless</title>
     <link rel="preload" href="assets/fonts/The%20Jamsil%203%20Regular.woff2?v=4e887c501a6c" as="font" type="font/woff2" crossorigin />
-    <script defer src="assets/js/main.js?v=9cb3155c1de5"></script>
+    <script defer src="assets/js/main.js?v=43468b47bd72"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -321,25 +321,6 @@
       .ticket-identity-setup h3, .ticket-pane h3 { margin: 0; }
       .ticket-identity-setup p, .ticket-empty { color: var(--gray); font-size: 13px; line-height: 1.55; margin: 0; }
       .ticket-identity-setup select, .ticket-form select { background: var(--white); border: 1px solid var(--black); min-height: 48px; padding: 0 12px; width: 100%; }
-      .ticket-tabs { display: grid; gap: 0; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); margin-bottom: 18px; }
-      .ticket-tab { background: var(--white); color: var(--black); }
-      .ticket-tab + .ticket-tab { border-left: 0; }
-      .ticket-tab.active { background: var(--black); color: var(--white); }
-      .ticket-pane { display: grid; gap: 14px; }
-      .ticket-pane-heading { align-items: center; display: flex; gap: 12px; justify-content: space-between; }
-      .ticket-filters { border: 1px solid var(--black); display: grid; gap: 10px; padding: 12px; }
-      .ticket-filter-grid { align-items: end; display: grid; gap: 8px; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }
-      .ticket-filter-field { display: grid; gap: 5px; min-width: 0; }
-      .ticket-filter-field label { font-size: 11px; font-weight: 700; }
-      .ticket-filter-field input, .ticket-filter-field select { background: var(--white); border: 1px solid var(--black); min-height: 42px; min-width: 0; padding: 0 10px; width: 100%; }
-      .ticket-filter-reset { min-height: 42px; white-space: nowrap; }
-      .ticket-filter-status { color: var(--gray); font-size: 12px; margin: 0; min-height: 1.4em; }
-      .ticket-list { display: grid; gap: 12px; }
-      .ticket-card { border: 1px solid var(--black); display: grid; gap: 11px; padding: 16px; }
-      .ticket-card-heading { align-items: start; display: flex; gap: 12px; justify-content: space-between; }
-      .ticket-card-heading strong { font-size: 17px; line-height: 1.35; }
-      .ticket-badge { border: 1px solid var(--black); flex: 0 0 auto; font-size: 11px; padding: 4px 7px; }
-      .ticket-card-meta { color: var(--gray); display: grid; font-size: 13px; gap: 5px; line-height: 1.45; }
       .ticket-card-price { display: grid; gap: 2px; }
       .ticket-card-purchase-price { color: var(--gray); font-size: 12px; font-weight: 400; }
       .ticket-card-sale-price { font-size: 18px; font-weight: 700; }
@@ -352,6 +333,7 @@
       .ticket-commenter { align-items: center; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) 68px auto; }
       .ticket-commenter input { min-height: 42px; padding-inline: 8px; }
       .ticket-commenter button { min-height: 42px; padding-inline: 11px; }
+      .ticket-requested-quantity { color: var(--gray); font-size: 12px; font-weight: 700; margin-left: 6px; }
       .ticket-form { border: 1px solid var(--black); display: grid; gap: 12px; margin: 0; padding: 16px; }
       .ticket-form-grid { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .ticket-field { display: grid; gap: 6px; }
@@ -387,8 +369,6 @@
       .app.ticket-transfer-active .chat-room:not(.hidden) { height: 100dvh; inset: 0; max-width: none; position: fixed; width: 100%; z-index: 230; }
       .app.ticket-transfer-active .chat-room-back { display: inline-flex; }
       @media (max-width: 520px) {
-        .ticket-filter-grid { grid-template-columns: 1fr; }
-        .ticket-filter-reset { width: 100%; }
         .ticket-form-grid { grid-template-columns: 1fr; }
         .ticket-field-wide { grid-column: auto; }
         .ticket-commenter { grid-template-columns: minmax(0, 1fr) 58px; }
@@ -919,6 +899,7 @@
         }
       }
     </style>
+    <link rel="stylesheet" href="assets/css/ticket-hub.css?v=86e0df8be094" />
   </head>
   <body>
     <section class="auth-shell hidden" id="auth-screen">
@@ -1029,8 +1010,8 @@
               <button type="button" class="secondary-button my-work-mode-toggle" id="work-mode-toggle" aria-pressed="false">켜기</button>
             </div>
             <div class="my-actions">
-              <button type="button" class="secondary-button" id="open-ticket-transfer-button" aria-label="야구 티켓 양도">⚾ 야구 티켓 양도</button>
-              <button type="button" class="secondary-button hidden" id="open-ticket-admin-button" aria-label="티켓 관리자">⚙ 티켓 관리자</button>
+              <button type="button" class="secondary-button" id="open-ticket-transfer-button">⚾ 야구 티켓 양도</button>
+              <button type="button" class="secondary-button hidden" id="open-ticket-admin-button">⚙ 티켓 관리자</button>
               <button type="button" class="secondary-button" id="open-profile-button" data-icon="user" aria-label="개인정보 수정">개인정보 수정</button>
               <button type="button" id="logout-button" data-icon="log-out" aria-label="로그아웃">로그아웃</button>
             </div>
@@ -1055,32 +1036,37 @@
             <p class="ticket-status" id="ticket-identity-status" role="status" aria-live="polite"></p>
           </section>
           <section class="hidden" id="ticket-transfer-content">
-            <section class="ticket-access-panel hidden" id="ticket-access-panel">
-              <strong id="ticket-access-title"></strong>
-              <p id="ticket-access-copy"></p>
-              <div class="ticket-access-actions" id="ticket-access-actions"></div>
-            </section>
             <nav class="ticket-tabs" aria-label="티켓 양도 메뉴">
-              <button type="button" class="ticket-tab active" data-ticket-tab="listings">양도 티켓</button>
-              <button type="button" class="ticket-tab" data-ticket-tab="selling">판매하기</button>
-              <button type="button" class="ticket-tab" data-ticket-tab="deals">거래 관리</button>
+              <button type="button" class="ticket-tab active" data-ticket-tab="home">홈</button>
+              <button type="button" class="ticket-tab" data-ticket-tab="seller">판매자</button>
+              <button type="button" class="ticket-tab" data-ticket-tab="buyer">구매자</button>
+              <button type="button" class="ticket-tab" data-ticket-tab="chats">티켓 채팅</button>
               <button type="button" class="ticket-tab hidden" id="ticket-moderation-tab" data-ticket-tab="moderation">관리자</button>
             </nav>
             <p class="ticket-status" id="ticket-screen-status" role="status" aria-live="polite"></p>
-            <section class="ticket-pane" data-ticket-pane="listings">
+            <section class="ticket-pane" data-ticket-pane="home">
               <div class="ticket-pane-heading">
-                <h3>양도 티켓</h3>
-                <button type="button" class="secondary-button" id="open-ticket-form-button">티켓 올리기</button>
+                <h3>현재 양도 티켓</h3>
+                <button type="button" class="secondary-button" id="open-ticket-search-button" aria-expanded="false" aria-controls="ticket-listing-filters">⌕ 검색</button>
               </div>
-              <form class="ticket-filters" id="ticket-listing-filters" aria-label="양도 티켓 필터">
+              <form class="ticket-filters hidden" id="ticket-listing-filters" aria-label="양도 티켓 검색">
                 <div class="ticket-filter-grid">
                   <div class="ticket-filter-field"><label for="ticket-filter-date">날짜</label><input type="date" id="ticket-filter-date" /></div>
                   <div class="ticket-filter-field"><label for="ticket-filter-stadium">경기장</label><select id="ticket-filter-stadium"><option value="">전체 경기장</option></select></div>
-                  <div class="ticket-filter-field"><label for="ticket-filter-seat">좌석정보</label><input type="search" id="ticket-filter-seat" list="ticket-filter-seat-options" maxlength="120" autocomplete="off" placeholder="등급·구역·열 검색" /><datalist id="ticket-filter-seat-options"></datalist></div>
-                  <button type="button" class="secondary-button ticket-filter-reset" id="reset-ticket-filters">초기화</button>
+                  <div class="ticket-filter-field"><label for="ticket-filter-seat">좌석 등급 (2026 기준)</label><select id="ticket-filter-seat" disabled><option value="">경기장을 먼저 선택</option></select></div>
+                  <div class="ticket-pane-heading-actions"><button type="button" class="secondary-button ticket-filter-reset" id="reset-ticket-filters">초기화</button><button type="submit" class="ticket-filter-reset">조건 적용</button></div>
                 </div>
                 <p class="ticket-filter-status" id="ticket-filter-status" role="status" aria-live="polite"></p>
               </form>
+              <div class="ticket-list" id="ticket-listings"></div>
+            </section>
+            <section class="ticket-pane hidden" data-ticket-pane="seller">
+              <div class="ticket-pane-heading"><h3>판매자</h3><button type="button" class="secondary-button" id="open-ticket-form-button">티켓 올리기</button></div>
+              <section class="ticket-access-panel hidden" id="ticket-access-panel">
+                <strong id="ticket-access-title"></strong>
+                <p id="ticket-access-copy"></p>
+                <div class="ticket-access-actions" id="ticket-access-actions"></div>
+              </section>
               <form class="ticket-form hidden" id="ticket-listing-form">
                 <div class="ticket-form-grid">
                   <div class="ticket-field"><label for="ticket-game-date">경기 날짜</label><input type="date" id="ticket-game-date" required /></div>
@@ -1100,10 +1086,14 @@
                 <div class="ticket-form-actions"><button type="button" class="secondary-button" id="cancel-ticket-form-button">취소</button><button type="submit" id="submit-ticket-form-button">등록</button></div>
                 <p class="ticket-status" id="ticket-form-status" role="status" aria-live="polite"></p>
               </form>
-              <div class="ticket-list" id="ticket-listings"></div>
+              <div class="ticket-list" id="ticket-selling"></div>
             </section>
-            <section class="ticket-pane hidden" data-ticket-pane="selling"><h3>판매하기 · 판매 관리</h3><div class="ticket-list" id="ticket-selling"></div></section>
-            <section class="ticket-pane hidden" data-ticket-pane="deals"><h3>거래 관리</h3><div class="ticket-list" id="ticket-deals"></div></section>
+            <section class="ticket-pane hidden" data-ticket-pane="buyer">
+              <h3>구매자</h3>
+              <section class="ticket-subsection"><h4>신청한 티켓</h4><div class="ticket-list" id="ticket-buying"></div></section>
+              <section class="ticket-subsection"><h4>1:1 거래</h4><div class="ticket-list" id="ticket-deals"></div></section>
+            </section>
+            <section class="ticket-pane hidden" data-ticket-pane="chats"><h3>티켓 채팅 모아보기</h3><div class="ticket-list" id="ticket-chats"></div></section>
             <section class="ticket-pane hidden" data-ticket-pane="moderation"><h3>@itsyou 티켓 관리자</h3><p class="ticket-price-note">이 탭은 활동 ID가 정확히 @itsyou일 때만 표시됩니다. 판매글별 손그림 서명, 레드체크 검증 요청, 신고와 정지 계정을 여기서 확인하고 처리할 수 있습니다.</p><div class="ticket-list" id="ticket-moderation"></div></section>
           </section>
         </div>
@@ -1118,6 +1108,18 @@
               <label class="ticket-policy-confirm"><input type="checkbox" id="ticket-agreement-confirm" required /><span>위 내용을 확인했고 구매가를 초과해 판매하지 않겠습니다. 이 판매글의 서명 기록이 관리자 @itsyou에 저장되는 것에 동의합니다.</span></label>
               <button type="submit" id="submit-ticket-agreement-button">서명하고 판매글 등록</button>
               <p class="ticket-status" id="ticket-agreement-status" role="status" aria-live="polite"></p>
+            </form>
+          </section>
+        </div>
+        <div class="sheet-backdrop ticket-modal hidden" id="ticket-interest-modal" role="dialog" aria-modal="true" aria-labelledby="ticket-interest-title">
+          <section class="user-sheet">
+            <header class="sheet-header"><h2 id="ticket-interest-title">오픈채팅 신청</h2><button type="button" class="sheet-close" id="close-ticket-interest-button">닫기</button></header>
+            <form class="ticket-modal-content" id="ticket-interest-form">
+              <p id="ticket-interest-summary"></p>
+              <div class="ticket-field"><label for="ticket-interest-quantity">필요한 티켓 수량</label><input type="number" id="ticket-interest-quantity" min="1" max="20" value="1" required /></div>
+              <p>희망 수량은 판매자 화면에 표시됩니다. 수량을 선택해야 오픈채팅에 들어갈 수 있습니다.</p>
+              <button type="submit" id="submit-ticket-interest-button">신청하고 오픈채팅 들어가기</button>
+              <p class="ticket-status" id="ticket-interest-status" role="status" aria-live="polite"></p>
             </form>
           </section>
         </div>

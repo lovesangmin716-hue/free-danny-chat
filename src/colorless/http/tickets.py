@@ -70,6 +70,27 @@ class TicketRoutesMixin:
             return
         self.send_json({"listing": listing}, self.context.HTTPStatus.OK)
 
+    def join_ticket_listing(self, user: dict) -> None:
+        if not self.allow_request(f"ticket-join:{user['username']}", 60, 60 * 60):
+            return
+        payload = self.read_json_body()
+        if payload is None:
+            return
+        try:
+            quantity = int(payload.get("quantity", 0))
+        except (TypeError, ValueError):
+            self.send_json({"error": "희망 티켓 수량을 올바르게 선택해 주세요."}, self.context.HTTPStatus.BAD_REQUEST)
+            return
+        listing, error = self.context.STORE.join_ticket_listing(
+            user["username"],
+            str(payload.get("listingId", "")).strip(),
+            quantity,
+        )
+        if error:
+            self.send_json({"error": error}, self.context.HTTPStatus.BAD_REQUEST)
+            return
+        self.send_json({"listing": listing}, self.context.HTTPStatus.OK)
+
     def sign_ticket_agreement(self, user: dict) -> None:
         if not self.allow_request(f"ticket-agreement:{user['username']}", 10, 60 * 60):
             return

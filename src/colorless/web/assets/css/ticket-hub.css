@@ -1,0 +1,28 @@
+.ticket-tabs { display: grid; gap: 0; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); margin-bottom: 18px; }
+.ticket-tab { background: var(--white); color: var(--black); }
+.ticket-tab + .ticket-tab { border-left: 0; }
+.ticket-tab.active { background: var(--black); color: var(--white); }
+.ticket-pane { display: grid; gap: 14px; }
+.ticket-pane-heading { align-items: center; display: flex; gap: 12px; justify-content: space-between; }
+.ticket-pane-heading-actions { display: flex; gap: 8px; }
+.ticket-filters { border: 1px solid var(--black); display: grid; gap: 10px; padding: 12px; }
+.ticket-filter-grid { align-items: end; display: grid; gap: 8px; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }
+.ticket-filter-field { display: grid; gap: 5px; min-width: 0; }
+.ticket-filter-field label { font-size: 11px; font-weight: 700; }
+.ticket-filter-field input, .ticket-filter-field select { background: var(--white); border: 1px solid var(--black); min-height: 42px; min-width: 0; padding: 0 10px; width: 100%; }
+.ticket-filter-reset { min-height: 42px; white-space: nowrap; }
+.ticket-filter-status { color: var(--gray); font-size: 12px; margin: 0; min-height: 1.4em; }
+.ticket-subsection { display: grid; gap: 10px; }
+.ticket-subsection + .ticket-subsection { border-top: 1px solid var(--light-gray); padding-top: 14px; }
+.ticket-subsection h4 { font-size: 14px; margin: 0; }
+.ticket-list { display: grid; gap: 12px; }
+.ticket-card { border: 1px solid var(--black); display: grid; gap: 11px; padding: 16px; }
+.ticket-card-heading { align-items: start; display: flex; gap: 12px; justify-content: space-between; }
+.ticket-card-heading strong { font-size: 17px; line-height: 1.35; }
+.ticket-badge { border: 1px solid var(--black); flex: 0 0 auto; font-size: 11px; padding: 4px 7px; }
+.ticket-card-meta { color: var(--gray); display: grid; font-size: 13px; gap: 5px; line-height: 1.45; }
+
+@media (max-width: 520px) {
+  .ticket-filter-grid { grid-template-columns: 1fr; }
+  .ticket-filter-reset { width: 100%; }
+}
