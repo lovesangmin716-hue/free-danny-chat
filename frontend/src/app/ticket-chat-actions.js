@@ -2,7 +2,7 @@
 
 import { requestAction, state } from "./core.js";
 import { closeChatRoom } from "./chat.js";
-import { removeMessengerRoom } from "./messenger.js";
+import { removeMessengerRoom, renderChats } from "./messenger.js";
 
 export function createTicketChatActions({ statusNode, reloadDashboard }) {
   async function cancelInterest(listingId) {
@@ -30,6 +30,7 @@ export function createTicketChatActions({ statusNode, reloadDashboard }) {
       });
       if (state.selectedRoomId === roomId) closeChatRoom();
       removeMessengerRoom(roomId);
+      renderChats();
       statusNode.textContent = "채팅에서 나갔습니다. 기존 대화 기록은 삭제되지 않습니다.";
       await reloadDashboard({ quiet: true });
     } catch (error) {

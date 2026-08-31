@@ -112,11 +112,20 @@ class TicketRoutesMixin:
         if payload is None:
             return
         room_id = str(payload.get("roomId", "")).strip()
-        _, error = self.context.STORE.leave_ticket_chat(user["username"], room_id)
+        recipients, error = self.context.STORE.leave_ticket_chat(user["username"], room_id)
         if error:
             self.send_json({"error": error}, self.context.HTTPStatus.BAD_REQUEST)
             return
         self.send_json({"roomId": room_id, "left": True}, self.context.HTTPStatus.OK)
+        self.context.EVENT_BROKER.publish(
+            {
+                "type": "room_left",
+                "roomId": room_id,
+                "username": user["username"],
+                "room": self.context.STORE.room_event_summary(room_id),
+            },
+            recipients,
+        )
 
     def sign_ticket_agreement(self, user: dict) -> None:
         if not self.allow_request(f"ticket-agreement:{user['username']}", 10, 60 * 60):

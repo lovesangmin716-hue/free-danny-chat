@@ -790,6 +790,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
         ticket_actions_script = (FRONTEND_APP_DIR / "ticket-chat-actions.js").read_text(encoding="utf-8")
         filter_script = (FRONTEND_APP_DIR / "ticket-listing-filter.js").read_text(encoding="utf-8")
         chat_overview_script = (FRONTEND_APP_DIR / "ticket-chat-overview.js").read_text(encoding="utf-8")
+        ticket_routes_script = (SRC_DIR / "colorless" / "http" / "tickets.py").read_text(encoding="utf-8")
         server_script = SERVER_PATH.read_text(encoding="utf-8")
 
         for element_id in (
@@ -819,6 +820,10 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn('requestAction("tickets.join", "/tickets/join"', ticket_script)
         self.assertIn('requestAction("tickets.cancel", "/tickets/cancel"', ticket_actions_script)
         self.assertIn('requestAction("tickets.leave", "/tickets/leave"', ticket_actions_script)
+        self.assertIn("removeMessengerRoom(roomId);", ticket_actions_script)
+        self.assertIn("renderChats();", ticket_actions_script)
+        self.assertIn('"type": "room_left"', ticket_routes_script)
+        self.assertIn("self.context.EVENT_BROKER.publish(", ticket_routes_script)
         self.assertIn("신청 취소", chat_overview_script)
         self.assertIn("채팅 나가기", chat_overview_script)
         self.assertIn('if path == "/tickets/join":', server_script)
@@ -2546,6 +2551,11 @@ class AccountIdentityTestCase(unittest.TestCase):
                 retained_listing_messages = store.get_messages(listing["id"], seller["username"])
                 assert retained_listing_messages is not None
                 self.assertEqual([message["text"] for message in retained_listing_messages], ["A", "B", "C"])
+                buyer_room_ids = {
+                    room["id"] for room in store.get_rooms_page(buyer, limit=30)["items"]
+                }
+                self.assertNotIn(listing["id"], buyer_room_ids)
+                self.assertNotIn(deal["id"], buyer_room_ids)
                 expires_at = datetime.fromisoformat(updated_listing["expires_at"])
                 self.assertEqual(expires_at.astimezone(timezone(timedelta(hours=9))).date().isoformat(), (
                     date.fromisoformat(game_date) + timedelta(days=7)
@@ -2627,6 +2637,13 @@ class AccountIdentityTestCase(unittest.TestCase):
                     [message["text"] for message in reopened.get_messages(deal["id"], "ticket_seller")],
                     ["거래 기록"],
                 )
+                reopened_buyer = reopened.get_user_record("ticket_buyer")
+                assert reopened_buyer is not None
+                buyer_room_ids = {
+                    room["id"] for room in reopened.get_rooms_page(reopened_buyer, limit=30)["items"]
+                }
+                self.assertNotIn(listing["id"], buyer_room_ids)
+                self.assertNotIn(deal["id"], buyer_room_ids)
                 self.assertTrue(dashboard["ticket_access"]["has_signed_listing"])
                 self.assertTrue(dashboard["ticket_access"]["verified"])
                 expired_at = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
