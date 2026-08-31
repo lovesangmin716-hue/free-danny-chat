@@ -21,7 +21,7 @@ Render free/small 단일 인스턴스의 목표는 동시 실시간 사용자 25
 
 - `GET /live`: 프로세스가 HTTP 요청을 처리할 수 있는지만 확인합니다. 외부 의존성 장애 중에도 200일 수 있습니다.
 - `GET /ready`: DB 왕복과 migration marker, persistence revision/pending/error, durable-event outbox, 요청 스레드와 body-reader 포화를 확인합니다. 하나라도 실패하면 503이며 트래픽을 받지 않아야 합니다.
-- `GET /metrics`: 요청 latency/error/bytes, SSE, persistence, Shorts 외부 API/quota/cache, process CPU/RSS/thread/FD와 가장 최근 readiness를 JSON으로 제공합니다.
+- `GET /metrics`: 요청 latency/error/bytes, SSE, persistence, process CPU/RSS/thread/FD와 가장 최근 readiness를 JSON으로 제공합니다.
 
 Render의 health check는 `/ready`를 사용합니다. 장애 조사에서는 `/live`가 200이고 `/ready`가 503이면 프로세스 재시작보다 `checks`, `database.error`, persistence lag/error, outbox와 saturation을 먼저 확인합니다.
 
@@ -54,7 +54,6 @@ Render Blueprint는 GitHub 검사가 성공한 커밋만 자동 배포합니다.
 | Connection saturation | `requests.active/limits.max_request_threads`, `sse.active/limits.max_sse_connections` |
 | Queue saturation | `requests.active_body_readers`, `runtime.max_subscriber_queue_fill_ratio`, queue drops/outbox |
 | Database/persistence | `readiness.database.latency_ms`, `persistence.revision_lag/pending_parts/error` |
-| External API | Shorts external calls, run latency, failure, quota, circuit, catalog hit/stale age |
 | Process | CPU seconds, RSS, threads, open FDs |
 | Upload traffic/failures | normalized upload route bytes/status/error rate |
 
@@ -67,11 +66,10 @@ SQLite와 현재 Supabase REST 구현에는 애플리케이션 소유 DB connect
 - page: SSE queue drop 증가, event outbox 8,000 접근, persistence error 발생
 - ticket: 메시지 p95 300ms 또는 messenger p95 500ms를 15분 초과
 - ticket: request/SSE/body-reader 용량 80%, subscriber queue fill 80%, persistence lag 100 접근
-- ticket: Shorts circuit open, 일일 quota 80%, stale catalog age 6시간 접근
 
 ## Versioned load and failure profiles
 
-`tests/operations_load.py`는 외부 키 없이 격리된 실제 HTTP 서버와 두 사용자/1:1 방 fixture를 만들고 로그인, messenger/read, 동시 메시지, SSE fan-out, signed upload의 grant-transfer-complete, Shorts feed, DB 장애 readiness를 실행합니다.
+`tests/operations_load.py`는 외부 키 없이 격리된 실제 HTTP 서버와 두 사용자/1:1 방 fixture를 만들고 로그인, messenger/read, 동시 메시지, SSE fan-out, signed upload의 grant-transfer-complete, DB 장애 readiness를 실행합니다.
 
 ```bash
 python tests/operations_load.py --profile smoke
@@ -89,7 +87,7 @@ python tests/operations_load.py --profile load \
   --username USER --password PASSWORD --room-id ROOM_ID
 ```
 
-외부 target은 파괴적인 dependency injection을 하지 않습니다. 장시간 SSE 유지/회수는 `tests/sse_load.py`, 다중 broker/인스턴스 종료·replay는 `tests/multi_instance.py`, 대규모 DB와 bootstrap은 각각 `tests/storage_scale.py`, `tests/bootstrap_scale.py`, 브라우저 Long Task/Shorts virtualization은 versioned browser fixture로 분리되어 있습니다.
+외부 target은 파괴적인 dependency injection을 하지 않습니다. 장시간 SSE 유지/회수는 `tests/sse_load.py`, 다중 broker/인스턴스 종료·replay는 `tests/multi_instance.py`, 대규모 DB와 bootstrap은 각각 `tests/storage_scale.py`, `tests/bootstrap_scale.py`, 브라우저 Long Task 검사는 versioned browser fixture로 분리되어 있습니다.
 
 CI는 매 push/PR에 `smoke`를 실행하며 message/read/realtime p95, 5xx, 예상 밖 4xx, upload, readiness, queue drop 또는 dependency-failure 차단이 기준을 넘으면 실패합니다. `load`, `spike`, `soak`는 staging 또는 정기 작업에서 같은 명령으로 실행하고 결과 JSON을 변경 전후 기록에 첨부합니다. `--duration-seconds 7200`은 요청 수 대신 2시간 soak를 실행하며 concurrency·SSE·요청 수 역시 CLI에서 덮어쓸 수 있습니다.
 

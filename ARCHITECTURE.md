@@ -23,7 +23,7 @@ view intent
 - `platform/icons.js`: accessible SVG controls shared by static and dynamic views
 - `platform/image-processing.js`: cancellable Worker boundary whose fingerprinted URL is injected during the build
 - `core.js`: shared state, DOM references, API actions, and registered lifecycle hooks
-- `action-bar.js`: tab-scoped chat, friend, shorts, notification, and input modes
+- `action-bar.js`: tab-scoped chat, friend, notification, identity visibility, and input modes
 
 Feature modules must not call `fetch` directly or publish new browser globals. Network work goes through `requestAction`, SSE messages go through `realtimeEvents`, and dependencies cross files only through module imports. Core-to-feature callbacks use `registerCoreHooks`, keeping the core independent from feature implementations and avoiding cyclic initialization.
 
@@ -51,7 +51,6 @@ Binary upload handlers retain specialized parsing, but use the same stores and e
 - `observability.py`: request/SSE metrics, safe route labels, process probes, and structured logging
 - `utils.py`: identifiers, cursors, profile/image validation, cookies, passwords, and phone normalization
 - `runtime.py`: bounded in-memory session, upload grant, rate-limit, presence, OAuth, and verification stores
-- `shorts.py`: YouTube catalog queries, collection lease worker, filtering, and collector metrics
 - `cache.py`: bounded single-flight TTL cache
 - `integrations.py`: pooled outbound HTTP plus shared Supabase request headers
 - `persistence.py`: normalized SQLite and Supabase repositories
@@ -59,7 +58,6 @@ Binary upload handlers retain specialized parsing, but use the same stores and e
 - `application.py`: feature commands and explicit `CommandOutcome` domain events
 - `realtime.py`: durable event outbox, replay, cross-instance consumption, and presence cleanup
 - `http/auth.py`: local/social authentication and phone verification routes
-- `http/shorts.py`: the authenticated Shorts feed HTTP boundary
 - `http/messaging.py`: session, profile, room, message, presence, and SSE routes
 - `http/uploads.py`: profile/room images and attachment transfer routes
 - `http/context.py`: live composition-root dependency view used by route mixins
@@ -78,9 +76,9 @@ Lower-level modules do not import `server.py`. Route mixins receive a live `Hand
 
 ## Account and activity identity boundary
 
-Authentication and social activity use different identifiers. `accounts.id` is the private, immutable login and enforcement key. `users.id` is an activity identity key; one account owns at most three user rows, each with its own globally unique `username`, display name, profile, friendships, rooms, messages, reads, presence, and Shorts state.
+Authentication and social activity use different identifiers. `accounts.id` is the private, immutable login and enforcement key. `users.id` is an activity identity key; one account owns at most three user rows, each with its own globally unique `username`, display name, profile, friendships, rooms, messages, reads, and presence.
 
-Sessions persist both `account_id` and `active_user_id`. Creating or switching an identity always verifies that the target `users.account_id` matches the session account. Public social responses expose the activity identity but never its owning `account_id`; the owner-only session response includes the account identifier and owned identity list for the MY switcher. Password hashes, phone numbers, age group, and gender live only in the account record.
+Sessions persist both `account_id` and `active_user_id`. Creating or switching an identity always verifies that the target `users.account_id` matches the session account. Browser responses expose activity identities but never their owning `account_id`; the owner-only session response includes only the owned identity list required by the MY switcher and all-ID chat. Password hashes, phone numbers, age group, and gender live only in the account record.
 
 Existing installations are migrated without rewriting social foreign keys: every legacy user receives a deterministic account, remains the first activity identity, and existing friendship, room, message, and read references continue to point at the same `users.id`. SQLite and Supabase enforce the three-identity limit at the persistence boundary as well as in the application service.
 
@@ -128,15 +126,15 @@ An unbuffered request stream and a socket peek gate require the complete HTTP he
 
 Every completed request receives an `X-Request-ID` and emits one JSON log record with a normalized route, status, latency, request/response bytes, and a short SHA-256 user identifier. Query strings, bodies, headers, usernames, passwords, session/upload tokens, OAuth codes, messages, and signed URLs are excluded. A supplied request ID is reused only after a strict character/length check. Automated tests correlate the response header to the log and search the captured record for seeded secrets.
 
-`/live` is process liveness. `/ready` additionally probes the database and migration marker, persistence lag/error/pending work, durable-event outbox, request admission and body-reader capacity; Render routes health checks to readiness. `/metrics` is the JSON dashboard source for overall and normalized-route request p50/p95/p99/max, 5xx and byte counters, SSE queues/delivery, persistence, Shorts calls/quota/cache/circuit, and CPU/RSS/thread/FD saturation. The full SLO, alert thresholds and field-to-panel mapping are versioned in `OPERATIONS.md`.
+`/live` is process liveness. `/ready` additionally probes the database and migration marker, persistence lag/error/pending work, durable-event outbox, request admission and body-reader capacity; Render routes health checks to readiness. `/metrics` is the JSON dashboard source for overall and normalized-route request p50/p95/p99/max, 5xx and byte counters, SSE queues/delivery, persistence, and CPU/RSS/thread/FD saturation. The full SLO, alert thresholds and field-to-panel mapping are versioned in `OPERATIONS.md`.
 
-`python tests/operations_load.py --profile smoke` starts an isolated real HTTP server and exercises login, messenger/read paths, concurrent durable message sends, SSE fan-out, signed upload grant/transfer/complete, Shorts reads, and an injected database outage. It fails on message p95 above 300ms, read p95 above 500ms, realtime p95 above one second, 5xx above 0.1%, unexpected 4xx, queue drops, incomplete SSE fan-out, failed upload/readiness, or failure to remove readiness during the outage. GitHub Actions runs this after the unit suite; longer load/spike/soak profiles use the same fixture and output schema.
+`python tests/operations_load.py --profile smoke` starts an isolated real HTTP server and exercises login, messenger/read paths, concurrent durable message sends, SSE fan-out, signed upload grant/transfer/complete, and an injected database outage. It fails on message p95 above 300ms, read p95 above 500ms, realtime p95 above one second, 5xx above 0.1%, unexpected 4xx, queue drops, incomplete SSE fan-out, failed upload/readiness, or failure to remove readiness during the outage. GitHub Actions runs this after the unit suite; longer load/spike/soak profiles use the same fixture and output schema.
 
 ## Browser security boundary
 
 `ChatHandler.end_headers()` is the single security-header boundary for HTML, JSON, assets, uploads, redirects, SSE, and errors. It denies framing with both CSP `frame-ancestors 'none'` and `X-Frame-Options: DENY`, disables MIME sniffing, restricts referrers and sensitive browser capabilities, and uses `Cross-Origin-Opener-Policy: same-origin-allow-popups` so Google consent popups remain usable. HTTPS responses add one-year HSTS.
 
-The CSP defaults every resource to same-origin, blocks objects, and allowlists only Google Identity (`accounts.google.com`), client-side YouTube API reads (`www.googleapis.com`), Kakao form navigation, and privacy-enhanced YouTube embeds (`www.youtube-nocookie.com`). Inline styles remain allowed because the main document currently owns its stylesheet; scripts do not allow inline code or `unsafe-eval`. Authenticated upload responses additionally retain `Content-Security-Policy: sandbox`, which intersects with the common policy when a PDF is opened directly.
+The CSP defaults every resource to same-origin, blocks objects, and allowlists only Google Identity (`accounts.google.com`) and Kakao form navigation. Inline styles remain allowed because the main document currently owns its stylesheet; scripts do not allow inline code or `unsafe-eval`. Authenticated upload responses additionally retain `Content-Security-Policy: sandbox`, which intersects with the common policy when a PDF is opened directly.
 
 ## Static artifact and cache policy
 
@@ -150,11 +148,11 @@ The browser fixture `/assets/static-load-benchmark.html` fetches the production 
 
 ## Normalized persistence migration
 
-`persistence.py` owns the row-level SQLite schema and transaction boundary. Its tables mirror the Supabase schema: users and social accounts, friendships, rooms and members, messages, read positions, sessions, and Shorts feed/seen rows. Unique constraints enforce usernames, friend codes, social identities, friendship pairs, and message idempotency keys; foreign keys enforce membership references, and message paging uses a per-database insertion order with a room index.
+`persistence.py` owns the row-level SQLite schema and transaction boundary. Its active tables mirror the Supabase schema: users and social accounts, friendships, rooms and members, messages, read positions, and sessions. Unique constraints enforce usernames, friend codes, social identities, friendship pairs, and message idempotency keys; foreign keys enforce membership references, and message paging uses a per-database insertion order with a room index.
 
 Legacy `state_parts` are imported once under `BEGIN IMMEDIATE` and retained as rollback material. After that marker is committed, startup excludes every `messages:*` JSON part. Message pages are fetched from SQL on demand, and a message send synchronously inserts one row and updates its room in the same durable transaction. Normalized storage retains the complete message history; the 200-message limit applies only to legacy in-process compatibility data and API page bounds. The asynchronous compatibility writer updates room metadata only; it no longer serializes or rewrites a message array. `migrate_normalized.py` creates a consistent SQLite backup and compares source/target counts plus `foreign_key_check` results.
 
-The Supabase repository implements the same contract through PostgREST. Stable ordered pagination crosses the platform's per-response row limit for startup indexes, while messages remain cursor-paged and never join the startup load. Multi-row user/social-account, room/member/read-position, message/retention, session, and Shorts mutations execute inside `security definer` RPC transactions. Direct table access and RPC execution are revoked from `anon` and `authenticated`; only the server's `service_role` is granted access. The one-time import is retry-safe and records `app_migrations.normalized_state` only after all row batches succeed. The preserved `app_state` and a pre-cutover database snapshot are the rollback sources; after post-cutover writes begin, rollback requires restoring that snapshot because legacy JSON is intentionally no longer rewritten.
+The Supabase repository implements the same contract through PostgREST. Stable ordered pagination crosses the platform's per-response row limit for startup indexes, while messages remain cursor-paged and never join the startup load. Multi-row user/social-account, room/member/read-position, message/retention, and session mutations execute inside `security definer` RPC transactions. Direct table access and RPC execution are revoked from `anon` and `authenticated`; only the server's `service_role` is granted access. The one-time import is retry-safe and records `app_migrations.normalized_state` only after all row batches succeed. The preserved `app_state` and a pre-cutover database snapshot are the rollback sources; after post-cutover writes begin, rollback requires restoring that snapshot because legacy JSON is intentionally no longer rewritten.
 
 The reproducible scale probe is `python tests/storage_scale.py DATABASE --users 10000 --rooms 5000 --messages-per-room 200 --writes 100`. On local Windows on 2026-08-19, it created 1,000,000 message rows in 26.273 seconds. Opening the repository afterward took 3.378 ms with 27,766,784 bytes RSS; 100 durable message transactions measured p50 7.418 ms, p95 9.239 ms, and p99 16.189 ms. All 1,000,000 rows were present and `PRAGMA foreign_key_check` returned zero errors. This validates the issue targets of ready below 10 seconds and write p95 below 200 ms without loading message payloads into the process.
 
@@ -189,22 +187,6 @@ The accelerated path requires `Worker`, `createImageBitmap`, `OffscreenCanvas`, 
 The server does not trust the browser result. It reads a bounded 512KB prefix locally or with an object-storage Range request, verifies the declared MIME signature, parses JPEG SOF, PNG, GIF, WebP, or ISO-BMFF `ispe` dimensions, and applies the same 32-million-pixel/16,384-axis ceiling before completing an attachment grant. Profile and room bundles additionally require exact 1024×1024 and 128×128 WebP dimensions.
 
 The automated browser fixture is `/assets/image-worker-benchmark.html`. It creates a 4000×3000 JPEG in a fixture Worker, measures Long Tasks while converting it, verifies replacement-job cancellation, and sends a synthetic 50,000×50,000 PNG header through the metadata guard. Local Chromium measurement on 2026-08-19 completed the 12MP→2560×1920 conversion in 1,280.5ms with zero Long Tasks at or above 100ms; cancellation returned `AbortError`, the pixel bomb returned `image-dimensions-too-large`, and the console had no warnings or errors.
-
-## Shared Shorts catalog
-
-`/youtube/shorts` is a catalog-only read path. It never calls YouTube: it scans bounded pages from the shared `shorts_catalog`, filters IDs against the requesting user's normalized `shorts_seen` rows, stores an opaque catalog offset, and falls back to the built-in emergency set when no shared candidate is available. The response reports catalog age and whether expired stale data was used.
-
-`ShortsCatalogCollector` is the only YouTube caller. Every instance wakes on the same schedule, but `shorts_collection_state` grants one database-atomic lease across SQLite or Supabase. That row also rotates the next source query, reserves the shared daily quota before a call, records failures and last success, and holds the circuit-open deadline. Search collection uses a bounded three-attempt exponential backoff with jitter; 429/403 opens the circuit immediately and other failures open it after three consecutive attempts. Successful jobs upsert by `video_id`, refresh rank and expiry, and prune candidates not observed within the seven-day retention policy.
-
-Catalog rows remain available after TTL expiry so an external outage does not block the feed; fresh expiry ordering prefers recent rows, while retention gives deleted/private videos a bounded removal policy. `/metrics.shorts_catalog` exposes item/fresh counts, catalog age, request hit/stale/emergency counts, quota used, collection latency, failures, lease skips and circuit status without logging API keys, queries, or video payloads.
-
-### Shorts viewport virtualization
-
-The client may retain up to 200 catalog items as lightweight data, but renders a fixed five-card window. Cards are absolutely positioned inside one logical-height feed, so the active index is `round(scrollTop / viewportHeight)` and every scroll frame performs constant-time index arithmetic instead of scanning card rectangles. Scroll work is coalesced through one `requestAnimationFrame`; an idle timer snaps to the selected logical offset without native snap targets being removed underneath the browser.
-
-Only the active card owns a YouTube iframe. Frames are created after a card becomes active and removed when it leaves the active slot, the user leaves Shorts, or the document becomes hidden. This avoids both background audio and cross-origin players becoming scroll anchors. The feed, cards, and frames explicitly opt out of scroll anchoring, and window replacement preserves the current scroll offset.
-
-The 200-item browser fixture held exactly five articles and one iframe at the beginning, during forward and reverse wheel scrolling, and at items 195–199. The logical order stayed stable after reversing direction, the final scroll offset snapped to item 199, leaving Shorts released the remaining iframe, and the browser console contained no warnings or errors. The regression test also rejects `getBoundingClientRect` use in the Shorts module and enforces a maximum window size of five.
 
 ## Multi-instance consistency and realtime recovery
 

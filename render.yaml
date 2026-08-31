@@ -52,12 +52,6 @@ services:
         value: "0.1"
       - key: PRESENCE_TTL_SECONDS
         value: "45"
-      - key: SHORTS_COLLECTION_INTERVAL_SECONDS
-        value: "1800"
-      - key: SHORTS_DAILY_QUOTA_BUDGET
-        value: "5000"
-      - key: YOUTUBE_API_KEY
-        sync: false
       - key: SOCIAL_DEMO_LOGIN_ENABLED
         value: "false"
       - key: REQUIRE_SUPABASE

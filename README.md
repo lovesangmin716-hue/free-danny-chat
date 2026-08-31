@@ -1,6 +1,6 @@
 # Colorless
 
-친구와 1:1로 대화하고 YouTube Shorts를 공유할 수 있는 모바일형 메신저 MVP입니다. 별도 프레임워크 없이 Python 표준 라이브러리 서버와 단일 HTML 클라이언트로 동작합니다.
+여러 활동 ID로 친구·그룹·야구 티켓 채팅을 이용할 수 있는 모바일형 메신저 MVP입니다. 별도 프레임워크 없이 Python 표준 라이브러리 서버와 단일 HTML 클라이언트로 동작합니다.
 
 ## 주요 기능
 
@@ -10,7 +10,7 @@
 - 1:1 채팅, 읽음 상태, 접속 상태, 실시간 이벤트
 - 이미지, PDF, 텍스트·CSV·Markdown·RTF·ZIP 및 Office 문서 첨부와 채팅 입력창 붙여넣기(이미지 원본은 최대 50MB까지 선택 가능하며 브라우저에서 WebP로 줄인 뒤 8MB 이하만 전송, 나머지 파일은 최대 8MB)
 - 픽셀 아바타 편집과 프로필 사진 업로드(픽셀 원본은 별도 3KB RGB 리소스로 저장·편집기를 열 때만 조회하고, 목록은 immutable 버전 썸네일만 지연 로딩)
-- YouTube Data API v3 기반 Shorts 피드와 채팅 공유
+- 계정당 최대 3개 활동 ID와 전체 ID 채팅 모아보기
 - 로컬 SQLite 또는 Supabase를 이용한 증분 상태 저장
 - Render Blueprint 배포 설정과 분리된 `/live`·`/ready`, 구조화 로그·운영 메트릭
 
@@ -87,19 +87,14 @@ cp .env.example .env
 | `EVENT_POLL_INTERVAL_SECONDS` | `0.1` | 공유 durable event log를 소비하는 간격 |
 | `PRESENCE_TTL_SECONDS` | `45` | 서버 장애 후 공유 presence lease가 자동 만료되는 시간(최대 60초) |
 | `INSTANCE_ID` | 자동 생성 | 이벤트 발생 서버와 presence lease를 구분하는 인스턴스 식별자 |
-| `SHORTS_COLLECTION_INTERVAL_SECONDS` | `1800` | 공유 YouTube catalog 수집 작업 사이의 최소 간격 |
-| `SHORTS_COLLECTION_LEASE_SECONDS` | `120` | 다중 인스턴스 중 한 수집기만 실행하게 하는 lease 수명 |
-| `SHORTS_DAILY_QUOTA_BUDGET` | `5000` | 모든 인스턴스가 공유하는 일일 YouTube 수집 quota 상한 |
-| `SHORTS_CATALOG_TTL_SECONDS` | `21600` | 최근 수집 catalog를 fresh로 간주하는 시간 |
-| `SHORTS_CATALOG_RETENTION_SECONDS` | `604800` | 장애 시 stale 제공 후 오래된 후보를 제거하는 보존 기간 |
 | `SUPABASE_URL` | 미설정 | Supabase 프로젝트 URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | 미설정 | 서버 전용 Supabase service role key |
 | `REQUIRE_SUPABASE` | `false` | `true`이면 Supabase 설정이 없을 때 서버 시작을 중단해 임시 파일 저장을 방지 |
 | `LOCAL_SIGNUP_ENABLED` | `true` | 신규 로컬 회원가입과 휴대폰 인증 API 노출 여부. SMS 발송 연동 전 운영에서는 `false` |
 
-`SUPABASE_URL`과 `SUPABASE_SERVICE_ROLE_KEY`를 모두 설정하면 Supabase와 private `chat-uploads` 버킷을 사용합니다. 브라우저는 객체 하나에 한정된 signed upload URL로 저장소에 직접 전송하고, 서버는 크기·MIME·magic bytes를 확인한 뒤에만 메시지 첨부를 허용합니다. 다운로드는 방 접근 권한을 확인한 뒤 기본 60초 signed URL로 redirect하므로 정상 파일 바이트는 앱 서버를 지나지 않습니다. Supabase signed upload token 자체의 유효기간은 플랫폼이 정한 2시간이며, 앱의 pending grant는 기본 10분 뒤 만료되어 첨부에 사용할 수 없습니다. 최신 [`src/colorless/database/supabase-schema.sql`](src/colorless/database/supabase-schema.sql)은 사용자·관계·방·멤버·메시지·읽음 위치·세션·Shorts 상태의 정규화 테이블과 필수 제약/인덱스를 생성하며, 전환 검증과 rollback 동안 기존 `app_state`도 보존합니다.
+`SUPABASE_URL`과 `SUPABASE_SERVICE_ROLE_KEY`를 모두 설정하면 Supabase와 private `chat-uploads` 버킷을 사용합니다. 브라우저는 객체 하나에 한정된 signed upload URL로 저장소에 직접 전송하고, 서버는 크기·MIME·magic bytes를 확인한 뒤에만 메시지 첨부를 허용합니다. 다운로드는 방 접근 권한을 확인한 뒤 기본 60초 signed URL로 redirect하므로 정상 파일 바이트는 앱 서버를 지나지 않습니다. Supabase signed upload token 자체의 유효기간은 플랫폼이 정한 2시간이며, 앱의 pending grant는 기본 10분 뒤 만료되어 첨부에 사용할 수 없습니다. 최신 [`src/colorless/database/supabase-schema.sql`](src/colorless/database/supabase-schema.sql)은 사용자·관계·방·멤버·메시지·읽음 위치·세션의 정규화 테이블과 필수 제약/인덱스를 생성하며, 전환 검증과 rollback 동안 기존 `app_state`도 보존합니다.
 
-서버는 문서, JSON, 정적 asset, 인증된 업로드를 포함한 모든 HTTP 응답에 CSP, MIME sniffing 차단, framing 차단, Referrer Policy, Permissions Policy를 공통 적용합니다. CSP는 자체 리소스와 Google Identity/YouTube에 필요한 origin만 허용합니다. HTTPS로 전달된 운영 요청에는 HSTS도 추가되므로 Render 앞단에서 `X-Forwarded-Proto: https`가 유지되어야 합니다.
+서버는 문서, JSON, 정적 asset, 인증된 업로드를 포함한 모든 HTTP 응답에 CSP, MIME sniffing 차단, framing 차단, Referrer Policy, Permissions Policy를 공통 적용합니다. CSP는 자체 리소스와 Google Identity에 필요한 origin만 허용합니다. HTTPS로 전달된 운영 요청에는 HSTS도 추가되므로 Render 앞단에서 `X-Forwarded-Proto: https`가 유지되어야 합니다.
 
 두 변수가 없으면 상태는 `.colorless-data/chat_state.json.sqlite3`, 첨부 파일은 `.colorless-data/uploads/`에 저장됩니다. 다만 새 데이터 디렉터리가 없고 기존 `outputs/chat-app`에 로컬 DB나 업로드가 있으면 데이터 유실을 피하기 위해 그 위치를 자동으로 이어서 사용합니다. 이 fallback은 요청을 64KB씩 `.part` 파일로 기록하고 magic bytes와 정확한 크기를 검증한 뒤 atomic rename하며, 다운로드의 단일 `Range` 요청과 backpressure를 지원합니다. 런타임 상태와 업로드 파일은 `.gitignore`에 포함되어 있습니다.
 
@@ -121,14 +116,13 @@ Supabase 운영 전환은 쓰기를 잠근 유지보수 창에서 진행합니�
 
 검증 전에 실패하면 마커를 기록하지 않으므로 원인을 수정한 뒤 가져오기를 다시 실행할 수 있습니다. 이전 서버로 rollback할 때 새 서버가 아직 쓰기를 받지 않았다면 보존된 `app_state`를 그대로 사용합니다. 쓰기를 다시 연 뒤 rollback해야 한다면 구형 `app_state`는 새 변경을 포함하지 않으므로 서버를 내리고 전환 직전 Supabase 백업을 복원해야 합니다.
 
-### Google 로그인과 YouTube Shorts
+### Google 로그인
 
 | 변수 | 설명 |
 | --- | --- |
 | `GOOGLE_CLIENT_ID` | Google OAuth 웹 클라이언트 ID |
 | `GOOGLE_CLIENT_SECRET` | 서버 측 OAuth 코드 흐름에 사용하는 클라이언트 보안 비밀 |
 | `GOOGLE_REDIRECT_URI` | 선택 사항. 기본값은 `<PUBLIC_BASE_URL>/auth/google/callback` |
-| `YOUTUBE_API_KEY` | YouTube Data API v3용 서버 API 키 |
 
 Google Cloud Console의 승인된 JavaScript 원본에 로컬 주소를 등록합니다.
 
@@ -148,10 +142,6 @@ http://localhost:8765/auth/google/callback
 ```
 
 운영에서는 `PUBLIC_BASE_URL`을 실제 HTTPS origin으로 명시해야 합니다. OAuth 시작 시 Google과 Kakao 모두 짧은 수명의 HttpOnly/SameSite=Lax state 쿠키를 발급하며, callback은 해당 쿠키 일치와 서버 state의 일회성 소비를 모두 요구합니다. callback 성공·실패 후에는 state 쿠키가 즉시 만료됩니다.
-
-YouTube API 키에는 YouTube Data API v3만 허용하고 적절한 할당량과 키 제한을 적용하세요. 키는 브라우저로 전달되지 않습니다.
-
-YouTube 호출은 사용자 `/youtube/shorts` 요청에서 실행되지 않습니다. 백그라운드 수집기가 공유 `shorts_catalog`에 후보를 적재하고, 분산 lease와 공유 quota 행으로 여러 인스턴스의 중복 수집을 막습니다. 사용자 요청은 catalog 조회와 개인 `shorts_seen` 필터만 수행합니다. 429/403은 circuit을 즉시 열고, 일반 장애는 세 번 연속 실패하면 circuit을 열며, 그동안 최근 성공 catalog를 최대 7일 정책으로 stale 제공하고 이후 제거합니다. `/metrics`의 `shorts_catalog`에서 catalog age, fresh/stale hit, quota, 실패 및 circuit 상태를 확인할 수 있습니다.
 
 ### Kakao 로그인
 
@@ -222,7 +212,7 @@ Render Blueprint는 `REQUIRE_SUPABASE=true`로 실행됩니다. Supabase 환경 
 │   └── package.json        # 프런트엔드 빌드 의존성
 ├── src/colorless/
 │   ├── database/           # Supabase 스키마
-│   ├── http/               # 인증·메시징·쇼츠·업로드 HTTP 기능 라우트
+│   ├── http/               # 인증·메시징·티켓·업로드 HTTP 기능 라우트
 │   ├── web/                # 패키지에 포함되는 HTML과 빌드 산출물
 │   │   └── assets/js/      # minify된 main·signup·Worker 번들
 │   ├── __main__.py         # `python -m colorless` 진입점
@@ -234,7 +224,6 @@ Render Blueprint는 `REQUIRE_SUPABASE=true`로 실행됩니다. Supabase 환경 
 │   ├── persistence.py      # SQLite와 Supabase 저장소
 │   ├── realtime.py         # durable event와 다중 인스턴스 replay
 │   ├── runtime.py          # 세션, 업로드, presence 런타임 저장소
-│   ├── shorts.py           # YouTube Shorts catalog 수집기
 │   ├── state.py            # 채팅 상태·인덱스·저장소 조정
 │   ├── utils.py            # 식별자, 이미지, 쿠키 검증 유틸리티
 │   ├── web_resources.py    # 정적 리소스 압축·fingerprint 로더
@@ -274,7 +263,7 @@ python tests/bootstrap_scale.py --count 1000 --iterations 20
 python tests/operations_load.py --profile smoke
 ```
 
-테스트는 채팅방별 이벤트 권한, 읽음 상태 중복 알림 방지, 첨부 파일 접근 권한, 세션 만료와 재시작 복원, 요청 제한, 증분 상태 저장, 접속 상태 인덱스, 외부 API 요청 병합을 확인합니다. `static_budget.py`는 TTF/OTF 포함, stale fingerprint, JS/CSS/font/image/HTML 용량 초과를 CI에서 차단합니다. `multi_instance.py`는 임시 공유 DB에 실제 서버 두 개를 띄워 서버 간 메시지 전달, 동일 `client_message_id` 재시도, 한 서버 중단 중 발생한 메시지의 cursor replay를 검사합니다. `bootstrap_scale.py`는 친구와 방을 각각 1,000개 만든 뒤 최초 30개 응답의 p95·gzip 크기와 전체 cursor 순회의 중복·누락을 검사합니다. `operations_load.py`의 smoke profile은 로그인, 메시지, SSE, 업로드, Shorts, DB 장애를 실제 HTTP로 실행하고 SLO 회귀를 CI에서 차단합니다. 운영 SLO와 load/soak/spike 절차는 [`OPERATIONS.md`](OPERATIONS.md)를 참고하세요. 문법 검사와 실행 중인 서버의 상태 확인은 다음 명령을 사용하세요.
+테스트는 채팅방별 이벤트 권한, 읽음 상태 중복 알림 방지, 첨부 파일 접근 권한, 세션 만료와 재시작 복원, 요청 제한, 증분 상태 저장, 접속 상태 인덱스, 외부 API 요청 병합을 확인합니다. `static_budget.py`는 TTF/OTF 포함, stale fingerprint, JS/CSS/font/image/HTML 용량 초과를 CI에서 차단합니다. `multi_instance.py`는 임시 공유 DB에 실제 서버 두 개를 띄워 서버 간 메시지 전달, 동일 `client_message_id` 재시도, 한 서버 중단 중 발생한 메시지의 cursor replay를 검사합니다. `bootstrap_scale.py`는 친구와 방을 각각 1,000개 만든 뒤 최초 30개 응답의 p95·gzip 크기와 전체 cursor 순회의 중복·누락을 검사합니다. `operations_load.py`의 smoke profile은 로그인, 메시지, SSE, 업로드, DB 장애를 실제 HTTP로 실행하고 SLO 회귀를 CI에서 차단합니다. 운영 SLO와 load/soak/spike 절차는 [`OPERATIONS.md`](OPERATIONS.md)를 참고하세요. 문법 검사와 실행 중인 서버의 상태 확인은 다음 명령을 사용하세요.
 
 대용량 이미지 경로는 서버 실행 후 `/assets/image-worker-benchmark.html`에서 확인할 수 있습니다. 이 자동 fixture는 Worker에서 12MP JPEG 변환, 100ms 이상 Long Task, 재선택 취소, 과도한 픽셀 헤더 거부를 한 번에 검사합니다. Worker 기능이 없는 브라우저는 12MP의 더 낮은 fallback 상한을 적용합니다.
 
