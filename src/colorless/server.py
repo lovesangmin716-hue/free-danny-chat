@@ -200,7 +200,12 @@ from .runtime import (
 )
 from .cache import BoundedTTLCache
 from .integrations import OUTBOUND_HTTP_CLIENT, fetch_bytes, fetch_json, supabase_headers, verify_google_id_token_credential
-from .persistence import ConcurrentUpdateError, NormalizedSqliteRepository, NormalizedSupabaseRepository
+from .persistence import (
+    ConcurrentUpdateError,
+    NormalizedSqliteRepository,
+    NormalizedSupabaseRepository,
+    SupabaseRequestError,
+)
 from .state import StateStore
 from .realtime import DurableEventBroker
 from .application import ApplicationServices, CommandFailure, CommandOutcome
@@ -226,6 +231,31 @@ SUBSCRIBERS: dict[queue.Queue, str] = {}
 SUBSCRIBERS_BY_USERNAME: dict[str, set[queue.Queue]] = {}
 SUBSCRIBERS_LOCK = threading.Lock()
 SSE_CONNECTION_SLOTS = threading.BoundedSemaphore(MAX_SSE_CONNECTIONS)
+
+
+def is_retryable_sqlite_operational_error(error: sqlite3.OperationalError) -> bool:
+    """Identify transient SQLite lock and I/O failures without masking SQL bugs."""
+    error_code = getattr(error, "sqlite_errorcode", None)
+    if isinstance(error_code, int):
+        primary_code = error_code & 0xFF
+        retryable_codes = {
+            getattr(sqlite3, "SQLITE_BUSY", 5),
+            getattr(sqlite3, "SQLITE_LOCKED", 6),
+            getattr(sqlite3, "SQLITE_IOERR", 10),
+        }
+        if primary_code in retryable_codes:
+            return True
+    message = str(error).casefold()
+    return any(
+        fragment in message
+        for fragment in (
+            "database is locked",
+            "database table is locked",
+            "database schema is locked",
+            "database is busy",
+            "disk i/o error",
+        )
+    )
 
 
 
@@ -462,10 +492,31 @@ class ChatHandler(
         self._response_bytes = 0
         self._safe_user_id = ""
         try:
-            super().handle_one_request()
+            try:
+                super().handle_one_request()
+            except (TimeoutError, ConnectionError, SupabaseRequestError):
+                self.send_storage_unavailable()
+            except sqlite3.OperationalError as error:
+                if not is_retryable_sqlite_operational_error(error):
+                    raise
+                self.send_storage_unavailable()
         finally:
             if getattr(self, "raw_requestline", b""):
                 self._record_completed_request()
+
+    def send_storage_unavailable(self) -> None:
+        """Turn transient repository failures into a retryable HTTP response."""
+        self.close_connection = True
+        if self._response_status:
+            return
+        try:
+            self.send_json(
+                {"error": "저장소 연결이 지연되고 있습니다. 잠시 후 다시 시도해 주세요."},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                headers={"Retry-After": "5"},
+            )
+        except (TimeoutError, ConnectionError, OSError):
+            pass
 
     def _record_completed_request(self) -> None:
         latency_ms = (time.perf_counter() - self._request_started_at) * 1000
@@ -636,6 +687,22 @@ class ChatHandler(
             self.send_json(
                 {"error": "다른 서버에서 상태가 변경되었습니다. 최신 상태로 다시 시도해 주세요."},
                 HTTPStatus.CONFLICT,
+            )
+            return
+        except (TimeoutError, ConnectionError, SupabaseRequestError):
+            self.send_json(
+                {"error": "저장소 연결이 지연되고 있습니다. 잠시 후 다시 시도해 주세요."},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                headers={"Retry-After": "5"},
+            )
+            return
+        except sqlite3.OperationalError as error:
+            if not is_retryable_sqlite_operational_error(error):
+                raise
+            self.send_json(
+                {"error": "저장소 연결이 지연되고 있습니다. 잠시 후 다시 시도해 주세요."},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                headers={"Retry-After": "5"},
             )
             return
         self.complete_command(outcome)
@@ -1128,6 +1195,18 @@ class ChatHandler(
             if user is None:
                 return
             self.create_message(user)
+            return
+        if path == "/messages/edit":
+            user = self.require_auth()
+            if user is None:
+                return
+            self.edit_message(user)
+            return
+        if path == "/messages/reactions":
+            user = self.require_auth()
+            if user is None:
+                return
+            self.toggle_message_reaction(user)
             return
         if path == "/messages/delete":
             user = self.require_auth()

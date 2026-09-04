@@ -5,7 +5,8 @@ import { addCustomPaletteColor, buildProfileEditor, cancelProfileImageCrop, clea
 import { clearChatAttachment, handlePastedChatAttachment, openAttachmentPicker, resetAttachmentSwipe, selectChatAttachment, showAttachmentGuide, updateAttachmentSwipe } from "./attachments.js";
 import { toggleVoiceRecording } from "./voice.js";
 import { closeRoomSettings, leaveCurrentRoom, openRoomSettings, removeRoomPhoto, saveRoomSettings, uploadRoomPhoto } from "./room-settings.js";
-import { beginMessageReadSwipe, closeChatRoom, closeMessageReadMenu, finishMessageReadSwipe, retryDelay, scheduleChatVirtualRender, sendChatMessage, suppressClickAfterMessageSwipe, suppressMessageReadContextMenu, updateMessageReadSwipe, updatePresence } from "./chat.js";
+import { closeChatRoom, scheduleChatVirtualRender, sendChatMessage, updatePresence } from "./chat.js";
+import { beginMessageReadSwipe, closeMessageReadMenu, finishMessageReadSwipe, handleChatViewportChange, handleComposerInput, handleComposerKeydown, handleMessageListClick, initializeMessageInteractions, suppressClickAfterMessageSwipe, suppressMessageReadContextMenu, updateMessageReadSwipe } from "./message-interactions.js";
 import { beginWorkModeComposition, finishWorkModeComposition, handleWorkModeScreenTap, handleWorkModeShortcut, markWorkModeMessageRead, sendWorkModeReply, toggleWorkMode, workModeReplyForm, workModeReplyInput, workModeScreen, workModeToggle } from "./work-mode.js";
 import { closeListSearch, handleContextActionPrimary, openListSearch, updateHeaderSearch } from "./action-bar.js";
 import { addFriend, closeDirectory, closeNewChat, createNewChat, loadFriendsPage, loadOlderChatMessages, loadRoomsPage, openDirectory, openNewChat, renderNewChatMemberList, setActiveList, startApp, syncNewChatCreateButton, updateNewChatMemberSelection } from "./app.js";
@@ -71,6 +72,7 @@ roomSettingsSheet.addEventListener("click", (event) => {
 chatMessageForm.addEventListener("submit", sendChatMessage);
 chatMessageList.addEventListener("scroll", () => {
   finishMessageReadSwipe();
+  handleChatViewportChange();
   if (state.chatVirtualAdjusting) return;
   scheduleChatVirtualRender();
   if (chatMessageList.scrollTop < 80) void loadOlderChatMessages();
@@ -82,6 +84,7 @@ chatMessageList.addEventListener("pointercancel", finishMessageReadSwipe);
 chatMessageList.addEventListener("lostpointercapture", finishMessageReadSwipe);
 chatMessageList.addEventListener("contextmenu", suppressMessageReadContextMenu);
 chatMessageList.addEventListener("click", suppressClickAfterMessageSwipe, true);
+chatMessageList.addEventListener("click", handleMessageListClick);
 document.addEventListener("click", (event) => {
   if (!messageReadMenu.contains(event.target)) closeMessageReadMenu();
 });
@@ -153,12 +156,9 @@ chatAttachmentInput.addEventListener("change", () => {
   void selectChatAttachment(file);
 });
 chatRoom.addEventListener("paste", handlePastedChatAttachment);
-chatMessageInput.addEventListener("input", () => {
-  if (state.selectedRoomId) state.chatDrafts[state.selectedRoomId] = chatMessageInput.value;
-});
-chatMessageInput.addEventListener("compositionend", () => {
-  if (state.selectedRoomId) state.chatDrafts[state.selectedRoomId] = chatMessageInput.value;
-});
+chatMessageInput.addEventListener("input", handleComposerInput);
+chatMessageInput.addEventListener("compositionend", handleComposerInput);
+chatMessageInput.addEventListener("keydown", handleComposerKeydown);
 shortShareSend.addEventListener("click", handleContextActionPrimary);
 let shortShareTouch = null;
 shortShareBar.addEventListener("touchstart", (event) => {
@@ -179,7 +179,10 @@ shortShareBar.addEventListener("touchmove", (event) => {
 }, { passive: false });
 shortShareBar.addEventListener("touchend", () => { shortShareTouch = null; }, { passive: true });
 shortShareBar.addEventListener("touchcancel", () => { shortShareTouch = null; }, { passive: true });
-document.addEventListener("visibilitychange", updatePresence);
+document.addEventListener("visibilitychange", () => {
+  updatePresence();
+  handleChatViewportChange();
+});
 chatsTab.addEventListener("click", () => setActiveList("chats"));
 friendsTab.addEventListener("click", () => setActiveList("friends"));
 myTab.addEventListener("click", () => setActiveList("my"));
@@ -366,6 +369,8 @@ profileSheet.addEventListener("click", (event) => {
     closeProfileEditor();
   }
 });
+
+initializeMessageInteractions();
 
 if (window.location.protocol === "file:") {
   showAuth();

@@ -318,9 +318,21 @@ class MessagingRoutesMixin:
         self.run_json_command(lambda payload: self.context.APPLICATION.create_direct_room(user, payload))
 
     def create_message(self, user: dict) -> None:
+        if not self.allow_request(f"message-create:{user['username']}", 120, 60):
+            return
         self.run_json_command(
             lambda payload: self.context.APPLICATION.create_message(user, payload, self.message_attachment)
         )
+
+    def edit_message(self, user: dict) -> None:
+        if not self.allow_request(f"message-edit:{user['username']}", 60, 60):
+            return
+        self.run_json_command(lambda payload: self.context.APPLICATION.edit_message(user, payload))
+
+    def toggle_message_reaction(self, user: dict) -> None:
+        if not self.allow_request(f"message-reaction:{user['username']}", 180, 60):
+            return
+        self.run_json_command(lambda payload: self.context.APPLICATION.toggle_message_reaction(user, payload))
 
     def delete_message(self, user: dict) -> None:
         self.run_json_command(lambda payload: self.context.APPLICATION.delete_message(user, payload))

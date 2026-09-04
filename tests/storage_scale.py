@@ -70,6 +70,10 @@ def seed(database_path: Path, users: int, rooms: int, messages_per_room: int) ->
                 "INSERT OR REPLACE INTO rooms(id, kind, created_by, updated_at, data_json) VALUES(?, ?, ?, ?, ?)",
                 (room_id, "direct", sender_name, room["updated_at"], json.dumps(room, separators=(",", ":"))),
             )
+            database.execute(
+                "INSERT OR REPLACE INTO room_members(room_id, user_id) VALUES(?, ?)",
+                (room_id, sender_id),
+            )
             rows = []
             for message_index in range(messages_per_room):
                 message_id = f"msg_{room_index:08d}_{message_index:04d}"
@@ -105,8 +109,9 @@ def main() -> int:
     for index in range(args.writes):
         message = {"id": f"msg_probe_{time.time_ns()}_{index}", "room_id": room_id, "username": "user00000000", "text": "probe", "timestamp": f"2026-01-02T00:00:{index % 60:02d}+00:00"}
         started = time.perf_counter()
-        if not repository.insert_message(message, sender_id, room, 200):
-            raise RuntimeError("probe insert failed")
+        inserted, error = repository.insert_message(message, sender_id, room, 200)
+        if not inserted:
+            raise RuntimeError(f"probe insert failed: {error or 'unknown error'}")
         latencies.append((time.perf_counter() - started) * 1000)
 
     counts = repository.verify()

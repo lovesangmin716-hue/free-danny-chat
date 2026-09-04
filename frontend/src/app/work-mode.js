@@ -2,6 +2,8 @@
 
 import { createAvatar, formatTime, registerCoreHooks, requestAction, state } from "./core.js";
 import { createClientMessageId, postChatMessageWithRetry } from "./chat.js";
+import { createMessageSubmitGuard } from "./platform/submit-guard.js";
+import { formatVoiceDuration } from "./voice.js";
 
 // Full-screen, keyboard-first incoming message view.
 const workModeToggle = document.getElementById("work-mode-toggle");
@@ -20,6 +22,7 @@ let workModeFeedbackTimer = null;
 let workModeComposing = false;
 let workModeTapTimer = null;
 const WORK_MODE_DOUBLE_TAP_MS = 300;
+const workModeReplyGuard = createMessageSubmitGuard(createClientMessageId);
 
 function cancelWorkModeTap() {
   window.clearTimeout(workModeTapTimer);
@@ -132,17 +135,23 @@ function handleWorkModeScreenTap(event) {
 
 async function markWorkModeMessageRead() {
   const item = state.workModeMessage;
+  const authEpoch = state.authEpoch;
   if (!state.workModeEnabled || !item?.message?.id || document.hidden) return;
   if (workModeReadMessageId === item.message.id) return;
   workModeReadMessageId = item.message.id;
   try {
-    await requestAction("work-mode.mark-read", "/rooms/read", {
+    const payload = await requestAction("work-mode.mark-read", "/rooms/read", {
       method: "POST",
       body: JSON.stringify({ roomId: item.room.id }),
     });
+    if (state.authEpoch !== authEpoch || state.workModeMessage !== item) return;
     const room = state.roomById.get(item.room.id);
-    if (room) room.unread_count = 0;
+    if (room?.last_message?.id === payload.room?.last_message?.id) {
+      room.unread_count = 0;
+      room._local_unread_known = true;
+    }
   } catch (_) {
+    if (state.authEpoch !== authEpoch) return;
     if (state.workModeMessage?.message?.id === item.message.id) workModeReadMessageId = "";
   }
 }
@@ -173,8 +182,18 @@ async function sendWorkModeReply(event) {
   event.preventDefault();
   if (workModeComposing) return;
   const item = state.workModeMessage;
+  const authEpoch = state.authEpoch;
   const text = workModeReplyInput.value.trim();
   if (!item?.room?.id || !text || state.workModeSending) return;
+  const submission = workModeReplyGuard.reserve({
+    authEpoch,
+    identityId: item.room.viewer_identity_id
+      || item.room.viewer_identity?.id
+      || state.session?.active_identity_id
+      || state.session?.user?.id,
+    roomId: item.room.id,
+    text,
+  });
   state.workModeSending = true;
   workModeReplyInput.disabled = true;
   try {
@@ -182,8 +201,10 @@ async function sendWorkModeReply(event) {
       roomId: item.room.id,
       text,
       attachment: null,
-      clientMessageId: createClientMessageId(),
+      clientMessageId: submission.clientMessageId,
     });
+    workModeReplyGuard.confirm(submission);
+    if (state.authEpoch !== authEpoch || state.workModeMessage !== item) return;
     const room = state.roomById.get(item.room.id);
     if (room) {
       room.last_message = sent;
@@ -192,11 +213,14 @@ async function sendWorkModeReply(event) {
     workModeReplyInput.value = "";
     showWorkModeFeedback("전송됨");
   } catch (error) {
+    if (state.authEpoch !== authEpoch || error?.name === "AbortError") return;
     showWorkModeFeedback(error.message);
   } finally {
-    state.workModeSending = false;
-    workModeReplyInput.disabled = false;
-    workModeReplyInput.focus({ preventScroll: true });
+    if (state.authEpoch === authEpoch) {
+      state.workModeSending = false;
+      workModeReplyInput.disabled = false;
+      workModeReplyInput.focus({ preventScroll: true });
+    }
   }
 }
 
@@ -219,7 +243,22 @@ function finishWorkModeComposition() {
   workModeComposing = false;
 }
 
-registerCoreHooks({ syncWorkModeVisibility });
+function resetWorkMode() {
+  cancelWorkModeTap();
+  window.clearTimeout(workModeFeedbackTimer);
+  workModeFeedbackTimer = null;
+  workModeReadMessageId = "";
+  workModeComposing = false;
+  workModeReplyGuard.clear();
+  state.workModeMessage = null;
+  state.workModeSending = false;
+  workModeReplyInput.value = "";
+  workModeReplyInput.disabled = false;
+  workModeFeedback.textContent = "";
+  renderWorkModeMessage();
+}
+
+registerCoreHooks({ resetWorkMode, syncWorkModeVisibility });
 
 export {
   beginWorkModeComposition,

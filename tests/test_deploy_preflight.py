@@ -59,6 +59,12 @@ class DeploymentPreflightTestCase(unittest.TestCase):
             [{"id": "account-1"}],
             [{"id": "user-1", "account_id": "account-1"}],
             [{"token_hash": "hash", "account_id": "account-1", "active_user_id": "user-1"}],
+            [],
+            {"error": "not_found"},
+            {"error": "not_found"},
+            {"error": "not_found"},
+            {"error": "not_found"},
+            {"__colorless_preflight_missing_room__": 0},
             {
                 "users_without_account": 0,
                 "accounts_over_identity_limit": 0,
@@ -68,13 +74,39 @@ class DeploymentPreflightTestCase(unittest.TestCase):
         ]
         with mock.patch.object(deploy_preflight, "supabase_request", side_effect=responses) as request:
             self.assertEqual(deploy_preflight.validate_remote_supabase(), [])
-        self.assertEqual(request.call_count, 4)
+        self.assertEqual(request.call_count, 10)
+        self.assertEqual(
+            request.call_args_list[4].args[0],
+            "/rest/v1/rpc/colorless_insert_message_v2",
+        )
+        self.assertEqual(
+            request.call_args_list[5].args[0],
+            "/rest/v1/rpc/colorless_edit_message",
+        )
+        self.assertEqual(
+            request.call_args_list[6].args[0],
+            "/rest/v1/rpc/colorless_toggle_message_reaction",
+        )
+        self.assertEqual(
+            request.call_args_list[7].args[0],
+            "/rest/v1/rpc/colorless_delete_message",
+        )
+        self.assertEqual(
+            request.call_args_list[8].args[0],
+            "/rest/v1/rpc/colorless_unread_counts",
+        )
 
     def test_remote_schema_integrity_blocks_invalid_sessions(self) -> None:
         responses = [
             [],
             [],
             [],
+            [],
+            {"error": "not_found"},
+            {"error": "not_found"},
+            {"error": "not_found"},
+            {"error": "not_found"},
+            {"__colorless_preflight_missing_room__": 0},
             {
                 "users_without_account": 0,
                 "accounts_over_identity_limit": 0,

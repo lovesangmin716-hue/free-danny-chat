@@ -1,12 +1,14 @@
 "use strict";
 
-import { appStore, chatList, chatRoom, chatRoomAvatar, chatRoomPresence, createAvatar, formatTime, friendList, getDisplayName, realtimeEvents, requestAction, roomSettingsSheet, setAppStatus, shortShareList, state, userDirectory } from "./core.js";
+import { appStore, chatList, chatRoom, chatRoomAvatar, chatRoomPresence, clearChatDraft, createAvatar, formatTime, friendList, getDisplayName, realtimeEvents, requestAction, roomSettingsSheet, setAppStatus, shortShareList, state, userDirectory } from "./core.js";
 import { renderRoomSettings } from "./room-settings.js";
-import { addMessageReader, appendChatMessageNode, appendChatMessageState, applyMessageReaderToCurrentMessages, closeChatRoom, loadChatMessages, openChatRoom, openChatRoomAtMessage, removeChatMessageState, renderAllChatMessages, renderChatRoom, scheduleRoomRead, updatePresence } from "./chat.js";
+import { addMessageReader, appendChatMessageNode, appendChatMessageState, applyMessageReaderToCurrentMessages, applyUpdatedChatMessage, closeChatRoom, loadChatMessages, openChatRoom, openChatRoomAtMessage, removeChatMessageState, renderAllChatMessages, renderChatRoom, scheduleRoomRead, updatePresence } from "./chat.js";
 import { dismissWorkModeMessage, showWorkModeMessage, workModeMessage } from "./work-mode.js";
 import { renderContextActionBar, renderFriendActionBar, selectFriendForActionBar } from "./action-bar.js";
 import { addFriend, loadFriendsPage, loadMessenger, loadRoomsPage, openNewChat, recordSyncRevision, startLiveSync, stopLiveSync, syncLiveState } from "./app.js";
 import { ColorlessPlatform } from "./platform/index.js";
+import { mergeAuthoritativeRoomSnapshot, mergeRealtimeRoomSnapshot, unreadAfterMessageCreated } from "./platform/room-snapshots.js";
+import { applyReactionEvent, canMarkSelectedRoomRead, noteIncomingMessage, updateReplyReferences } from "./message-interactions.js";
 
 // Room, friend, presence, directory, and realtime synchronization behavior.
 function ownedIdentityUsernames() {
@@ -37,7 +39,13 @@ function messagePreviewCopy(message, fallback = "첨부 파일") {
   return fallback;
 }
 
+function updateUnreadDocumentTitle() {
+  const count = recentChatRooms().reduce((total, room) => total + Math.max(0, Number(room.unread_count) || 0), 0);
+  document.title = count ? `(${count > 99 ? "99+" : count}) Colorless` : "Colorless";
+}
+
 function renderChats() {
+  updateUnreadDocumentTitle();
   chatList.replaceChildren();
   state.roomNodes.clear();
   const context = state.actionBarByTab.chats;
@@ -111,7 +119,19 @@ function renderChats() {
     const time = document.createElement("time");
     time.className = "item-time";
     time.textContent = formatTime(room.updated_at);
-    item.append(createRoomAvatar(room), copy, time);
+    const meta = document.createElement("span");
+    meta.className = "item-meta";
+    meta.appendChild(time);
+    const unreadCount = Math.max(0, Number(room.unread_count) || 0);
+    if (unreadCount) {
+      const unread = document.createElement("span");
+      unread.className = "item-unread";
+      unread.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+      unread.setAttribute("aria-label", `안 읽은 메시지 ${unreadCount}개`);
+      meta.appendChild(unread);
+    }
+    item.setAttribute("aria-label", unreadCount ? `${room.name}, 안 읽은 메시지 ${unreadCount}개` : room.name);
+    item.append(createRoomAvatar(room), copy, meta);
     chatList.appendChild(item);
     state.roomNodes.set(room.id, item);
   });
@@ -273,20 +293,16 @@ function upsertRoomAfterMessageDeletion(incomingRoom) {
   });
 }
 
-function preserveRealtimeViewerIdentity(existingRoom, incomingRoom) {
-  if (!existingRoom?.viewer_identity_id || !incomingRoom) return incomingRoom;
-  return {
-    ...incomingRoom,
-    viewer_identity_id: existingRoom.viewer_identity_id,
-    viewer_identity: existingRoom.viewer_identity,
-  };
-}
-
 function removeMessengerRoom(roomId) {
+  const removedRoom = state.roomById.get(roomId);
+  clearChatDraft(roomId, removedRoom?.viewer_identity_id || removedRoom?.viewer_identity?.id || "");
+  for (const message of state.chatOutbox.clearRoom(roomId)) {
+    if (message.retry_data) message.retry_data.cancelled = true;
+    if (message.preview_url) URL.revokeObjectURL(message.preview_url);
+  }
   const previousLength = state.messenger.rooms.length;
   state.messenger.rooms = state.messenger.rooms.filter((room) => room.id !== roomId);
   state.selectedShareRoomIds = state.selectedShareRoomIds.filter((selectedId) => selectedId !== roomId);
-  delete state.chatDrafts[roomId];
   delete state.lastSeenRoomMessageIds[roomId];
   rebuildPresenceIndexes();
   return state.messenger.rooms.length !== previousLength;
@@ -371,6 +387,97 @@ function schedulePresencePatch(username) {
 
 let realtimeHandlersRegistered = false;
 
+function numericMutationRevision(value) {
+  const revision = Number(value);
+  return Number.isSafeInteger(revision) && revision >= 0 ? revision : null;
+}
+
+function messageEventRevision(payload) {
+  return numericMutationRevision(payload?.message?.mutation_revision
+    ?? payload?.mutationRevision
+    ?? payload?.mutation_revision);
+}
+
+function personalizeMessageSnapshot(message, viewerUsername, previous = null) {
+  if (!message?.id || message.reactions === undefined) return message;
+  const reactedByMe = new Map((previous?.reactions || []).map(
+    (reaction) => [reaction.emoji, Boolean(reaction.reacted_by_me)],
+  ));
+  return {
+    ...message,
+    reactions: (message.reactions || []).map((reaction) => ({
+      ...reaction,
+      reacted_by_me: reaction.reacted_by_me
+        ?? (Array.isArray(reaction.usernames)
+          ? reaction.usernames.includes(viewerUsername)
+          : (reactedByMe.get(reaction.emoji) ?? false)),
+    })),
+  };
+}
+
+function reactionMessageSnapshot(current, payload, viewerUsername) {
+  if (!current) return null;
+  const incomingRevision = messageEventRevision(payload);
+  const currentRevision = numericMutationRevision(current.mutation_revision);
+  if (incomingRevision !== null && currentRevision !== null && incomingRevision < currentRevision) return current;
+  const reactedByMe = new Map((current.reactions || []).map(
+    (reaction) => [reaction.emoji, Boolean(reaction.reacted_by_me)],
+  ));
+  const snapshot = payload.message?.id ? {
+    ...current,
+    ...payload.message,
+    read_by: payload.message.read_by ?? current.read_by,
+    unread_by: payload.message.unread_by ?? current.unread_by,
+    reactions: (payload.message.reactions || []).map((reaction) => ({
+      ...reaction,
+      reacted_by_me: reaction.reacted_by_me
+        ?? (Array.isArray(reaction.usernames)
+          ? reaction.usernames.includes(viewerUsername)
+          : (reactedByMe.get(reaction.emoji) ?? false)),
+    })),
+  } : current;
+  return applyReactionEvent(snapshot, payload, viewerUsername);
+}
+
+function scheduleMessageReconciliation(roomId, messageId, currentRevision, incomingRevision, force = false) {
+  if (
+    roomId !== state.selectedRoomId
+    || (!force && (currentRevision === null
+      || incomingRevision === null
+      || incomingRevision <= currentRevision + 1))
+  ) return;
+  const key = `${roomId}:${messageId}`;
+  if (state.messageReconciliationTimers.has(key)) return;
+  const authEpoch = state.authEpoch;
+  state.messageReconciliationTimers.set(key, window.setTimeout(async () => {
+    state.messageReconciliationTimers.delete(key);
+    if (state.authEpoch !== authEpoch) return;
+    try {
+      const payload = await requestAction(
+        "messages.reconcile",
+        `/messages?room_id=${encodeURIComponent(roomId)}&limit=3&around=${encodeURIComponent(messageId)}`,
+        {},
+        { key: `messages.reconcile:${key}`, policy: "replace" },
+      );
+      if (state.authEpoch !== authEpoch || roomId !== state.selectedRoomId) return;
+      const message = (Array.isArray(payload) ? payload : (payload.items || []))
+        .find((candidate) => candidate.id === messageId);
+      if (message) {
+        let record = state.messageEventJournal.snapshot(roomId, message, message.mutation_revision);
+        if (!record?.deleted && !applyUpdatedChatMessage(messageId, record.message)) {
+          const lastTimestamp = Date.parse(state.messages.at(-1)?.timestamp);
+          const messageTimestamp = Date.parse(record.message.timestamp);
+          if (!Number.isFinite(lastTimestamp) || messageTimestamp >= lastTimestamp) {
+            record = state.messageEventJournal.snapshot(roomId, record.message, record.revision, true);
+            if (appendChatMessageState(record.message)) appendChatMessageNode(record.message, false, true);
+          }
+        }
+      }
+    } catch (_) {
+    }
+  }, 80));
+}
+
 function realtimeViewContext() { return {}; }
 
 function renderRealtimeLists() {
@@ -384,53 +491,164 @@ function registerRealtimeHandlers() {
 
   realtimeEvents.register("hello", () => updatePresence());
   realtimeEvents.register("sync_required", async (payload) => {
-    recordSyncRevision(payload.revision);
+    const authEpoch = state.authEpoch;
     await loadMessenger();
+    if (state.authEpoch !== authEpoch) return;
+    recordSyncRevision(payload.revision);
   });
   realtimeEvents.register("message_created", async (payload) => {
-    recordSyncRevision(payload.revision);
-    const isIncoming = !ownedIdentityUsernames().has(payload.message?.username);
-    if (!isIncoming) return;
-    const isTicketRoom = ["ticket_listing", "ticket_deal"].includes(payload.room?.kind);
+    const createdMessage = personalizeMessageSnapshot(
+      payload.message,
+      roomViewerUsername(state.roomById.get(payload.roomId) || payload.room),
+    );
+    const resolved = state.messageEventJournal.resolve(payload.roomId, createdMessage);
+    if (resolved.deleted) {
+      recordSyncRevision(payload.revision);
+      return;
+    }
+    const eventMessage = resolved.message;
+    state.messageEventJournal.snapshot(payload.roomId, eventMessage, messageEventRevision(payload), true);
+    const eventRoom = payload.room?.last_message?.id === eventMessage?.id
+      ? { ...payload.room, last_message: eventMessage }
+      : payload.room;
+    const isIncoming = !ownedIdentityUsernames().has(eventMessage?.username);
+    const isTicketRoom = ["ticket_listing", "ticket_deal"].includes(eventRoom?.kind);
+    const isSelected = payload.roomId === state.selectedRoomId;
+    const autoScroll = isSelected && canMarkSelectedRoomRead(payload.roomId);
     let room;
+    let messageAdded = false;
     appStore.transact("realtime.message-created", () => {
       const existingRoom = state.roomById.get(payload.roomId);
-      room = upsertMessengerRoom({
-        ...preserveRealtimeViewerIdentity(existingRoom, payload.room),
-        name: existingRoom?.name || payload.room?.name,
-        peer: existingRoom?.peer || payload.room?.peer,
-      });
-      state.lastSeenRoomMessageIds[payload.roomId] = payload.message?.id || "";
-      if (payload.roomId === state.selectedRoomId && payload.message?.id) {
-        const visibleMessage = addMessageReader(
-          payload.message,
-          roomViewerUsername(room),
-          room,
-        );
-        if (appendChatMessageState(visibleMessage)) appendChatMessageNode(visibleMessage, true);
+      const previousLastMessageId = existingRoom?.last_message?.id || "";
+      room = upsertMessengerRoom(mergeRealtimeRoomSnapshot(existingRoom, eventRoom));
+      state.lastSeenRoomMessageIds[payload.roomId] = room?.last_message?.id || eventMessage?.id || "";
+      if (isSelected && eventMessage?.id) {
+        const visibleMessage = isIncoming && autoScroll
+          ? addMessageReader(eventMessage, roomViewerUsername(room), room)
+          : eventMessage;
+        const pending = state.messages.find((message) => (
+          (message.pending || message.failed) && message.client_message_id === visibleMessage.client_message_id
+        ));
+        if (pending) applyUpdatedChatMessage(pending.id, visibleMessage);
+        else {
+          messageAdded = appendChatMessageState(visibleMessage);
+          if (messageAdded) appendChatMessageNode(visibleMessage, autoScroll, !autoScroll);
+        }
+      } else if (eventMessage?.id) {
+        messageAdded = previousLastMessageId !== eventMessage.id;
       }
+      room.unread_count = unreadAfterMessageCreated(
+        existingRoom, { isIncoming, messageAdded, autoRead: autoScroll },
+      );
+      if (isIncoming && messageAdded && autoScroll) room._local_unread_known = true;
     }, { event: payload.type });
-    if (!isTicketRoom) showWorkModeMessage(room, payload.message, payload.sender);
-    if (payload.roomId === state.selectedRoomId && payload.message?.id) {
+    if (isIncoming && messageAdded && !isTicketRoom) showWorkModeMessage(room, eventMessage, payload.sender);
+    if (isIncoming && isSelected && messageAdded) noteIncomingMessage(autoScroll);
+    if (isIncoming && autoScroll && messageAdded) {
+      if (room) room.unread_count = 0;
       scheduleRoomRead(payload.roomId);
-    } else if (!isTicketRoom) {
-      renderChats();
     }
+    renderChats();
     renderContextActionBar();
+    recordSyncRevision(payload.revision);
+  });
+  realtimeEvents.register("message_updated", (payload) => {
+    const messageId = payload.messageId || payload.message?.id;
+    const updatedMessage = personalizeMessageSnapshot(
+      payload.message,
+      roomViewerUsername(state.roomById.get(payload.roomId)),
+    );
+    const record = updatedMessage?.id
+      ? state.messageEventJournal.snapshot(payload.roomId, updatedMessage, messageEventRevision(payload))
+      : null;
+    if (record?.deleted) {
+      recordSyncRevision(payload.revision);
+      return;
+    }
+    const eventMessage = record?.message || payload.message;
+    if (payload.roomId === state.selectedRoomId && eventMessage?.id) {
+      const index = state.messageIndexes.get(messageId);
+      const current = Number.isInteger(index) ? state.messages[index] : null;
+      scheduleMessageReconciliation(
+        payload.roomId,
+        messageId,
+        numericMutationRevision(current?.mutation_revision),
+        messageEventRevision(payload),
+      );
+      applyUpdatedChatMessage(messageId, eventMessage);
+      // The source can be outside the loaded window while one of its replies
+      // is visible, so update reply snapshots independently of source lookup.
+      if (!current) updateReplyReferences(messageId, eventMessage);
+    } else if (payload.roomId === state.selectedRoomId) {
+      scheduleMessageReconciliation(payload.roomId, messageId, null, messageEventRevision(payload), true);
+    }
+    const room = state.roomById.get(payload.roomId);
+    if (room?.last_message?.id === messageId) {
+      const currentRevision = Number(room.last_message.mutation_revision);
+      const incomingRevision = Number(eventMessage?.mutation_revision);
+      if (!(
+        Number.isSafeInteger(currentRevision)
+        && Number.isSafeInteger(incomingRevision)
+        && incomingRevision < currentRevision
+      )) room.last_message = { ...room.last_message, ...eventMessage };
+    }
+    renderChats();
+    recordSyncRevision(payload.revision);
+  });
+  realtimeEvents.register("message_reaction_updated", (payload) => {
+    let eventMessage = payload.message?.id
+      ? reactionMessageSnapshot(payload.message, payload, roomViewerUsername(state.roomById.get(payload.roomId)))
+      : null;
+    const record = eventMessage
+      ? state.messageEventJournal.snapshot(payload.roomId, eventMessage, messageEventRevision(payload))
+      : null;
+    if (record?.deleted) {
+      recordSyncRevision(payload.revision);
+      return;
+    }
+    eventMessage = record?.message || eventMessage;
+    if (payload.roomId === state.selectedRoomId) {
+      const index = state.messageIndexes.get(payload.messageId);
+      const message = Number.isInteger(index) ? state.messages[index] : null;
+      if (message) {
+        scheduleMessageReconciliation(
+          payload.roomId,
+          payload.messageId,
+          numericMutationRevision(message.mutation_revision),
+          messageEventRevision(payload),
+        );
+        applyUpdatedChatMessage(message.id, eventMessage
+          || reactionMessageSnapshot(message, payload, roomViewerUsername(state.roomById.get(payload.roomId))));
+      } else if (!eventMessage) scheduleMessageReconciliation(
+        payload.roomId, payload.messageId, null, messageEventRevision(payload), true,
+      );
+    }
+    const room = state.roomById.get(payload.roomId);
+    if (room?.last_message?.id === payload.messageId) {
+      room.last_message = eventMessage || reactionMessageSnapshot(room.last_message, payload, roomViewerUsername(room));
+    }
+    renderChats();
+    recordSyncRevision(payload.revision);
   });
   realtimeEvents.register("message_deleted", async (payload) => {
-    recordSyncRevision(payload.revision);
+    const authEpoch = state.authEpoch;
+    state.messageEventJournal.tombstone(
+      payload.roomId, payload.messageId, messageEventRevision(payload), payload.room,
+    );
+    const reconciliationKey = `${payload.roomId}:${payload.messageId}`;
+    window.clearTimeout(state.messageReconciliationTimers.get(reconciliationKey));
+    state.messageReconciliationTimers.delete(reconciliationKey);
     appStore.transact("realtime.message-deleted", () => {
       if (payload.room) {
-        upsertRoomAfterMessageDeletion(preserveRealtimeViewerIdentity(
-          state.roomById.get(payload.roomId),
-          payload.room,
+        upsertRoomAfterMessageDeletion(mergeRealtimeRoomSnapshot(
+          state.roomById.get(payload.roomId), payload.room,
         ));
       }
       const latestMessageId = payload.room?.last_message?.id || "";
       state.lastSeenRoomMessageIds[payload.roomId] = latestMessageId;
       if (payload.roomId === state.selectedRoomId && payload.messageId) {
         removeChatMessageState(payload.messageId);
+        updateReplyReferences(payload.messageId);
       }
     }, { event: payload.type });
     if (state.workModeMessage?.message?.id === payload.messageId) dismissWorkModeMessage();
@@ -439,38 +657,61 @@ function registerRealtimeHandlers() {
       await loadRoomsPage({ reset: true, render: false });
     } catch (_) {
     }
+    if (state.authEpoch !== authEpoch) return;
     renderRealtimeLists();
+    recordSyncRevision(payload.revision);
   });
   realtimeEvents.register("room_read", (payload) => {
+    const room = state.roomById.get(payload.roomId);
+    if (
+      room?.last_message?.id === payload.lastReadMessageId
+      && payload.username === roomViewerUsername(room)
+    ) {
+      room.unread_count = 0;
+      room._local_unread_known = true;
+      renderChats();
+    }
+    if (payload.roomId === state.selectedRoomId && payload.lastReadMessageId) {
+      applyMessageReaderToCurrentMessages(payload.username, "realtime.room-read", payload.lastReadMessageId);
+    }
     recordSyncRevision(payload.revision);
-    if (payload.roomId !== state.selectedRoomId) return;
-    applyMessageReaderToCurrentMessages(payload.username, "realtime.room-read");
   });
   realtimeEvents.register("room_updated", (payload) => {
-    recordSyncRevision(payload.revision);
     let room;
-    appStore.transact("realtime.room-updated", () => { room = upsertMessengerRoom(payload.room); }, { event: payload.type });
+    appStore.transact("realtime.room-updated", () => {
+      room = upsertMessengerRoom(mergeRealtimeRoomSnapshot(
+        state.roomById.get(payload.room?.id), payload.room,
+      ));
+    }, { event: payload.type });
     if (room?.id === state.selectedRoomId) renderChatRoom();
     renderRealtimeLists();
     if (!roomSettingsSheet.classList.contains("hidden")) renderRoomSettings();
+    recordSyncRevision(payload.revision);
   });
   realtimeEvents.register("room_created", (payload) => {
-    recordSyncRevision(payload.revision);
     let room;
-    appStore.transact("realtime.room-created", () => { room = upsertMessengerRoom(payload.room); }, { event: payload.type });
+    appStore.transact("realtime.room-created", () => {
+      room = upsertMessengerRoom(mergeAuthoritativeRoomSnapshot(
+        state.roomById.get(payload.room?.id), payload.room,
+      ));
+    }, { event: payload.type });
     renderRealtimeLists();
     if (room?.id === state.selectedRoomId) renderChatRoom();
+    recordSyncRevision(payload.revision);
   });
   realtimeEvents.register("friends_updated", async (payload) => {
-    recordSyncRevision(payload.revision);
+    const authEpoch = state.authEpoch;
     await loadFriendsPage({ reset: true, render: true });
+    if (state.authEpoch !== authEpoch) return;
+    recordSyncRevision(payload.revision);
   });
   realtimeEvents.register("room_left", (payload) => {
-    recordSyncRevision(payload.revision);
     appStore.transact("realtime.room-left", () => {
       const selfLeft = ownedIdentityUsernames().has(payload.username);
       if (selfLeft || !payload.room) removeMessengerRoom(payload.roomId);
-      else upsertMessengerRoom(payload.room);
+      else upsertMessengerRoom(mergeRealtimeRoomSnapshot(
+        state.roomById.get(payload.roomId), payload.room,
+      ));
     }, { event: payload.type });
     const selfLeft = ownedIdentityUsernames().has(payload.username);
     if ((selfLeft || !payload.room) && payload.roomId === state.selectedRoomId) closeChatRoom();
@@ -479,12 +720,13 @@ function registerRealtimeHandlers() {
       void loadChatMessages({ markRead: false });
     }
     renderRealtimeLists();
+    recordSyncRevision(payload.revision);
   });
   realtimeEvents.register("presence_updated", (payload) => {
-    recordSyncRevision(payload.revision);
     let changed = false;
     appStore.transact("realtime.presence-updated", () => { changed = applyPresenceEvent(payload); }, { event: payload.type });
     if (changed) schedulePresencePatch(payload.username);
+    recordSyncRevision(payload.revision);
   });
 }
 
@@ -496,11 +738,13 @@ function connectEvents() {
     router: realtimeEvents,
     context: realtimeViewContext,
     onUnhandled: async (payload, context) => {
-      recordSyncRevision(payload?.revision);
+      const authEpoch = state.authEpoch;
       await Promise.all([
         loadFriendsPage({ reset: true, render: true }),
         loadRoomsPage({ reset: true, render: true }),
       ]);
+      if (state.authEpoch !== authEpoch) return;
+      recordSyncRevision(payload?.revision);
     },
     onOpen: () => {
       if (state.eventSource !== source) return;

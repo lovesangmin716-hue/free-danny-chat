@@ -204,6 +204,16 @@ create unique index if not exists messages_client_id_unique_idx
   on public.messages(room_id, sender_id, client_message_id)
   where client_message_id is not null;
 
+create table if not exists public.message_reactions (
+  message_id text not null references public.messages(id) on delete cascade,
+  user_id text not null references public.users(id) on delete cascade,
+  emoji text not null check (emoji in ('👍', '❤️', '😂', '😮', '😢', '🙏')),
+  created_at timestamptz not null,
+  primary key (message_id, user_id, emoji)
+);
+create index if not exists message_reactions_message_idx
+  on public.message_reactions(message_id, emoji, created_at);
+
 create table if not exists public.read_positions (
   room_id text not null references public.rooms(id) on delete cascade,
   user_id text not null references public.users(id) on delete cascade,
@@ -301,6 +311,7 @@ alter table public.friendships enable row level security;
 alter table public.rooms enable row level security;
 alter table public.room_members enable row level security;
 alter table public.messages enable row level security;
+alter table public.message_reactions enable row level security;
 alter table public.read_positions enable row level security;
 alter table public.sessions enable row level security;
 alter table public.shorts_feeds enable row level security;
@@ -386,12 +397,42 @@ begin
 end;
 $$;
 
-drop function if exists public.colorless_insert_message(jsonb, text, jsonb, integer);
-create or replace function public.colorless_insert_message(
+drop function if exists public.colorless_insert_message_v2(jsonb, text, jsonb, integer);
+create or replace function public.colorless_insert_message_v2(
   message_data jsonb, sender_user_id text, room_data jsonb, keep_count integer
-) returns bigint language plpgsql security definer set search_path = public as $$
-declare inserted_count integer; new_revision bigint; message_time timestamptz;
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  inserted_count integer;
+  new_revision bigint;
+  message_time timestamptz;
+  target_room_kind text;
+  reply_target_data jsonb;
+  recipient_usernames jsonb;
 begin
+  select kind into target_room_kind
+  from rooms
+  where id=message_data->>'room_id'
+  for update;
+  if not found then
+    return jsonb_build_object('error', 'not_found');
+  end if;
+  if target_room_kind <> 'public' then
+    perform 1 from room_members
+    where room_id=message_data->>'room_id' and user_id=sender_user_id
+    for key share;
+    if not found then
+      return jsonb_build_object('error', 'forbidden');
+    end if;
+  end if;
+  if nullif(message_data->>'reply_to_message_id', '') is not null then
+    perform 1 from messages
+    where room_id=message_data->>'room_id'
+      and id=message_data->>'reply_to_message_id'
+    for key share;
+    if not found then
+      return jsonb_build_object('error', 'reply_not_found');
+    end if;
+  end if;
   message_time := (message_data->>'timestamp')::timestamptz;
   insert into messages(id, room_id, sender_id, sender_username, client_message_id, created_at, data)
   values (
@@ -400,7 +441,9 @@ begin
     message_time, message_data
   ) on conflict do nothing;
   get diagnostics inserted_count = row_count;
-  if inserted_count = 0 then return 0; end if;
+  if inserted_count = 0 then
+    return jsonb_build_object('error', 'conflict');
+  end if;
   update rooms set
     updated_at=message_time,
     data=jsonb_set(
@@ -410,13 +453,56 @@ begin
     revision=revision+1
   where id=message_data->>'room_id'
   returning revision into new_revision;
-  if new_revision is null then raise exception 'message room does not exist'; end if;
+  if new_revision is null then
+    raise exception 'message room does not exist';
+  end if;
   if keep_count > 0 then
     delete from messages where room_id = message_data->>'room_id' and sequence not in (
       select sequence from messages where room_id = message_data->>'room_id' order by sequence desc limit keep_count
     );
   end if;
-  return new_revision;
+  if nullif(message_data->>'reply_to_message_id', '') is not null then
+    select data into reply_target_data
+    from messages
+    where room_id=message_data->>'room_id'
+      and id=message_data->>'reply_to_message_id';
+  end if;
+  if target_room_kind = 'public' then
+    select coalesce(jsonb_agg(username order by username), '[]'::jsonb)
+    into recipient_usernames
+    from users;
+  else
+    select coalesce(jsonb_agg(users.username order by users.username), '[]'::jsonb)
+    into recipient_usernames
+    from room_members
+    join users on users.id=room_members.user_id
+    where room_members.room_id=message_data->>'room_id';
+  end if;
+  return jsonb_build_object(
+    'revision', new_revision,
+    'reply_to_message', reply_target_data,
+    'reactions', '[]'::jsonb,
+    'recipient_usernames', recipient_usernames
+  );
+end;
+$$;
+
+-- Keep the original bigint contract alive while the schema-first deployment is
+-- rolling. Existing Render instances still call this function until the new
+-- application release starts using colorless_insert_message_v2.
+drop function if exists public.colorless_insert_message(jsonb, text, jsonb, integer);
+create or replace function public.colorless_insert_message(
+  message_data jsonb, sender_user_id text, room_data jsonb, keep_count integer
+) returns bigint language plpgsql security definer set search_path = public as $$
+declare result jsonb;
+begin
+  result := public.colorless_insert_message_v2(
+    message_data,
+    sender_user_id,
+    room_data,
+    keep_count
+  );
+  return coalesce((result->>'revision')::bigint, 0);
 end;
 $$;
 
@@ -427,6 +513,366 @@ language sql stable security definer set search_path = public as $$
   from messages
   where messages.room_id = any(room_ids)
   order by messages.room_id, messages.sequence desc;
+$$;
+
+drop function if exists public.colorless_unread_counts(jsonb);
+create or replace function public.colorless_unread_counts(room_viewers jsonb)
+returns jsonb
+language sql stable security definer set search_path = public as $$
+  with requested as (
+    select distinct
+      item->>'room_id' as room_id,
+      item->>'viewer_user_id' as viewer_user_id
+    from jsonb_array_elements(coalesce(room_viewers, '[]'::jsonb)) as item
+    where nullif(item->>'room_id', '') is not null
+      and nullif(item->>'viewer_user_id', '') is not null
+  ), read_sequences as (
+    select
+      requested.room_id,
+      requested.viewer_user_id,
+      coalesce(read_message.sequence, 0) as last_read_sequence
+    from requested
+    left join read_positions
+      on read_positions.room_id=requested.room_id
+      and read_positions.user_id=requested.viewer_user_id
+    left join messages as read_message
+      on read_message.id=read_positions.message_id
+      and read_message.room_id=requested.room_id
+  ), counts as (
+    select
+      read_sequences.room_id,
+      count(messages.id)::bigint as unread_count
+    from read_sequences
+    left join messages
+      on messages.room_id=read_sequences.room_id
+      and messages.sequence>read_sequences.last_read_sequence
+      and messages.sender_id<>read_sequences.viewer_user_id
+    group by read_sequences.room_id
+  )
+  select coalesce(jsonb_object_agg(counts.room_id, counts.unread_count), '{}'::jsonb)
+  from counts;
+$$;
+
+drop function if exists public.colorless_edit_message(text, text, text, text, text);
+create or replace function public.colorless_edit_message(
+  message_room_id text, target_message_id text, editor_user_id text,
+  edited_text text, edited_timestamp text
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  target_sender_id text;
+  target_room_kind text;
+  stored_message jsonb;
+  updated_message jsonb;
+  reaction_snapshot jsonb;
+  reply_target_data jsonb;
+  recipient_usernames jsonb;
+  next_mutation_revision bigint;
+begin
+  select target.sender_id, target_room.kind, target.data
+  into target_sender_id, target_room_kind, stored_message
+  from messages as target
+  join rooms as target_room on target_room.id=target.room_id
+  where target.room_id=message_room_id and target.id=target_message_id
+  for update of target;
+  if not found then
+    return jsonb_build_object('error', 'not_found');
+  end if;
+  if target_sender_id <> editor_user_id then
+    return jsonb_build_object('error', 'forbidden');
+  end if;
+  if target_room_kind <> 'public' then
+    perform 1 from room_members
+    where room_id=message_room_id and user_id=editor_user_id
+    for key share;
+    if not found then
+      return jsonb_build_object('error', 'forbidden');
+    end if;
+  end if;
+  if edited_text = '' and jsonb_typeof(stored_message->'attachment') is distinct from 'object' then
+    return jsonb_build_object('error', 'empty');
+  end if;
+
+  next_mutation_revision := coalesce((stored_message->>'mutation_revision')::bigint, 0) + 1;
+  update messages
+  set data=jsonb_set(
+    jsonb_set(
+      jsonb_set(data, '{text}', to_jsonb(edited_text)),
+      '{edited_at}', to_jsonb(edited_timestamp)
+    ),
+    '{mutation_revision}', to_jsonb(next_mutation_revision)
+  )
+  where room_id=message_room_id and id=target_message_id
+  returning data into updated_message;
+  select coalesce(
+    jsonb_agg(
+      jsonb_build_object('message_id', message_id, 'user_id', user_id, 'emoji', emoji)
+      order by emoji, created_at, user_id
+    ),
+    '[]'::jsonb
+  ) into reaction_snapshot
+  from message_reactions
+  where message_id=target_message_id;
+  if nullif(stored_message->>'reply_to_message_id', '') is not null then
+    select data into reply_target_data
+    from messages
+    where room_id=message_room_id
+      and id=stored_message->>'reply_to_message_id';
+  end if;
+  if target_room_kind = 'public' then
+    select coalesce(jsonb_agg(username order by username), '[]'::jsonb)
+    into recipient_usernames
+    from users;
+  else
+    select coalesce(jsonb_agg(users.username order by users.username), '[]'::jsonb)
+    into recipient_usernames
+    from room_members
+    join users on users.id=room_members.user_id
+    where room_members.room_id=message_room_id;
+  end if;
+  return jsonb_build_object(
+    'message', updated_message,
+    'reactions', reaction_snapshot,
+    'reply_to_message', reply_target_data,
+    'recipient_usernames', recipient_usernames
+  );
+end;
+$$;
+
+drop function if exists public.colorless_toggle_message_reaction(text, text, text, text, timestamptz);
+drop function if exists public.colorless_toggle_message_reaction(text, text, text, text, timestamptz, boolean);
+create or replace function public.colorless_toggle_message_reaction(
+  reaction_room_id text, reaction_message_id text, reaction_user_id text,
+  reaction_emoji text, reaction_created_at timestamptz, desired_reacted boolean default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  target_room_kind text;
+  stored_message jsonb;
+  updated_message jsonb;
+  reaction_snapshot jsonb;
+  reply_target_data jsonb;
+  recipient_usernames jsonb;
+  reaction_count bigint;
+  is_reacted boolean;
+  was_reacted boolean;
+  reaction_changed boolean;
+  next_mutation_revision bigint;
+begin
+  select target_room.kind, target.data
+  into target_room_kind, stored_message
+  from messages as target
+  join rooms as target_room on target_room.id=target.room_id
+  where target.room_id=reaction_room_id and target.id=reaction_message_id
+  for update of target;
+  if not found then
+    return jsonb_build_object('error', 'not_found');
+  end if;
+  if target_room_kind <> 'public' then
+    perform 1 from room_members
+    where room_id=reaction_room_id and user_id=reaction_user_id
+    for key share;
+    if not found then
+      return jsonb_build_object('error', 'forbidden');
+    end if;
+  end if;
+
+  select exists(
+    select 1 from message_reactions
+    where message_id=reaction_message_id and user_id=reaction_user_id and emoji=reaction_emoji
+  ) into was_reacted;
+  is_reacted := coalesce(desired_reacted, not was_reacted);
+  reaction_changed := is_reacted <> was_reacted;
+  if reaction_changed and is_reacted then
+    insert into message_reactions(message_id, user_id, emoji, created_at)
+    values (reaction_message_id, reaction_user_id, reaction_emoji, reaction_created_at);
+  elsif reaction_changed then
+    delete from message_reactions
+    where message_id=reaction_message_id and user_id=reaction_user_id and emoji=reaction_emoji;
+  end if;
+  select count(*) into reaction_count
+  from message_reactions
+  where message_id=reaction_message_id and emoji=reaction_emoji;
+  next_mutation_revision := coalesce((stored_message->>'mutation_revision')::bigint, 0);
+  if reaction_changed then
+    next_mutation_revision := next_mutation_revision + 1;
+    update messages
+    set data=jsonb_set(data, '{mutation_revision}', to_jsonb(next_mutation_revision))
+    where room_id=reaction_room_id and id=reaction_message_id
+    returning data into updated_message;
+  else
+    updated_message := jsonb_set(
+      stored_message,
+      '{mutation_revision}',
+      to_jsonb(next_mutation_revision)
+    );
+  end if;
+  select coalesce(
+    jsonb_agg(
+      jsonb_build_object('message_id', message_id, 'user_id', user_id, 'emoji', emoji)
+      order by emoji, created_at, user_id
+    ),
+    '[]'::jsonb
+  ) into reaction_snapshot
+  from message_reactions
+  where message_id=reaction_message_id;
+  if nullif(stored_message->>'reply_to_message_id', '') is not null then
+    select data into reply_target_data
+    from messages
+    where room_id=reaction_room_id
+      and id=stored_message->>'reply_to_message_id';
+  end if;
+  if target_room_kind = 'public' then
+    select coalesce(jsonb_agg(username order by username), '[]'::jsonb)
+    into recipient_usernames
+    from users;
+  else
+    select coalesce(jsonb_agg(users.username order by users.username), '[]'::jsonb)
+    into recipient_usernames
+    from room_members
+    join users on users.id=room_members.user_id
+    where room_members.room_id=reaction_room_id;
+  end if;
+  return jsonb_build_object(
+    'reacted', is_reacted,
+    'count', reaction_count,
+    'mutation_revision', next_mutation_revision,
+    'changed', reaction_changed,
+    'message', updated_message,
+    'reactions', reaction_snapshot,
+    'reply_to_message', reply_target_data,
+    'recipient_usernames', recipient_usernames
+  );
+end;
+$$;
+
+drop function if exists public.colorless_delete_message(text, text, text);
+create or replace function public.colorless_delete_message(
+  message_room_id text, target_message_id text, deleting_user_id text
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  target_sender_id text;
+  target_room_kind text;
+  target_message_data jsonb;
+  target_message_sequence bigint;
+  target_room_data jsonb;
+  target_room_revision bigint;
+  target_room_updated_at timestamptz;
+  previous_message_id text;
+  latest_message_data jsonb;
+  deleted_attachment_url text;
+  attachment_still_used boolean;
+  next_room_updated_at_text text;
+  next_room_updated_at timestamptz;
+  next_last_read_by jsonb;
+  next_room_revision bigint;
+  next_room_data jsonb;
+  recipient_usernames jsonb;
+begin
+  select kind, data, revision, updated_at
+  into target_room_kind, target_room_data, target_room_revision, target_room_updated_at
+  from rooms
+  where id=message_room_id
+  for update;
+  if not found then
+    return jsonb_build_object('error', 'not_found');
+  end if;
+  if target_room_kind <> 'public' then
+    perform 1 from room_members
+    where room_id=message_room_id and user_id=deleting_user_id
+    for key share;
+    if not found then
+      return jsonb_build_object('error', 'forbidden');
+    end if;
+  end if;
+
+  select sender_id, data, sequence
+  into target_sender_id, target_message_data, target_message_sequence
+  from messages
+  where room_id=message_room_id and id=target_message_id
+  for update;
+  if not found then
+    return jsonb_build_object('error', 'not_found');
+  end if;
+  if target_sender_id <> deleting_user_id then
+    return jsonb_build_object('error', 'forbidden');
+  end if;
+
+  select id into previous_message_id
+  from messages
+  where room_id=message_room_id and sequence<target_message_sequence
+  order by sequence desc
+  limit 1;
+  if previous_message_id is null then
+    delete from read_positions
+    where room_id=message_room_id and message_id=target_message_id;
+  else
+    update read_positions
+    set message_id=previous_message_id
+    where room_id=message_room_id and message_id=target_message_id;
+  end if;
+  delete from messages
+  where room_id=message_room_id and id=target_message_id and sender_id=deleting_user_id;
+
+  deleted_attachment_url := target_message_data#>>'{attachment,url}';
+  select exists(
+    select 1 from messages
+    where room_id=message_room_id
+      and data#>>'{attachment,url}'=deleted_attachment_url
+  ) into attachment_still_used;
+  select data into latest_message_data
+  from messages
+  where room_id=message_room_id
+  order by sequence desc
+  limit 1;
+  next_room_updated_at_text := coalesce(
+    nullif(latest_message_data->>'timestamp', ''),
+    nullif(target_room_data->>'created_at', ''),
+    target_room_updated_at::text
+  );
+  next_room_updated_at := next_room_updated_at_text::timestamptz;
+  select coalesce(jsonb_object_agg(user_id, message_id), '{}'::jsonb)
+  into next_last_read_by
+  from read_positions
+  where room_id=message_room_id;
+  next_room_revision := target_room_revision + 1;
+  next_room_data := jsonb_set(
+    jsonb_set(
+      jsonb_set(
+        target_room_data,
+        '{updated_at}',
+        to_jsonb(next_room_updated_at_text)
+      ),
+      '{last_read_by}',
+      next_last_read_by
+    ),
+    '{_revision}',
+    to_jsonb(next_room_revision)
+  );
+  update rooms
+  set updated_at=next_room_updated_at,
+      revision=next_room_revision,
+      data=next_room_data
+  where id=message_room_id;
+  if target_room_kind = 'public' then
+    select coalesce(jsonb_agg(username order by username), '[]'::jsonb)
+    into recipient_usernames
+    from users;
+  else
+    select coalesce(jsonb_agg(users.username order by users.username), '[]'::jsonb)
+    into recipient_usernames
+    from room_members
+    join users on users.id=room_members.user_id
+    where room_members.room_id=message_room_id;
+  end if;
+  return jsonb_build_object(
+    'deleted', true,
+    'message', target_message_data,
+    'room', next_room_data,
+    'latest_message', latest_message_data,
+    'attachment_still_used', attachment_still_used,
+    'revision', next_room_revision,
+    'recipient_usernames', recipient_usernames
+  );
+end;
 $$;
 
 create or replace function public.colorless_create_session(
@@ -690,6 +1136,7 @@ returns jsonb language sql security definer set search_path = public as $$
     'rooms', (select count(*) from rooms),
     'room_members', (select count(*) from room_members),
     'messages', (select count(*) from messages),
+    'message_reactions', (select count(*) from message_reactions),
     'read_positions', (select count(*) from read_positions),
     'sessions', (select count(*) from sessions),
     'shorts_catalog', (select count(*) from shorts_catalog),
@@ -723,14 +1170,14 @@ $$;
 
 revoke all on table
   public.app_migrations, public.accounts, public.users, public.profile_art, public.social_accounts, public.friendships,
-  public.rooms, public.room_members, public.messages, public.read_positions,
+  public.rooms, public.room_members, public.messages, public.message_reactions, public.read_positions,
   public.sessions, public.shorts_feeds, public.shorts_seen, public.shorts_catalog,
   public.shorts_collection_state,
   public.realtime_events, public.presence_leases
 from anon, authenticated;
 grant select, insert, update, delete on table
   public.app_migrations, public.accounts, public.users, public.profile_art, public.social_accounts, public.friendships,
-  public.rooms, public.room_members, public.messages, public.read_positions,
+  public.rooms, public.room_members, public.messages, public.message_reactions, public.read_positions,
   public.sessions, public.shorts_feeds, public.shorts_seen, public.shorts_catalog,
   public.shorts_collection_state,
   public.realtime_events, public.presence_leases
@@ -741,7 +1188,12 @@ revoke execute on function public.colorless_sync_user(jsonb) from public, anon, 
 revoke execute on function public.colorless_enforce_identity_limit() from public, anon, authenticated;
 revoke execute on function public.colorless_sync_room(jsonb) from public, anon, authenticated;
 revoke execute on function public.colorless_insert_message(jsonb, text, jsonb, integer) from public, anon, authenticated;
+revoke execute on function public.colorless_insert_message_v2(jsonb, text, jsonb, integer) from public, anon, authenticated;
 revoke execute on function public.colorless_latest_messages(text[]) from public, anon, authenticated;
+revoke execute on function public.colorless_unread_counts(jsonb) from public, anon, authenticated;
+revoke execute on function public.colorless_edit_message(text, text, text, text, text) from public, anon, authenticated;
+revoke execute on function public.colorless_toggle_message_reaction(text, text, text, text, timestamptz, boolean) from public, anon, authenticated;
+revoke execute on function public.colorless_delete_message(text, text, text) from public, anon, authenticated;
 revoke execute on function public.colorless_create_session(text, text, double precision, double precision, integer) from public, anon, authenticated;
 revoke execute on function public.colorless_session_username(text, double precision) from public, anon, authenticated;
 revoke execute on function public.colorless_create_account_session(text, text, text, double precision, double precision, integer) from public, anon, authenticated;
@@ -762,7 +1214,12 @@ revoke execute on function public.colorless_account_identity_integrity() from pu
 grant execute on function public.colorless_sync_user(jsonb) to service_role;
 grant execute on function public.colorless_sync_room(jsonb) to service_role;
 grant execute on function public.colorless_insert_message(jsonb, text, jsonb, integer) to service_role;
+grant execute on function public.colorless_insert_message_v2(jsonb, text, jsonb, integer) to service_role;
 grant execute on function public.colorless_latest_messages(text[]) to service_role;
+grant execute on function public.colorless_unread_counts(jsonb) to service_role;
+grant execute on function public.colorless_edit_message(text, text, text, text, text) to service_role;
+grant execute on function public.colorless_toggle_message_reaction(text, text, text, text, timestamptz, boolean) to service_role;
+grant execute on function public.colorless_delete_message(text, text, text) to service_role;
 grant execute on function public.colorless_create_session(text, text, double precision, double precision, integer) to service_role;
 grant execute on function public.colorless_session_username(text, double precision) to service_role;
 grant execute on function public.colorless_create_account_session(text, text, text, double precision, double precision, integer) to service_role;

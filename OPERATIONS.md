@@ -10,6 +10,7 @@ Render free/small 단일 인스턴스의 목표는 동시 실시간 사용자 25
 | --- | --- | --- |
 | 일반 API 가용성 | 30일 99.9% 이상 | `requests.server_error_rate`, route error rate |
 | 메시지 전송 | p95 300ms 이하 | `POST /messages` route latency |
+| 메시지 편집·반응 | p95 300ms 이하 | `POST /messages/edit`, `POST /messages/reactions` route latency |
 | messenger 최초 응답 | p95 500ms 이하 | `GET /messenger` route latency |
 | 실시간 이벤트 전달 | p95 1초 이하 | `sse.event_delivery_p95_ms`, end-to-end probe |
 | 서버 오류 | 5xx 0.1% 이하 | 전체/route request counters |
@@ -27,16 +28,16 @@ Render의 health check는 `/ready`를 사용합니다. 장애 조사에서는 `/
 
 ## Deployment gate
 
-계정과 아이덴티티 스키마를 포함한 배포는 다음 순서를 지킵니다.
+계정·아이덴티티와 메시지 답장·편집·반응 스키마를 포함한 배포는 다음 순서를 지킵니다.
 
 1. Supabase 백업과 `app_state` 내보내기를 생성합니다.
-2. 최신 `src/colorless/database/supabase-schema.sql`을 적용합니다.
+2. 최신 `src/colorless/database/supabase-schema.sql`을 운영 Supabase에 적용해 메시지 답장·반응 저장소와 관련 RPC까지 준비합니다. 기존 `colorless_insert_message`의 bigint 계약은 롤링 배포 동안 유지되고 새 서버만 v2 RPC를 사용합니다. 이 단계가 성공하기 전에는 새 애플리케이션을 배포하지 않습니다.
 3. `python tests/deploy_preflight.py`와 전체 CI를 통과시킵니다.
 4. 운영 비밀 값을 주입한 환경에서 `python tests/deploy_preflight.py --environment --remote`를 통과시킵니다. Render 빌드도 같은 읽기 전용 검사를 다시 실행하고 실패하면 새 인스턴스 배포를 중단합니다.
-5. 배포 후 `/live`, `/ready`, `select public.colorless_storage_counts();`를 확인합니다.
+5. 배포 후 `/live`, `/ready`, `select public.colorless_storage_counts();`를 확인하고 테스트 방에서 답장 전송, 작성자 편집, 반응 추가·해제를 각각 한 번 검증합니다.
 6. `users.account_id` 누락, 계정당 아이덴티티 3개 초과, `sessions.account_id/active_user_id` 누락이 모두 0인지 확인한 뒤 정상 트래픽을 엽니다.
 
-Render Blueprint는 GitHub 검사가 성공한 커밋만 자동 배포합니다. SMS 발송 연동 전에는 `LOCAL_SIGNUP_ENABLED=false`를 유지합니다. 새 서버가 쓰기를 받기 전 실패하면 직전 커밋과 보존된 `app_state`로 되돌릴 수 있고, 쓰기 재개 뒤의 데이터 rollback은 전환 직전 Supabase 백업 복원이 필요합니다.
+Render Blueprint는 GitHub 검사가 성공한 커밋만 자동 배포합니다. 코드만 먼저 배포하면 `/messages/edit`와 `/messages/reactions`가 실패할 수 있으므로 스키마 선적용 순서를 생략하지 않습니다. SMS 발송 연동 전에는 `LOCAL_SIGNUP_ENABLED=false`를 유지합니다. 새 서버가 쓰기를 받기 전 실패하면 직전 커밋과 보존된 `app_state`로 되돌릴 수 있고, 쓰기 재개 뒤의 데이터 rollback은 전환 직전 Supabase 백업 복원이 필요합니다.
 
 ## Structured request log
 
@@ -64,7 +65,7 @@ SQLite와 현재 Supabase REST 구현에는 애플리케이션 소유 DB connect
 - page: 5분 5xx 비율 1% 초과와 1시간 0.1% 초과가 동시에 발생
 - page: `/ready`가 2분 연속 실패하거나 DB probe가 2초를 초과
 - page: SSE queue drop 증가, event outbox 8,000 접근, persistence error 발생
-- ticket: 메시지 p95 300ms 또는 messenger p95 500ms를 15분 초과
+- ticket: 메시지 전송·편집·반응 p95 300ms 또는 messenger p95 500ms를 15분 초과
 - ticket: request/SSE/body-reader 용량 80%, subscriber queue fill 80%, persistence lag 100 접근
 
 ## Versioned load and failure profiles

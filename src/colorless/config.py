@@ -151,6 +151,7 @@ PROFILE_ART_THUMBNAIL_PATH_PATTERN = re.compile(r"/profile-art/(user_[0-9a-f]{8}
 MESSAGE_ID_PATTERN = re.compile(r"msg_[0-9a-f]{8}")
 USER_ID_PATTERN = re.compile(r"user_[0-9a-f]{8}")
 CLIENT_MESSAGE_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{16,64}")
+MESSAGE_REACTIONS = ("👍", "❤️", "😂", "😮", "😢", "🙏")
 UPLOAD_NAME_PATTERN = re.compile(
     r"upload_[0-9a-f]{32}\.(?:jpg|png|gif|webp|heic|heif|avif|pdf|webm|m4a|ogg|txt|csv|md|rtf|zip|doc|xls|ppt|docx|xlsx|pptx)"
 )
