@@ -40,7 +40,7 @@ function messagePreviewCopy(message, fallback = "첨부 파일") {
 }
 
 function updateUnreadDocumentTitle() {
-  const count = recentChatRooms().reduce((total, room) => total + Math.max(0, Number(room.unread_count) || 0), 0);
+  const count = state.identityUnread?.total ?? state.messenger.rooms.reduce((total, room) => total + Math.max(0, Number(room.unread_count) || 0), 0);
   document.title = count ? `(${count > 99 ? "99+" : count}) Colorless` : "Colorless";
 }
 
@@ -734,7 +734,7 @@ function connectEvents() {
   if (state.eventSource || !state.session?.user) return;
   registerRealtimeHandlers();
   const source = ColorlessPlatform.createRealtimeClient({
-    url: "/events",
+    url: `/events?acting_identity_id=${encodeURIComponent(state.session.active_identity_id)}`,
     router: realtimeEvents,
     context: realtimeViewContext,
     onUnhandled: async (payload, context) => {

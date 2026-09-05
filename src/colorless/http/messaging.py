@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import queue
+from ..identity import resolve_actor, disable_identity, event_for_viewer, unread_summary
+
 
 
 class MessagingRoutesMixin:
+    def serve_identity_unread(self, user: dict) -> None:
+        self.send_json(unread_summary(self.context.STORE, user["username"]), self.context.HTTPStatus.OK)
+
     def serve_session(self) -> None:
         user = self.current_user()
         if user is None:
@@ -15,6 +20,8 @@ class MessagingRoutesMixin:
     def create_identity(self, user: dict) -> None:
         payload = self.read_json_body()
         if payload is None:
+            return
+        if not self.allow_actor_request(user, "identity-create", 10, 3600):
             return
         identity, error = self.context.STORE.create_identity(
             user["username"],
@@ -46,6 +53,33 @@ class MessagingRoutesMixin:
         account_context = self.context.STORE.get_account_context(username) or {}
         self.send_json({"authenticated": True, "user": active_user, **account_context}, self.context.HTTPStatus.OK)
 
+    def disable_activity_identity(self, user: dict) -> None:
+        payload = self.read_json_body()
+        if payload is None:
+            return
+        if not self.allow_actor_request(user, "identity-disable", 10, 3600):
+            return
+        disabled, error = disable_identity(self.context.STORE, user["username"], str(payload.get("identityId", "")))
+        if error:
+            self.send_json({"error": "다른 ID로 전환한 뒤 비활성화해 주세요." if error == "switch_first"
+                           else "사용할 수 없는 활동 ID입니다."}, self.context.HTTPStatus.CONFLICT
+                           if error == "switch_first" else self.context.HTTPStatus.FORBIDDEN)
+            return
+        self.send_json({"disabled": disabled, **(self.context.STORE.get_account_context(user["username"]) or {})}, self.context.HTTPStatus.OK)
+
+    def allow_actor_request(self, user: dict, scope: str, limit: int, seconds: int) -> bool:
+        record = self.context.STORE.get_user_record(user["username"])
+        if record is None:
+            return False
+        for key, budget in ((f"account:{record['account_id']}:{scope}", limit * 3),
+                            (f"identity:{user['id']}:{scope}", limit)):
+            allowed, retry_after = self.context.RATE_LIMITER.allow(key, budget, seconds)
+            if not allowed:
+                self.send_json({"error": "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요."},
+                               self.context.HTTPStatus.TOO_MANY_REQUESTS, headers={"Retry-After": str(retry_after)})
+                return False
+        return True
+
     def serve_profile_art_thumbnail(self, user_id: str) -> None:
         thumbnail = self.context.STORE.get_profile_art_thumbnail(user_id)
         if thumbnail is None:
@@ -66,7 +100,9 @@ class MessagingRoutesMixin:
 
     def serve_messages(self, query: dict[str, list[str]]) -> None:
         room_id = query.get("room_id", [""])[0]
-        user = self.current_user()
+        user = self.require_auth()
+        if user is None:
+            return
         limit_value = query.get("limit", [""])[0].strip()
         before = query.get("before", [""])[0].strip()
         around = query.get("around", [""])[0].strip()
@@ -132,6 +168,7 @@ class MessagingRoutesMixin:
 
         subscriber: queue.Queue = self.context.queue.Queue(maxsize=self.context.MAX_SSE_QUEUE_SIZE)
         token = self.read_session_token()
+        presence_token = f"{token}:{user['id']}"
         account_context = self.context.STORE.get_account_context(user["username"]) or {}
         identity_usernames = {
             str(identity.get("username", ""))
@@ -156,7 +193,7 @@ class MessagingRoutesMixin:
 
         presence_connected = False
         try:
-            presence_changed = self.context.PRESENCE.connect(token, user["username"])
+            presence_changed = self.context.PRESENCE.connect(presence_token, user["username"])
             presence_connected = True
         except Exception:
             presence_changed = False
@@ -199,19 +236,20 @@ class MessagingRoutesMixin:
                 for revision, event in sorted(replay_events.items()):
                     if revision <= last_sent_revision:
                         continue
-                    payload = self.context.json.dumps(event, ensure_ascii=False)
+                    payload = self.context.json.dumps(event_for_viewer(self.context.STORE, user["username"], event), ensure_ascii=False)
                     self.wfile.write(f"id: {revision}\ndata: {payload}\n\n".encode("utf-8"))
                     self.wfile.flush()
                     last_sent_revision = revision
 
             while True:
-                if self.context.SESSIONS.get_username(token) != user["username"]:
+                session_username = self.context.SESSIONS.get_username(token)
+                if not session_username or resolve_actor(self.context.STORE, session_username, user["id"]) is None:
                     break
                 try:
                     event = subscriber.get(timeout=self.context.SSE_HEARTBEAT_SECONDS)
                 except self.context.queue.Empty:
                     try:
-                        self.context.PRESENCE.heartbeat(token)
+                        self.context.PRESENCE.heartbeat(presence_token)
                     except Exception:
                         self.context.SSE_METRICS.increment("event_consume_failures_total")
                     self.wfile.write(b": heartbeat\n\n")
@@ -223,6 +261,7 @@ class MessagingRoutesMixin:
                 revision = int(event.get("revision", 0))
                 if revision and revision <= last_sent_revision:
                     continue
+                event = event_for_viewer(self.context.STORE, user["username"], event)
                 payload = f"data: {self.context.json.dumps(event, ensure_ascii=False)}\n\n".encode("utf-8")
                 if revision:
                     payload = f"id: {revision}\n".encode("utf-8") + payload
@@ -244,7 +283,7 @@ class MessagingRoutesMixin:
             username, went_offline = "", False
             if presence_connected:
                 try:
-                    username, went_offline = self.context.PRESENCE.disconnect(token)
+                    username, went_offline = self.context.PRESENCE.disconnect(presence_token)
                 except Exception:
                     self.context.SSE_METRICS.increment("event_consume_failures_total")
             if went_offline:
@@ -318,31 +357,29 @@ class MessagingRoutesMixin:
         self.run_json_command(lambda payload: self.context.APPLICATION.create_direct_room(user, payload))
 
     def create_message(self, user: dict) -> None:
-        if not self.allow_request(f"message-create:{user['username']}", 120, 60):
-            return
         self.run_json_command(
-            lambda payload: self.context.APPLICATION.create_message(user, payload, self.message_attachment)
+            lambda payload: self.context.APPLICATION.create_message(user, payload, self.message_attachment),
+            actor_limit=(user, "message-create", 120, 60),
         )
 
     def edit_message(self, user: dict) -> None:
-        if not self.allow_request(f"message-edit:{user['username']}", 60, 60):
-            return
-        self.run_json_command(lambda payload: self.context.APPLICATION.edit_message(user, payload))
+        self.run_json_command(lambda payload: self.context.APPLICATION.edit_message(user, payload),
+                              actor_limit=(user, "message-edit", 60, 60))
 
     def toggle_message_reaction(self, user: dict) -> None:
-        if not self.allow_request(f"message-reaction:{user['username']}", 180, 60):
-            return
-        self.run_json_command(lambda payload: self.context.APPLICATION.toggle_message_reaction(user, payload))
+        self.run_json_command(lambda payload: self.context.APPLICATION.toggle_message_reaction(user, payload),
+                              actor_limit=(user, "message-reaction", 180, 60))
 
     def delete_message(self, user: dict) -> None:
-        self.run_json_command(lambda payload: self.context.APPLICATION.delete_message(user, payload))
+        self.run_json_command(lambda payload: self.context.APPLICATION.delete_message(user, payload),
+                              actor_limit=(user, "message-delete", 60, 60))
 
     def mark_room_read(self, user: dict) -> None:
         self.run_json_command(lambda payload: self.context.APPLICATION.mark_room_read(user, payload))
 
     def update_presence(self, user: dict) -> None:
         self.run_json_command(
-            lambda payload: self.context.APPLICATION.update_presence(self.read_session_token(), user, payload)
+            lambda payload: self.context.APPLICATION.update_presence(f"{self.read_session_token()}:{user['id']}", user, payload)
         )
 
     def current_user(self) -> dict | None:
@@ -358,7 +395,17 @@ class MessagingRoutesMixin:
         if user is None:
             self.send_json({"error": "로그인이 필요합니다."}, self.context.HTTPStatus.UNAUTHORIZED)
             return None
-        return user
+        self._actor_owner_username = user["username"]
+        query = self.context.parse_qs(self.context.urlparse(self.path).query)
+        identity_id = str(self.headers.get("X-Acting-Identity", "") or query.get("acting_identity_id", [""])[0])
+        actor = resolve_actor(self.context.STORE, user["username"], identity_id,
+                                (query.get("roomId", [""])[0] or query.get("room_id", [""])[0]) if identity_id else "")
+        if actor is None:
+            self.send_json({"error": "사용할 수 없는 활동 ID입니다."}, self.context.HTTPStatus.FORBIDDEN)
+            return None
+        self._request_actor = actor
+        self._request_actor_explicit = bool(identity_id)
+        return actor
 
     def require_auth_record(self) -> dict | None:
         public_user = self.require_auth()
@@ -368,4 +415,26 @@ class MessagingRoutesMixin:
         if user is None:
             self.send_json({"error": "사용자를 찾을 수 없습니다."}, self.context.HTTPStatus.UNAUTHORIZED)
             return None
+        self._request_actor = user
         return user
+
+    def bind_payload_actor(self, payload: dict) -> bool:
+        actor = getattr(self, "_request_actor", None)
+        if actor is None:
+            return True
+        identity_id = str(payload.get("acting_identity_id", ""))
+        if identity_id and self._request_actor_explicit and identity_id != actor["id"]:
+            self.send_json({"error": "활동 ID가 요청과 일치하지 않습니다."}, self.context.HTTPStatus.FORBIDDEN)
+            return False
+        explicit = bool(identity_id or self._request_actor_explicit)
+        if not explicit:
+            return True
+        target = resolve_actor(self.context.STORE, self._actor_owner_username, identity_id or actor["id"],
+                               str(payload.get("roomId", "") or payload.get("activeRoomId", "")))
+        if target is None:
+            self.send_json({"error": "이 활동 ID로 요청을 처리할 수 없습니다."}, self.context.HTTPStatus.FORBIDDEN)
+            return False
+        replacement = self.context.STORE.get_user_record(target["username"]) if "account_id" in actor else target
+        actor.clear()
+        actor.update(replacement)
+        return True

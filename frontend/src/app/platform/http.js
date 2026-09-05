@@ -43,7 +43,7 @@ export function createHttpClient({ onUnauthorized } = {}) {
       const isSameOrigin = requestUrl.origin === window.location.origin;
       const headers = new Headers(optionHeaders);
       if (isJsonBody && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-      const cacheKey = requestUrl.href;
+      const cacheKey = `${requestUrl.href}|${headers.get("X-Acting-Identity") || ""}`;
       const cacheableRequest = method === "GET" && isSameOrigin && !requestOptions.body;
       const cached = cacheableRequest ? cachedResponse(cacheKey) : null;
       if (cached && !headers.has("If-None-Match")) headers.set("If-None-Match", cached.etag);

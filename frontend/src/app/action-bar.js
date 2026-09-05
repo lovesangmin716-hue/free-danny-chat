@@ -5,6 +5,8 @@ import { recentChatRooms, renderChats, renderFriends, resetChatSearch, scheduleC
 import { openChatRoom } from "./chat.js";
 import { openDirectChat } from "./app.js";
 import { ColorlessPlatform } from "./platform/index.js";
+import { unreadByIdentity } from "./platform/identity-context.js";
+import { refreshIdentityUnread } from "./identity-ui.js";
 
 // Shared context action bar for chat, friend, and input modes.
 function activeActionBarState() {
@@ -86,10 +88,13 @@ function updateHeaderSearch() {
   }
 }
 
-function renderChatActionBar() {
+function renderChatActionBar(refresh = true) {
+  if (refresh) refreshIdentityUnread(() => { if (state.activeList === "chats") renderChatActionBar(false); });
   const context = state.actionBarByTab.chats;
   resetActionBarControls("채팅 작업");
   const visibleRooms = recentChatRooms();
+  const identityUnread = state.identityUnread?.counts
+    ? new Map(Object.entries(state.identityUnread.counts)) : unreadByIdentity(state.messenger.rooms);
   const unreadCount = visibleRooms.filter((room) => room.unread_count > 0).length;
   shortShareList.appendChild(createContextAction(
     `안 읽음 ${unreadCount}`,
@@ -103,7 +108,7 @@ function renderChatActionBar() {
   ));
   for (const identity of state.session?.identities || []) {
     const visible = state.chatIdentityVisibility[identity.id] !== false;
-    const identityLabel = `${getDisplayName(identity)} (@${identity.username})`;
+    const identityLabel = `${getDisplayName(identity)} (@${identity.username}) · ${identityUnread.get(identity.id) || 0}`;
     shortShareList.appendChild(createContextAction(
       identityLabel,
       "",

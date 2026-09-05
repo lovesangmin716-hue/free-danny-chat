@@ -43,3 +43,21 @@ assert.deepEqual(refreshed, { items: [{ id: "room-2" }] });
 assert.deepEqual(requests.map((request) => request.etag), ["", '"rooms-v1"', ""]);
 
 console.log("HTTP ETag cache revalidation passed");
+
+const actorRequests = [];
+globalThis.fetch = async (url, options) => {
+  const actor = options.headers.get("X-Acting-Identity");
+  const etag = options.headers.get("If-None-Match");
+  actorRequests.push({ actor, etag });
+  if (etag) return new Response(null, { status: 304 });
+  return new Response(JSON.stringify({ actor }), {
+    status: 200, headers: { "Content-Type": "application/json", ETag: `"${actor}"` },
+  });
+};
+const actorClient = createHttpClient();
+for (const actor of ["id-a", "id-b", "id-a"]) {
+  const result = await actorClient.request("/rooms", { headers: { "X-Acting-Identity": actor } });
+  assert.equal(result.actor, actor);
+}
+assert.deepEqual(actorRequests.map(({ etag }) => etag), [null, null, '"id-a"']);
+console.log("HTTP actor-specific cache isolation passed");

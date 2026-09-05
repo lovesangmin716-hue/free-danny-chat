@@ -230,6 +230,20 @@ class NormalizedSupabaseRepository:
     def sync_account(self, account: dict) -> None:
         self.upsert("accounts", [self.account_row(account)], "id")
 
+    def active_identity_by_id(self, account_id: str, user_id: str) -> dict | None:
+        rows = self.rows("users", {
+            "select": "data,revision,accounts!inner(status)", "account_id": f"eq.{account_id}",
+            "id": f"eq.{user_id}", "accounts.status": "eq.active", "limit": "1",
+        })
+        if not rows or rows[0]["data"].get("disabled_at"):
+            return None
+        return {**rows[0]["data"], "_revision": int(rows[0].get("revision", 0))}
+
+    def disable_identity(self, owner_id: str, target_id: str, disabled_at: str) -> dict:
+        return self.rpc("colorless_disable_identity", {
+            "owner_user_id": owner_id, "target_user_id": target_id, "disabled_timestamp": disabled_at,
+        })
+
     def load_profile_art(self, user_id: str) -> tuple[int, bytes] | None:
         rows = self.rows(
             "profile_art",
@@ -1228,18 +1242,24 @@ class NormalizedSqliteRepository:
                     "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('account_identity_schema_version', '2')"
                 )
             database.execute("CREATE INDEX IF NOT EXISTS users_account_idx ON users(account_id, id)")
+            database.execute("DROP TRIGGER IF EXISTS users_account_identity_limit")
+            database.execute("DROP TRIGGER IF EXISTS users_account_identity_update_limit")
             database.execute(
                 "CREATE TRIGGER IF NOT EXISTS users_account_identity_limit "
                 "BEFORE INSERT ON users "
                 "WHEN NOT EXISTS(SELECT 1 FROM users WHERE id=NEW.id) "
-                "AND (SELECT COUNT(*) FROM users WHERE account_id=NEW.account_id) >= 3 "
+                "AND COALESCE(json_extract(NEW.data_json,'$.disabled_at'),'')='' "
+                "AND (SELECT COUNT(*) FROM users WHERE account_id=NEW.account_id "
+                "AND COALESCE(json_extract(data_json,'$.disabled_at'),'')='') >= 3 "
                 "BEGIN SELECT RAISE(ABORT, 'account identity limit exceeded'); END"
             )
             database.execute(
                 "CREATE TRIGGER IF NOT EXISTS users_account_identity_update_limit "
-                "BEFORE UPDATE OF account_id ON users "
-                "WHEN NEW.account_id <> OLD.account_id "
-                "AND (SELECT COUNT(*) FROM users WHERE account_id=NEW.account_id AND id<>NEW.id) >= 3 "
+                "BEFORE UPDATE OF account_id, data_json ON users "
+                "WHEN COALESCE(json_extract(NEW.data_json,'$.disabled_at'),'')='' "
+                "AND (NEW.account_id <> OLD.account_id OR COALESCE(json_extract(OLD.data_json,'$.disabled_at'),'')<>'') "
+                "AND (SELECT COUNT(*) FROM users WHERE account_id=NEW.account_id AND id<>NEW.id "
+                "AND COALESCE(json_extract(data_json,'$.disabled_at'),'')='') >= 3 "
                 "BEGIN SELECT RAISE(ABORT, 'account identity limit exceeded'); END"
             )
             database.execute(
@@ -1587,7 +1607,8 @@ class NormalizedSqliteRepository:
             database.execute("DELETE FROM sessions WHERE expires_at<=?", (now,))
             row = database.execute(
                 "SELECT users.username FROM sessions JOIN users ON users.id=sessions.active_user_id "
-                "JOIN accounts ON accounts.id=sessions.account_id WHERE token_hash=? AND accounts.status='active'",
+                "JOIN accounts ON accounts.id=sessions.account_id WHERE token_hash=? AND accounts.status='active' "
+                "AND users.account_id=accounts.id AND COALESCE(json_extract(users.data_json,'$.disabled_at'),'')=''",
                 (token_hash,),
             ).fetchone()
         return str(row[0]) if row else None
@@ -1596,10 +1617,26 @@ class NormalizedSqliteRepository:
         with self.connection() as database:
             cursor = database.execute(
                 "UPDATE sessions SET active_user_id=?, user_id=? WHERE token_hash=? AND account_id=? "
-                "AND EXISTS(SELECT 1 FROM users WHERE id=? AND account_id=?)",
+                "AND expires_at>strftime('%s','now') "
+                "AND EXISTS(SELECT 1 FROM users JOIN accounts ON accounts.id=users.account_id "
+                "WHERE users.id=? AND account_id=? AND accounts.status='active' "
+                "AND COALESCE(json_extract(users.data_json,'$.disabled_at'),'')='')",
                 (user_id, user_id, token_hash, account_id, user_id, account_id),
             )
             return cursor.rowcount == 1
+
+    def active_identity_by_id(self, account_id: str, user_id: str) -> dict | None:
+        with self.connection() as database:
+            row = database.execute(
+                "SELECT u.data_json,u.revision FROM users u JOIN accounts a ON a.id=u.account_id "
+                "WHERE u.account_id=? AND u.id=? AND a.status='active' "
+                "AND COALESCE(json_extract(u.data_json,'$.disabled_at'),'')=''", (account_id, user_id),
+            ).fetchone()
+        return {**self.decode(row[0]), "_revision": int(row[1])} if row else None
+
+    def disable_identity(self, owner_id: str, target_id: str, disabled_at: str) -> dict:
+        from .identity import sqlite_disable_identity
+        return sqlite_disable_identity(self, owner_id, target_id, disabled_at)
 
     def refresh_session(self, token_hash: str, expires_at: float) -> None:
         with self.connection() as database:
@@ -1857,6 +1894,9 @@ class NormalizedSqliteRepository:
         try:
             with self.connection() as database:
                 database.execute("BEGIN IMMEDIATE")
+                from .identity import sqlite_actor_active
+                if not sqlite_actor_active(database, sender_id):
+                    return False, "forbidden"
                 stored_room = database.execute(
                     "SELECT revision, data_json FROM rooms WHERE id=?",
                     (message["room_id"],),
@@ -1970,6 +2010,9 @@ class NormalizedSqliteRepository:
                 return None, "not_found"
             if str(row[0]) != sender_id or (str(row[2]) != "public" and not bool(row[3])):
                 return None, "forbidden"
+            from .identity import sqlite_actor_active
+            if not sqlite_actor_active(database, sender_id):
+                return None, "forbidden"
             message = self.decode(row[1])
             if not text and not isinstance(message.get("attachment"), dict):
                 return None, "empty"
@@ -2041,6 +2084,9 @@ class NormalizedSqliteRepository:
             if target is None:
                 return None, "not_found"
             if str(target[0]) != "public" and not bool(target[2]):
+                return None, "forbidden"
+            from .identity import sqlite_actor_active
+            if not sqlite_actor_active(database, user_id):
                 return None, "forbidden"
             message = self.decode(target[1])
             existing_reaction = database.execute(
@@ -2161,6 +2207,9 @@ class NormalizedSqliteRepository:
             if target is None:
                 return None, "not_found"
             if str(target[0]) != sender_id or (str(target[3]) != "public" and not bool(target[7])):
+                return None, "forbidden"
+            from .identity import sqlite_actor_active
+            if not sqlite_actor_active(database, sender_id):
                 return None, "forbidden"
 
             deleted_message = self.decode(target[1])

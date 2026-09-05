@@ -1,6 +1,7 @@
 "use strict";
 
 import { CHAT_MESSAGE_MEMORY_LIMIT, CHAT_MESSAGE_PAGE_SIZE, appStore, chatMessageInput, chatMessageList, chatRoom, chatRoomAvatar, chatRoomName, chatRoomPresence, clearChatDraft, formatTime, getChatDraft, normalizeStatusEmoji, openRoomSettingsButton, registerCoreHooks, requestAction, roomSettingsSheet, setAppStatus, state, syncAppStatusForActiveTab } from "./core.js";
+import { renderRoomIdentity } from "./identity-ui.js";
 import { createRoomAvatar, currentRoom, renderChats, roomParticipantDisplayName, upsertMessengerRoom, upsertRoomAfterMessageDeletion } from "./messenger.js";
 import { clearChatAttachment, discardUploadedAttachment, renderChatAttachmentPreview, renderChatAttachmentTray, uploadChatAttachment } from "./attachments.js";
 import { formatVoiceDuration } from "./voice.js";
@@ -544,6 +545,7 @@ function renderChatRoom({ scrollToBottom = false, preserveScrollHeight = 0, rest
   syncComposerHeight();
   chatRoomAvatar.replaceChildren(createRoomAvatar(room));
   chatRoomName.textContent = room.name;
+  renderRoomIdentity();
   chatRoomPresence.textContent = room.kind === "ticket_listing" || room.kind === "ticket_deal"
     ? [room.ticket?.matchup, room.ticket?.seat].filter(Boolean).join(" · ")
     : isGroupRoom
@@ -812,7 +814,7 @@ async function deliverPendingMessage(pendingId, pendingMessage, retryData) {
     if (attachmentFile && !attachment) {
       const uploadResult = attachmentUpload
         ? await attachmentUpload.promise
-        : { attachment: await uploadChatAttachment(attachmentFile, attachmentType), error: null };
+        : { attachment: await uploadChatAttachment(attachmentFile, attachmentType, { roomId }), error: null };
       if (uploadResult.error || !uploadResult.attachment) {
         throw uploadResult.error || new Error("첨부 파일을 업로드하지 못했습니다.");
       }

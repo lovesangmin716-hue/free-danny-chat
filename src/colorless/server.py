@@ -673,9 +673,11 @@ class ChatHandler(
             for event, recipients in outcome.events:
                 EVENT_BROKER.publish(event, recipients)
 
-    def run_json_command(self, command) -> None:
+    def run_json_command(self, command, actor_limit=None) -> None:
         payload = self.read_json_body()
         if payload is None:
+            return
+        if actor_limit is not None and not self.allow_actor_request(*actor_limit):
             return
         try:
             outcome = command(payload)
@@ -794,6 +796,11 @@ class ChatHandler(
             return
         if path == "/session":
             self.serve_session()
+            return
+        if path == "/identities/unread":
+            user = self.require_auth()
+            if user is not None:
+                self.serve_identity_unread(user)
             return
         if path == "/profile/pixels":
             user = self.require_auth_record()
@@ -976,6 +983,7 @@ class ChatHandler(
             self.discard_unread_request_body()
 
     def do_POST(self) -> None:
+        self._request_actor = None
         self._request_body_consumed = False
         try:
             try:
@@ -1111,6 +1119,11 @@ class ChatHandler(
             if user is None:
                 return
             self.switch_identity(user)
+            return
+        if path == "/identities/disable":
+            user = self.require_auth()
+            if user is not None:
+                self.disable_activity_identity(user)
             return
         if path == "/profile/image":
             user = self.require_auth_record()
@@ -1580,6 +1593,8 @@ class ChatHandler(
             return None
         if not isinstance(payload, dict):
             self.send_json({"error": "JSON object expected"}, HTTPStatus.BAD_REQUEST)
+            return None
+        if not self.bind_payload_actor(payload):
             return None
         return payload
 

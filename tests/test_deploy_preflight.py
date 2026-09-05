@@ -71,10 +71,11 @@ class DeploymentPreflightTestCase(unittest.TestCase):
                 "sessions_without_account_identity": 0,
                 "sessions_with_foreign_identity": 0,
             },
+            {"error": "forbidden"},
         ]
         with mock.patch.object(deploy_preflight, "supabase_request", side_effect=responses) as request:
             self.assertEqual(deploy_preflight.validate_remote_supabase(), [])
-        self.assertEqual(request.call_count, 10)
+        self.assertEqual(request.call_count, 11)
         self.assertEqual(
             request.call_args_list[4].args[0],
             "/rest/v1/rpc/colorless_insert_message_v2",
@@ -113,6 +114,7 @@ class DeploymentPreflightTestCase(unittest.TestCase):
                 "sessions_without_account_identity": 1,
                 "sessions_with_foreign_identity": 0,
             },
+            {"error": "forbidden"},
         ]
         with mock.patch.object(deploy_preflight, "supabase_request", side_effect=responses):
             failures = deploy_preflight.validate_remote_supabase()

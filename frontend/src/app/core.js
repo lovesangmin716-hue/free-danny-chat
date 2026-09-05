@@ -4,8 +4,8 @@ import { ColorlessPlatform } from "./platform/index.js";
 import { ColorlessImageProcessing } from "./platform/image-processing.js";
 import { createMessageRevisionJournal } from "./platform/message-revisions.js";
 import { createTransientOutbox } from "./platform/outbox.js";
+import { withActor, sessionForWindow } from "./platform/identity-context.js";
 
-// Shared state, DOM references, API client, and presentation primitives.
 const coreHooks = {
   clearChatAttachment: null,
   renderMessenger: null,
@@ -613,6 +613,7 @@ function runAppAction(name, execute, options = {}) {
 }
 
 function requestAction(name, url, requestOptions = {}, actionOptions = {}) {
+  requestOptions = withActor(state, url, requestOptions);
   const authEpoch = state.authEpoch;
   const key = actionOptions.key;
   const authScoped = actionOptions.authIndependent !== true;
@@ -642,7 +643,7 @@ async function api(url, options = {}) {
 function rememberSession(session) {
   advanceAuthEpoch();
   httpClient.clearCache();
-  state.session = session;
+  state.session = sessionForWindow(session);
   state.isGuest = false;
 }
 

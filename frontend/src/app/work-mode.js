@@ -73,7 +73,8 @@ function renderWorkModeMessage() {
     sender.profile_thumbnail_url || sender.profile_image_url,
   ));
   workModeSenderName.textContent = senderName;
-  workModeRoomName.textContent = room?.name || "채팅";
+  workModeRoomName.textContent = [room?.name || "채팅", room?.viewer_identity?.username
+    ? `@${room.viewer_identity.username}로 받은 대화` : ""].filter(Boolean).join(" · ");
   workModeCopy.textContent = workModeMessageText(message);
   workModeTime.textContent = formatTime(message.timestamp);
   workModeReplyInput.placeholder = `${senderName}에게 답장 · Enter`;

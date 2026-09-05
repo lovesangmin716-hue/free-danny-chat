@@ -178,6 +178,8 @@ SOCIAL_DEMO_LOGIN_ENABLED=false
 
 ## Render 배포
 
+활동 ID별 권한, 비활성화 및 다중 대화창 변경사항은 [활동 ID 가이드](IDENTITIES.md)를 참고하세요. MY → ID 관리에서 현재 ID를 제외한 소유 ID를 비활성화할 수 있으며, 대화방의 `새 창` 버튼은 수신 ID를 고정한 창을 엽니다.
+
 루트의 [`render.yaml`](render.yaml)은 저장소 루트에서 `colorless` 패키지를 설치합니다.
 
 1. Supabase 백업과 `app_state` 내보내기를 만든 뒤 최신 [`src/colorless/database/supabase-schema.sql`](src/colorless/database/supabase-schema.sql)을 먼저 적용합니다. 이 단계가 기존 사용자에서 계정과 첫 번째 아이덴티티를 분리하고 세션을 보강하며, 메시지 답장·편집·반응 저장소와 RPC를 준비합니다. 스키마 적용이 끝나기 전에는 새 애플리케이션을 배포하지 마세요.
