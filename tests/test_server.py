@@ -47,6 +47,93 @@ SPEC.loader.exec_module(server)
 
 
 class StaticAppStructureTestCase(unittest.TestCase):
+    def test_transient_get_failures_return_retryable_json_instead_of_dropping_connection(self) -> None:
+        for dependency_error in (
+            server.SupabaseRequestError("supabase"),
+            sqlite3.OperationalError("database is locked"),
+        ):
+            with self.subTest(error=type(dependency_error).__name__):
+                handler = object.__new__(server.ChatHandler)
+                handler.send_json = mock.Mock()
+                handler.close_connection = False
+                handler.raw_requestline = b""
+                with mock.patch.object(
+                    server.BaseHTTPRequestHandler,
+                    "handle_one_request",
+                    side_effect=dependency_error,
+                ):
+                    server.ChatHandler.handle_one_request(handler)
+                handler.send_json.assert_called_once_with(
+                    {"error": "저장소 연결이 지연되고 있습니다. 잠시 후 다시 시도해 주세요."},
+                    server.HTTPStatus.SERVICE_UNAVAILABLE,
+                    headers={"Retry-After": "5"},
+                )
+                self.assertTrue(handler.close_connection)
+
+        handler = object.__new__(server.ChatHandler)
+        handler.send_json = mock.Mock()
+        handler.close_connection = False
+        handler.raw_requestline = b""
+        with mock.patch.object(
+            server.BaseHTTPRequestHandler,
+            "handle_one_request",
+            side_effect=sqlite3.OperationalError("no such table: typo"),
+        ):
+            with self.assertRaises(sqlite3.OperationalError):
+                server.ChatHandler.handle_one_request(handler)
+        handler.send_json.assert_not_called()
+
+    def test_message_mutation_routes_apply_per_user_rate_limits(self) -> None:
+        for method_name, scope, limit in (
+            ("create_message", "message-create", 120),
+            ("edit_message", "message-edit", 60),
+            ("toggle_message_reaction", "message-reaction", 180),
+        ):
+            with self.subTest(method_name=method_name):
+                handler = mock.Mock()
+                handler.allow_request.return_value = False
+                getattr(server.ChatHandler, method_name)(handler, {"username": "alice"})
+                handler.allow_request.assert_called_once_with(f"{scope}:alice", limit, 60)
+                handler.run_json_command.assert_not_called()
+
+    def test_json_commands_map_only_dependency_failures_to_retryable_503(self) -> None:
+        for dependency_error in (
+            TimeoutError("timeout"),
+            ConnectionError("connection"),
+            server.SupabaseRequestError("supabase"),
+            sqlite3.OperationalError("database is locked"),
+            sqlite3.OperationalError("disk I/O error"),
+        ):
+            with self.subTest(error=type(dependency_error).__name__):
+                handler = mock.Mock()
+                handler.read_json_body.return_value = {}
+                command = mock.Mock(side_effect=dependency_error)
+                server.ChatHandler.run_json_command(handler, command)
+                handler.send_json.assert_called_once_with(
+                    {"error": "저장소 연결이 지연되고 있습니다. 잠시 후 다시 시도해 주세요."},
+                    server.HTTPStatus.SERVICE_UNAVAILABLE,
+                    headers={"Retry-After": "5"},
+                )
+                handler.complete_command.assert_not_called()
+
+        handler = mock.Mock()
+        handler.read_json_body.return_value = {}
+        with self.assertRaises(RuntimeError):
+            server.ChatHandler.run_json_command(
+                handler,
+                mock.Mock(side_effect=RuntimeError("programming error")),
+            )
+        handler.send_json.assert_not_called()
+
+        handler = mock.Mock()
+        handler.read_json_body.return_value = {}
+        with self.assertRaises(sqlite3.OperationalError):
+            server.ChatHandler.run_json_command(
+                handler,
+                mock.Mock(side_effect=sqlite3.OperationalError("no such table: typo")),
+            )
+        handler.send_json.assert_not_called()
+
     def test_python_modules_keep_composition_root_dependency_one_way(self) -> None:
         lower_level_modules = [
             path
@@ -278,25 +365,47 @@ class StaticAppStructureTestCase(unittest.TestCase):
     def test_message_non_readers_are_shown_only_during_left_swipe(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         chat_script = (FRONTEND_APP_DIR / "chat.js").read_text(encoding="utf-8")
+        interactions_script = (FRONTEND_APP_DIR / "message-interactions.js").read_text(encoding="utf-8")
         messenger_script = (FRONTEND_APP_DIR / "messenger.js").read_text(encoding="utf-8")
         bootstrap_script = (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8")
 
         self.assertIn('id="message-read-menu"', index_html)
-        self.assertIn("function beginMessageReadSwipe(event)", chat_script)
-        self.assertIn("function updateMessageReadSwipe(event)", chat_script)
-        self.assertIn("function finishMessageReadSwipe(event)", chat_script)
-        self.assertIn("const unreadNames = (message.unread_by || [])", chat_script)
-        self.assertIn("`안 읽은 사람 ${unreadNames.length}명`", chat_script)
-        self.assertIn('applyMessageReaderToCurrentMessages(payload.username, "realtime.room-read")', messenger_script)
+        self.assertIn("function beginMessageReadSwipe(event)", interactions_script)
+        self.assertIn("function updateMessageReadSwipe(event)", interactions_script)
+        self.assertIn("function finishMessageReadSwipe(event)", interactions_script)
+        self.assertIn("const unreadNames = (message.unread_by || [])", interactions_script)
+        self.assertIn("`안 읽은 사람 ${unreadNames.length}명`", interactions_script)
+        self.assertIn('applyMessageReaderToCurrentMessages(payload.username, "realtime.room-read", payload.lastReadMessageId)', messenger_script)
         self.assertIn("function applyMessageReaderToCurrentMessages", chat_script)
         self.assertIn('chatMessageList.addEventListener("pointerdown", beginMessageReadSwipe)', bootstrap_script)
         self.assertIn('chatMessageList.addEventListener("pointermove", updateMessageReadSwipe)', bootstrap_script)
         self.assertIn('chatMessageList.addEventListener("pointerup", finishMessageReadSwipe)', bootstrap_script)
-        self.assertNotIn("showMessageReadMenuFromContext", chat_script)
+        self.assertNotIn("showMessageReadMenuFromContext", interactions_script)
         self.assertNotRegex(
             messenger_script,
             r'if \(currentRoom\(\)\?\.kind === "group"\) \{\s+void loadChatMessages',
         )
+
+    def test_chat_interactions_preserve_hidden_history_and_retry_state(self) -> None:
+        index_html = server.INDEX_FILE.read_text(encoding="utf-8")
+        chat_script = (FRONTEND_APP_DIR / "chat.js").read_text(encoding="utf-8")
+        core_script = (FRONTEND_APP_DIR / "core.js").read_text(encoding="utf-8")
+        interactions_script = (FRONTEND_APP_DIR / "message-interactions.js").read_text(encoding="utf-8")
+        messenger_script = (FRONTEND_APP_DIR / "messenger.js").read_text(encoding="utf-8")
+
+        self.assertIn('role="log" aria-live="polite"', index_html)
+        self.assertEqual(index_html.count('data-message-reaction="'), 6)
+        self.assertIn("&& !document.hidden", interactions_script)
+        self.assertIn("&& chatIsNearBottom()", interactions_script)
+        self.assertIn("const autoScroll = isSelected && canMarkSelectedRoomRead(payload.roomId)", messenger_script)
+        self.assertIn("appendChatMessageNode(visibleMessage, autoScroll, !autoScroll)", messenger_script)
+        self.assertIn("(message.pending || message.failed) && message.client_message_id", messenger_script)
+        self.assertIn('payload.room?.last_message?.id || ""', chat_script)
+        self.assertIn("room?.last_message?.id === lastReadMessageId", chat_script)
+        self.assertIn("message.retry_data", chat_script)
+        self.assertIn("await deliverPendingMessage(message.id, pendingMessage, message.retry_data)", chat_script)
+        self.assertIn("colorless-chat-draft:${encodeURIComponent(owner)}:${encodeURIComponent(roomId)}", core_script)
+        self.assertIn("sessionStorage.setItem(key, draft)", core_script)
 
     def test_signup_is_a_separate_responsive_document(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
@@ -478,19 +587,20 @@ class StaticAppStructureTestCase(unittest.TestCase):
     def test_desktop_headers_share_one_height_and_message_times_cluster_for_five_minutes(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")
         chat_script = (FRONTEND_APP_DIR / "chat.js").read_text(encoding="utf-8")
+        message_display_script = (FRONTEND_APP_DIR / "platform" / "message-display.js").read_text(encoding="utf-8")
 
         self.assertIn("--desktop-header-height: 88px", index_html)
         self.assertIn("--chat-header-height: var(--desktop-header-height)", index_html)
-        self.assertIn("const MESSAGE_TIME_CLUSTER_MS = 5 * 60 * 1000", chat_script)
-        self.assertIn("nextMessage.username !== message.username", chat_script)
-        self.assertIn("nextTimestamp - timestamp > MESSAGE_TIME_CLUSTER_MS", chat_script)
+        self.assertIn("const TIME_CLUSTER_MS = 5 * 60 * 1000", message_display_script)
+        self.assertIn("nextMessage.username !== message.username", message_display_script)
+        self.assertIn("nextTimestamp - timestamp > TIME_CLUSTER_MS", message_display_script)
         self.assertIn('sender.textContent = messageSenderDisplayName(room, message)', chat_script)
         self.assertIn("if (!mine) {", chat_script)
         self.assertIn('row.querySelector(".message-sender")?.classList.toggle', chat_script)
         self.assertIn("const row = createChatMessageRow(message, state.messages[index + 1], index)", chat_script)
         self.assertIn("function shouldShowMessageReadReceipt(message, messageIndex)", chat_script)
         self.assertIn("const nextIndex = nextOwnMessageIndex(messageIndex)", chat_script)
-        self.assertIn('`${readerCount}명 읽음`', chat_script)
+        self.assertIn('`${count}명 읽음`', message_display_script)
 
     def test_supabase_requests_use_persistent_connection_pools(self) -> None:
         server_script = SERVER_PATH.read_text(encoding="utf-8")
@@ -621,8 +731,9 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertNotIn('item.addEventListener("click", () => openDirectChat(friend.id))', messenger_script)
         self.assertIn("chatIdentityVisibility", core_script)
         self.assertIn("function renderContextActionBar", action_bar_script)
-        self.assertIn("function preserveRealtimeViewerIdentity", messenger_script)
-        self.assertIn("viewer_identity_id: existingRoom.viewer_identity_id", messenger_script)
+        room_snapshot_script = (FRONTEND_APP_DIR / "platform" / "room-snapshots.js").read_text(encoding="utf-8")
+        self.assertIn("mergeRealtimeRoomSnapshot", messenger_script)
+        self.assertIn("viewer_identity_id: existingRoom.viewer_identity_id", room_snapshot_script)
 
     def test_direct_chat_exposes_the_shared_room_leave_action(self) -> None:
         chat_script = (FRONTEND_APP_DIR / "chat.js").read_text(encoding="utf-8")
@@ -2792,6 +2903,13 @@ class AccountIdentityTestCase(unittest.TestCase):
                 self.assertNotIn("viewer_identity", event["room"])
                 self.assertNotIn("viewer_identity_id", event["room"])
                 self.assertEqual(event["message"]["username"], outsider["username"])
+                aggregated = next(
+                    item
+                    for item in store.get_rooms_page(primary, limit=20)["items"]
+                    if item["id"] == room["id"]
+                )
+                self.assertEqual(aggregated["viewer_identity_id"], second["id"])
+                self.assertEqual(aggregated["unread_count"], 1)
 
                 leave_outcome = services.leave_room(primary, {"roomId": room["id"]})
                 self.assertTrue(leave_outcome.data["left"])
@@ -2864,6 +2982,204 @@ class AccountIdentityTestCase(unittest.TestCase):
 
 
 class SupabaseRepositoryContractTestCase(unittest.TestCase):
+    def test_message_mutation_rpcs_attach_transaction_event_snapshots(self) -> None:
+        reply_target = {
+            "id": "msg-parent",
+            "room_id": "room-1",
+            "username": "bob",
+            "text": "parent",
+        }
+        recipients = ["alice", "bob"]
+
+        def transport(path: str, **_kwargs):
+            if path.endswith("/colorless_insert_message_v2"):
+                return {
+                    "revision": 2,
+                    "reply_to_message": reply_target,
+                    "reactions": [],
+                    "recipient_usernames": recipients,
+                }
+            if path.endswith("/colorless_edit_message"):
+                return {
+                    "message": {"id": "msg-1", "room_id": "room-1", "text": "edited"},
+                    "reply_to_message": reply_target,
+                    "reactions": [{"message_id": "msg-1", "user_id": "user-2", "emoji": "👍"}],
+                    "recipient_usernames": recipients,
+                }
+            if path.endswith("/colorless_toggle_message_reaction"):
+                return {
+                    "message": {"id": "msg-1", "room_id": "room-1", "text": "edited"},
+                    "reacted": True,
+                    "count": 1,
+                    "reply_to_message": reply_target,
+                    "reactions": [{"message_id": "msg-1", "user_id": "user-1", "emoji": "👍"}],
+                    "recipient_usernames": recipients,
+                }
+            if path.endswith("/colorless_delete_message"):
+                return {
+                    "deleted": True,
+                    "message": {"id": "msg-1", "room_id": "room-1", "text": "edited"},
+                    "room": {"id": "room-1", "_revision": 3},
+                    "latest_message": None,
+                    "recipient_usernames": recipients,
+                }
+            return {}
+
+        repository = server.NormalizedSupabaseRepository(
+            "https://example.test",
+            "secret",
+            transport,
+        )
+        created_message = {
+            "id": "msg-1",
+            "room_id": "room-1",
+            "reply_to_message_id": "msg-parent",
+        }
+        room = {"id": "room-1", "_revision": 1}
+        self.assertEqual(
+            repository.insert_message(created_message, "user-1", room, 200),
+            (True, None),
+        )
+        edited_message, edit_error = repository.update_message_text(
+            "room-1",
+            "msg-1",
+            "user-1",
+            "edited",
+            "2026-09-04T00:00:00+00:00",
+        )
+        reaction, reaction_error = repository.toggle_message_reaction(
+            "room-1",
+            "msg-1",
+            "user-1",
+            "👍",
+            "2026-09-04T00:00:00+00:00",
+            True,
+        )
+        deleted, delete_error = repository.delete_message("room-1", "msg-1", "user-1")
+
+        self.assertIsNone(edit_error)
+        self.assertIsNone(reaction_error)
+        self.assertIsNone(delete_error)
+        snapshots = [created_message, edited_message, reaction["message"], deleted["message"]]
+        for snapshot in snapshots:
+            self.assertEqual(snapshot["_event_recipient_usernames"], recipients)
+        self.assertEqual(created_message["_event_reply_to"], reply_target)
+        self.assertEqual(edited_message["_event_reply_to"], reply_target)
+        self.assertEqual(reaction["message"]["_event_reply_to"], reply_target)
+        self.assertEqual(reaction["message"]["_event_reaction_rows"][0]["emoji"], "👍")
+
+    def test_message_delete_consumes_atomic_room_and_cursor_result(self) -> None:
+        requests = []
+        deleted_message = {
+            "id": "msg-2",
+            "room_id": "room-1",
+            "username": "alice",
+            "text": "second",
+        }
+        latest_message = {
+            "id": "msg-1",
+            "room_id": "room-1",
+            "username": "alice",
+            "text": "first",
+            "timestamp": "2026-09-04T00:00:00+00:00",
+        }
+        persisted_room = {
+            "id": "room-1",
+            "updated_at": latest_message["timestamp"],
+            "last_read_by": {"user-2": "msg-1"},
+            "_revision": 8,
+        }
+
+        def transport(path: str, **kwargs):
+            requests.append((path, kwargs))
+            return {
+                "deleted": True,
+                "message": deleted_message,
+                "room": persisted_room,
+                "latest_message": latest_message,
+                "revision": 8,
+            }
+
+        repository = server.NormalizedSupabaseRepository(
+            "https://example.test", "secret", transport
+        )
+        outcome, error = repository.delete_message("room-1", "msg-2", "user-1")
+
+        self.assertIsNone(error)
+        self.assertEqual(outcome["message"], deleted_message)
+        self.assertEqual(outcome["room"], persisted_room)
+        self.assertEqual(outcome["latest_message"], latest_message)
+        self.assertEqual(requests, [(
+            "/rest/v1/rpc/colorless_delete_message",
+            {
+                "method": "POST",
+                "payload": {
+                    "message_room_id": "room-1",
+                    "target_message_id": "msg-2",
+                    "deleting_user_id": "user-1",
+                },
+            },
+        )])
+
+        schema = (SRC_DIR / "colorless" / "database" / "supabase-schema.sql").read_text(
+            encoding="utf-8"
+        )
+        delete_rpc = schema.split(
+            "create or replace function public.colorless_delete_message(", 1
+        )[1].split("create or replace function public.colorless_create_session(", 1)[0]
+        self.assertLess(delete_rpc.index("from rooms"), delete_rpc.index("from messages"))
+        self.assertIn("for update", delete_rpc)
+        self.assertIn("update read_positions", delete_rpc)
+        self.assertIn("next_last_read_by", delete_rpc)
+        self.assertIn("next_room_revision := target_room_revision + 1", delete_rpc)
+
+    def test_unread_counts_use_one_service_role_rpc_for_all_rooms(self) -> None:
+        requests = []
+
+        def transport(path: str, **kwargs):
+            requests.append((path, kwargs))
+            if path.endswith("/colorless_unread_counts"):
+                return {"room-1": 3, "room-2": 0}
+            return {}
+
+        repository = server.NormalizedSupabaseRepository(
+            "https://example.test", "secret", transport
+        )
+        counts = repository.unread_counts_for_rooms(
+            {"room-1": "user-1", "room-2": "user-2"}
+        )
+
+        self.assertEqual(counts, {"room-1": 3, "room-2": 0})
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0][0], "/rest/v1/rpc/colorless_unread_counts")
+        self.assertEqual(
+            requests[0][1]["payload"],
+            {"room_viewers": [
+                {"room_id": "room-1", "viewer_user_id": "user-1"},
+                {"room_id": "room-2", "viewer_user_id": "user-2"},
+            ]},
+        )
+        schema = (SRC_DIR / "colorless" / "database" / "supabase-schema.sql").read_text(
+            encoding="utf-8"
+        )
+        unread_rpc = schema.split(
+            "create or replace function public.colorless_unread_counts(", 1
+        )[1].split(
+            "create or replace function public.colorless_edit_message(", 1
+        )[0]
+        self.assertIn("returns jsonb", unread_rpc)
+        self.assertIn("jsonb_object_agg", unread_rpc)
+
+    def test_unread_counts_reject_a_non_object_rpc_response(self) -> None:
+        repository = server.NormalizedSupabaseRepository(
+            "https://example.test",
+            "secret",
+            lambda _path, **_kwargs: [{"room_id": "room-1", "unread_count": 3}],
+        )
+
+        with self.assertRaises(server.SupabaseRequestError):
+            repository.unread_counts_for_rooms({"room-1": "user-1"})
+
     def test_profile_art_uses_a_separate_fixed_size_binary_resource(self) -> None:
         requests = []
         packed = bytes(index % 256 for index in range(3072))
@@ -2982,6 +3298,29 @@ class SupabaseRepositoryContractTestCase(unittest.TestCase):
         self.assertEqual(state["sessions"]["token"]["username"], "alice")
         self.assertEqual(state["shorts_feeds"]["alice"], {"seen_ids": ["v1", "v2"], "next_cursor": "next"})
 
+    def test_room_member_usernames_use_current_normalized_membership(self) -> None:
+        requests = []
+
+        def transport(path: str, **kwargs):
+            requests.append((path, kwargs))
+            if path.startswith("/rest/v1/room_members?"):
+                return [
+                    {"user": {"username": "alice"}},
+                    {"user": {"username": "bob"}},
+                ]
+            return []
+
+        repository = server.NormalizedSupabaseRepository(
+            "https://example.test",
+            "secret",
+            transport,
+        )
+
+        self.assertEqual(repository.room_member_usernames("r1"), {"alice", "bob"})
+        self.assertEqual(len(requests), 1)
+        self.assertTrue(requests[0][0].startswith("/rest/v1/room_members?"))
+        self.assertIn("user%3Ausers(username)", requests[0][0])
+
     def test_runtime_writes_use_transactional_rpcs(self) -> None:
         requests = []
 
@@ -2989,8 +3328,8 @@ class SupabaseRepositoryContractTestCase(unittest.TestCase):
             requests.append((path, kwargs))
             if path.endswith("/colorless_sync_user") or path.endswith("/colorless_sync_room"):
                 return 1
-            if path.endswith("/colorless_insert_message"):
-                return 2
+            if path.endswith("/colorless_insert_message_v2"):
+                return {"revision": 2}
             if path.endswith("/colorless_account_session_username"):
                 return "alice"
             return {}
@@ -3001,7 +3340,7 @@ class SupabaseRepositoryContractTestCase(unittest.TestCase):
         message = {"id": "m1", "room_id": "r1", "username": "alice"}
         repository.sync_user(user)
         repository.sync_room(room)
-        self.assertTrue(repository.insert_message(message, "u1", room, 200))
+        self.assertEqual(repository.insert_message(message, "u1", room, 200), (True, None))
         repository.create_session("token", "a1", "u1", 1, 2, 5)
         self.assertEqual(repository.session_username("token", 1.5), "alice")
         repository.save_shorts_feed("u1", ["v1"], "next")
@@ -3010,10 +3349,26 @@ class SupabaseRepositoryContractTestCase(unittest.TestCase):
         self.assertEqual(
             rpc_names,
             {
-                "colorless_sync_user", "colorless_sync_room", "colorless_insert_message",
+                "colorless_sync_user", "colorless_sync_room", "colorless_insert_message_v2",
                 "colorless_create_account_session", "colorless_account_session_username", "colorless_save_shorts_feed",
             },
         )
+        schema = (SRC_DIR / "colorless" / "database" / "supabase-schema.sql").read_text(
+            encoding="utf-8"
+        )
+        insert_v2 = schema.split(
+            "create or replace function public.colorless_insert_message_v2(", 1
+        )[1].split(
+            "create or replace function public.colorless_insert_message(", 1
+        )[0]
+        legacy_insert = schema.split(
+            "create or replace function public.colorless_insert_message(", 1
+        )[1].split(
+            "create or replace function public.colorless_latest_messages(", 1
+        )[0]
+        self.assertIn("returns jsonb", insert_v2)
+        self.assertIn("returns bigint", legacy_insert)
+        self.assertIn("colorless_insert_message_v2", legacy_insert)
 
     def test_shared_events_and_presence_use_durable_supabase_contract(self) -> None:
         requests = []
@@ -3227,6 +3582,141 @@ class StateStoreTestCase(unittest.TestCase):
                 server.SUBSCRIBERS.clear()
                 server.SUBSCRIBERS_BY_USERNAME.clear()
 
+    def test_room_events_recheck_durable_membership_before_publishing(self) -> None:
+        with self.store.repository.connection() as database:
+            database.execute(
+                "DELETE FROM room_members WHERE room_id=? AND user_id=?",
+                (self.room_id, self.bob["id"]),
+            )
+
+        services = server.ApplicationServices(
+            self.store,
+            server.PresenceStore(self.store.repository, "event-membership-test"),
+        )
+        outcome = services.create_message(
+            self.alice,
+            {
+                "roomId": self.room_id,
+                "text": "current members only",
+                "clientMessageId": "authoritative-event-members-0001",
+            },
+            lambda _value, _username: None,
+        )
+
+        event, recipients = outcome.events[0]
+        self.assertEqual(recipients, {"alice"})
+        self.assertEqual(event["message"]["text"], "current members only")
+        previous_revision = self.store.repository.latest_event_sequence()
+        self.store.repository.publish_event(event, recipients, "event-membership-test")
+        self.assertEqual(
+            self.store.repository.events_for_user_after("bob", previous_revision),
+            [],
+        )
+        alice_events = self.store.repository.events_for_user_after("alice", previous_revision)
+        self.assertEqual(len(alice_events), 1)
+        self.assertEqual(alice_events[0]["message"]["text"], "current members only")
+
+        repository = self.store.repository
+        self.store.repository = None
+        try:
+            self.assertEqual(self.store.room_event_recipients(self.room_id), {"alice", "bob"})
+        finally:
+            self.store.repository = repository
+
+        with mock.patch.object(
+            repository,
+            "room_member_usernames",
+            wraps=repository.room_member_usernames,
+        ) as member_lookup:
+            self.assertEqual(self.store.room_event_recipients("lobby"), {"alice", "bob", "eve"})
+        member_lookup.assert_not_called()
+
+    def test_committed_message_mutations_do_not_depend_on_auxiliary_reads(self) -> None:
+        original = self.store.add_message(self.room_id, "bob", "reply source")[0]
+        services = server.ApplicationServices(
+            self.store,
+            server.PresenceStore(self.store.repository, "post-commit-snapshot-test"),
+        )
+        auxiliary_error = server.SupabaseRequestError("injected auxiliary read failure")
+        repository = self.store.repository
+        with (
+            mock.patch.object(
+                repository,
+                "messages_by_ids",
+                side_effect=auxiliary_error,
+            ) as messages_by_ids,
+            mock.patch.object(
+                repository,
+                "reactions_for_messages",
+                side_effect=auxiliary_error,
+            ) as reactions_for_messages,
+            mock.patch.object(
+                repository,
+                "message_sequences",
+                side_effect=auxiliary_error,
+            ) as message_sequences,
+            mock.patch.object(
+                repository,
+                "room_member_usernames",
+                side_effect=auxiliary_error,
+            ) as room_member_usernames,
+        ):
+            created = services.create_message(
+                self.alice,
+                {
+                    "roomId": self.room_id,
+                    "text": "committed reply",
+                    "clientMessageId": "post-commit-create-0001",
+                    "replyToMessageId": original["id"],
+                },
+                lambda _value, _username: None,
+            )
+            message_id = created.data["id"]
+            edited = services.edit_message(
+                self.alice,
+                {
+                    "roomId": self.room_id,
+                    "messageId": message_id,
+                    "text": "committed edit",
+                },
+            )
+            reacted = services.toggle_message_reaction(
+                self.alice,
+                {
+                    "roomId": self.room_id,
+                    "messageId": message_id,
+                    "emoji": "👍",
+                    "reacted": True,
+                },
+            )
+            deleted = services.delete_message(
+                self.alice,
+                {"roomId": self.room_id, "messageId": message_id},
+            )
+
+        self.assertEqual(created.status, server.HTTPStatus.CREATED)
+        self.assertEqual(created.data["reply_to"]["text"], "reply source")
+        self.assertEqual(edited.data["message"]["text"], "committed edit")
+        self.assertEqual(edited.data["message"]["reply_to"]["text"], "reply source")
+        self.assertEqual(reacted.data["message"]["reactions"][0]["count"], 1)
+        self.assertTrue(deleted.data["deleted"])
+        for outcome in (created, edited, reacted, deleted):
+            self.assertEqual(outcome.events[0][1], {"alice", "bob"})
+        messages_by_ids.assert_not_called()
+        reactions_for_messages.assert_not_called()
+        message_sequences.assert_not_called()
+        room_member_usernames.assert_not_called()
+
+    def test_committed_recipient_lookup_failure_fails_closed_without_raising(self) -> None:
+        with mock.patch.object(
+            self.store.repository,
+            "room_member_usernames",
+            side_effect=server.SupabaseRequestError("temporary recipient lookup failure"),
+        ):
+            recipients = self.store.committed_room_event_recipients(self.room_id)
+
+        self.assertEqual(recipients, set())
+
     def test_room_page_batches_direct_peer_presence_lookup(self) -> None:
         for index in range(8):
             friend = self.store.create_or_update_social_user(
@@ -3247,6 +3737,87 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertEqual(len(page["items"]), 9)
         presence_for_users.assert_called_once()
         self.assertEqual(len(presence_for_users.call_args.args[0]), 9)
+
+    def test_room_pages_batch_exact_durable_unread_counts(self) -> None:
+        self.store.add_message(self.room_id, "alice", "peer one")
+        self.store.add_message(self.room_id, "alice", "peer two")
+        self.store.add_message(self.room_id, "bob", "own message is not unread")
+        self.store.add_message(self.room_id, "alice", "peer three")
+
+        unread_counts = self.store.repository.unread_counts_for_rooms
+        with mock.patch.object(
+            self.store.repository,
+            "unread_counts_for_rooms",
+            wraps=unread_counts,
+        ) as unread_counts_spy:
+            page = self.store.get_rooms_page(self.bob, limit=20)
+
+        unread_counts_spy.assert_called_once_with({self.room_id: self.bob["id"]})
+        room = next(item for item in page["items"] if item["id"] == self.room_id)
+        self.assertEqual(room["unread_count"], 3)
+        durable_repository = server.NormalizedSqliteRepository(self.store.database_path)
+        self.assertEqual(
+            durable_repository.unread_counts_for_rooms({self.room_id: self.bob["id"]}),
+            {self.room_id: 3},
+        )
+
+        bootstrap_room = next(
+            item
+            for item in self.store.get_messenger_bootstrap(self.bob)["rooms"]
+            if item["id"] == self.room_id
+        )
+        self.assertEqual(bootstrap_room["unread_count"], 3)
+
+        _, changed = self.store.mark_room_read(self.room_id, "bob")
+        self.assertTrue(changed)
+        self.assertEqual(
+            durable_repository.unread_counts_for_rooms({self.room_id: self.bob["id"]}),
+            {self.room_id: 0},
+        )
+        self.store.add_message(self.room_id, "bob", "still not unread")
+        room = next(
+            item
+            for item in self.store.get_rooms_page(self.bob, limit=20)["items"]
+            if item["id"] == self.room_id
+        )
+        self.assertEqual(
+            room["unread_count"],
+            0,
+        )
+        self.store.add_message(self.room_id, "alice", "new peer message")
+        room = next(
+            item
+            for item in self.store.get_rooms_page(self.bob, limit=20)["items"]
+            if item["id"] == self.room_id
+        )
+        self.assertEqual(
+            room["unread_count"],
+            1,
+        )
+
+    def test_room_unread_count_has_an_in_memory_fallback(self) -> None:
+        repository = self.store.repository
+        self.store.repository = None
+        try:
+            self.store.add_message(self.room_id, "alice", "memory peer one")
+            self.store.add_message(self.room_id, "bob", "memory own")
+            self.store.add_message(self.room_id, "alice", "memory peer two")
+            room = next(
+                item
+                for item in self.store.get_rooms_page(self.bob, limit=20)["items"]
+                if item["id"] == self.room_id
+            )
+            self.assertEqual(room["unread_count"], 2)
+            _, changed = self.store.mark_room_read(self.room_id, "bob")
+            self.assertTrue(changed)
+            room = next(
+                item
+                for item in self.store.get_rooms_page(self.bob, limit=20)["items"]
+                if item["id"] == self.room_id
+            )
+            self.assertEqual(room["unread_count"], 0)
+        finally:
+            self.store.repository = repository
 
     def test_room_page_releases_state_lock_during_repository_reads(self) -> None:
         started = threading.Event()
@@ -3383,6 +3954,71 @@ class StateStoreTestCase(unittest.TestCase):
         self.assertEqual(message_recipients, {"alice", "bob", "eve"})
         self.assertNotIn("viewer_identity", message_event["room"])
         self.assertNotIn("viewer_identity_id", message_event["room"])
+
+        reply_outcome = services.create_message(
+            self.bob,
+            {
+                "roomId": group_outcome.data["room"]["id"],
+                "text": "reply",
+                "clientMessageId": "application-reply-state",
+                "replyToMessageId": message_outcome.data["id"],
+            },
+            lambda _value, _username: None,
+        )
+        self.assertEqual(reply_outcome.data["reply_to"]["id"], message_outcome.data["id"])
+        self.assertEqual(reply_outcome.data["reply_to"]["text"], "who has not read this")
+
+        edit_outcome = services.edit_message(
+            self.bob,
+            {
+                "roomId": group_outcome.data["room"]["id"],
+                "messageId": reply_outcome.data["id"],
+                "text": "edited reply",
+            },
+        )
+        self.assertEqual(edit_outcome.data["message"]["text"], "edited reply")
+        self.assertTrue(edit_outcome.data["message"]["edited_at"])
+        self.assertEqual(edit_outcome.data["message"]["mutation_revision"], 1)
+        self.assertEqual(edit_outcome.events[0][0]["type"], "message_updated")
+
+        reaction_outcome = services.toggle_message_reaction(
+            self.alice,
+            {
+                "roomId": group_outcome.data["room"]["id"],
+                "messageId": reply_outcome.data["id"],
+                "emoji": "👍",
+                "reacted": True,
+            },
+        )
+        self.assertEqual(
+            reaction_outcome.data["message"]["reactions"],
+            [{"emoji": "👍", "count": 1, "reacted_by_me": True}],
+        )
+        reaction_event = reaction_outcome.events[0][0]
+        self.assertEqual(reaction_event["type"], "message_reaction_updated")
+        self.assertEqual(reaction_event["roomId"], group_outcome.data["room"]["id"])
+        self.assertEqual(reaction_event["messageId"], reply_outcome.data["id"])
+        self.assertEqual(reaction_event["emoji"], "👍")
+        self.assertEqual(reaction_event["count"], 1)
+        self.assertEqual(reaction_event["actorUsername"], "alice")
+        self.assertTrue(reaction_event["reacted"])
+        self.assertEqual(reaction_event["mutationRevision"], 2)
+        self.assertEqual(reaction_event["message"]["text"], "edited reply")
+        self.assertEqual(
+            reaction_event["message"]["reactions"],
+            [{"emoji": "👍", "count": 1, "usernames": ["alice"]}],
+        )
+        idempotent_reaction = services.toggle_message_reaction(
+            self.alice,
+            {
+                "roomId": group_outcome.data["room"]["id"],
+                "messageId": reply_outcome.data["id"],
+                "emoji": "👍",
+                "reacted": True,
+            },
+        )
+        self.assertEqual(idempotent_reaction.data["message"]["mutation_revision"], 2)
+        self.assertEqual(idempotent_reaction.data["message"]["reactions"][0]["count"], 1)
 
         delete_outcome = services.delete_message(
             self.alice,
@@ -3653,6 +4289,21 @@ class StateStoreTestCase(unittest.TestCase):
         )
         self.assertEqual(received_messages[-1]["unread_by"], [])
 
+    def test_room_read_event_carries_the_persisted_message_boundary(self) -> None:
+        first = self.store.add_message(self.room_id, "bob", "first")[0]
+        services = server.ApplicationServices(
+            self.store,
+            server.PresenceStore(self.store.repository, "read-boundary-test"),
+        )
+
+        outcome = services.mark_room_read(self.alice, {"roomId": self.room_id})
+
+        self.assertEqual(outcome.data["room"]["last_message"]["id"], first["id"])
+        self.assertEqual(len(outcome.events), 1)
+        event, _recipients = outcome.events[0]
+        self.assertEqual(event["type"], "room_read")
+        self.assertEqual(event["lastReadMessageId"], first["id"])
+
     def test_delete_message_requires_sender_and_rewinds_deleted_read_position(self) -> None:
         first_result = self.store.add_message(self.room_id, "alice", "first")
         second_result = self.store.add_message(self.room_id, "alice", "second")
@@ -3683,6 +4334,146 @@ class StateStoreTestCase(unittest.TestCase):
         _, _, forbidden = self.store.delete_message(self.room_id, "bob", first_message["id"])
         self.assertEqual(forbidden, "forbidden")
         self.assertEqual(len(self.store.get_messages(self.room_id, "alice") or []), 1)
+
+    def test_delete_message_atomically_updates_durable_room_and_read_positions(self) -> None:
+        first_message = self.store.add_message(self.room_id, "alice", "first")[0]
+        attachment = {
+            "url": "/uploads/atomic-delete.png",
+            "name": "atomic-delete.png",
+            "type": "image/png",
+            "size": 1,
+        }
+        second_message = self.store.add_message(
+            self.room_id, "alice", "second", attachment
+        )[0]
+        _, alice_changed = self.store.mark_room_read(self.room_id, "alice")
+        self.assertTrue(alice_changed)
+        _, changed = self.store.mark_room_read(self.room_id, "bob")
+        self.assertTrue(changed)
+        revision_before = int(self.store._rooms_by_id[self.room_id]["_revision"])
+
+        with (
+            mock.patch.object(
+                self.store.repository,
+                "sync_room",
+                side_effect=AssertionError("delete must not perform a second room commit"),
+            ) as sync_room,
+            mock.patch.object(
+                self.store.repository,
+                "attachment_room_ids",
+                side_effect=AssertionError("delete must not perform a post-commit lookup"),
+            ) as attachment_room_ids,
+        ):
+            deleted, summary, error = self.store.delete_message(
+                self.room_id,
+                "alice",
+                second_message["id"],
+            )
+
+        self.assertIsNone(error)
+        self.assertEqual(deleted["id"], second_message["id"])
+        self.assertEqual(summary["last_message"]["id"], first_message["id"])
+        sync_room.assert_not_called()
+        attachment_room_ids.assert_not_called()
+        self.assertNotIn("atomic-delete.png", self.store._attachment_rooms)
+
+        with self.store.repository.connection() as database:
+            room_row = database.execute(
+                "SELECT updated_at, revision, data_json FROM rooms WHERE id=?",
+                (self.room_id,),
+            ).fetchone()
+            read_positions = dict(database.execute(
+                "SELECT user_id, message_id FROM read_positions WHERE room_id=?",
+                (self.room_id,),
+            ).fetchall())
+        persisted_room = json.loads(room_row[2])
+        expected_reads = {
+            self.alice["id"]: first_message["id"],
+            self.bob["id"]: first_message["id"],
+        }
+        self.assertEqual(read_positions, expected_reads)
+        self.assertEqual(persisted_room["last_read_by"], expected_reads)
+        self.assertEqual(room_row[0], first_message["timestamp"])
+        self.assertEqual(persisted_room["updated_at"], first_message["timestamp"])
+        self.assertEqual(room_row[1], revision_before + 1)
+        self.assertEqual(persisted_room["_revision"], revision_before + 1)
+        self.assertEqual(
+            self.store._rooms_by_id[self.room_id]["last_read_by"], expected_reads
+        )
+        self.assertEqual(
+            self.store._rooms_by_id[self.room_id]["_revision"], revision_before + 1
+        )
+
+    def test_delete_message_rolls_back_every_row_when_room_update_fails(self) -> None:
+        first_message = self.store.add_message(self.room_id, "alice", "first")[0]
+        second_message = self.store.add_message(self.room_id, "alice", "second")[0]
+        self.store.mark_room_read(self.room_id, "alice")
+        self.store.mark_room_read(self.room_id, "bob")
+        with self.store.repository.connection() as database:
+            revision_before = database.execute(
+                "SELECT revision FROM rooms WHERE id=?", (self.room_id,)
+            ).fetchone()[0]
+            database.execute(
+                "CREATE TRIGGER reject_delete_room_update "
+                "BEFORE UPDATE ON rooms BEGIN "
+                "SELECT RAISE(ABORT, 'injected room update failure'); END"
+            )
+        try:
+            with self.assertRaises(sqlite3.IntegrityError):
+                self.store.repository.delete_message(
+                    self.room_id,
+                    second_message["id"],
+                    self.alice["id"],
+                )
+        finally:
+            with self.store.repository.connection() as database:
+                database.execute("DROP TRIGGER IF EXISTS reject_delete_room_update")
+
+        with self.store.repository.connection() as database:
+            remaining_ids = [
+                row[0]
+                for row in database.execute(
+                    "SELECT id FROM messages WHERE room_id=? ORDER BY rowid",
+                    (self.room_id,),
+                ).fetchall()
+            ]
+            read_positions = dict(database.execute(
+                "SELECT user_id, message_id FROM read_positions WHERE room_id=?",
+                (self.room_id,),
+            ).fetchall())
+            revision_after = database.execute(
+                "SELECT revision FROM rooms WHERE id=?", (self.room_id,)
+            ).fetchone()[0]
+        self.assertEqual(remaining_ids, [first_message["id"], second_message["id"]])
+        self.assertEqual(read_positions[self.alice["id"]], second_message["id"])
+        self.assertEqual(read_positions[self.bob["id"]], second_message["id"])
+        self.assertEqual(revision_after, revision_before)
+
+    def test_delete_only_message_removes_read_positions_and_restores_room_time(self) -> None:
+        message = self.store.add_message(self.room_id, "alice", "only message")[0]
+        self.store.mark_room_read(self.room_id, "bob")
+        created_at = self.store._rooms_by_id[self.room_id]["created_at"]
+
+        deleted, summary, error = self.store.delete_message(
+            self.room_id, "alice", message["id"]
+        )
+
+        self.assertIsNone(error)
+        self.assertEqual(deleted["id"], message["id"])
+        self.assertIsNone(summary["last_message"])
+        self.assertEqual(summary["updated_at"], created_at)
+        with self.store.repository.connection() as database:
+            read_count = database.execute(
+                "SELECT COUNT(*) FROM read_positions WHERE room_id=?", (self.room_id,)
+            ).fetchone()[0]
+            updated_at, data_json = database.execute(
+                "SELECT updated_at, data_json FROM rooms WHERE id=?", (self.room_id,)
+            ).fetchone()
+        persisted_room = json.loads(data_json)
+        self.assertEqual(read_count, 0)
+        self.assertEqual(updated_at, created_at)
+        self.assertEqual(persisted_room["updated_at"], created_at)
+        self.assertEqual(persisted_room["last_read_by"], {})
 
     def test_group_room_requires_friends_and_enforces_membership(self) -> None:
         group, error = self.store.create_group_room(
@@ -4086,6 +4877,310 @@ class StateStoreTestCase(unittest.TestCase):
                 "different content",
                 client_message_id=client_message_id,
             )
+
+    def test_reply_edit_and_reactions_round_trip_without_n_plus_one_reads(self) -> None:
+        original_result = self.store.add_message(self.room_id, "bob", "original")
+        assert original_result is not None
+        original = original_result[0]
+        reply_result = self.store.add_message(
+            self.room_id,
+            "alice",
+            "reply",
+            client_message_id="reply-message-key-0001",
+            reply_to_message_id=original["id"],
+        )
+        assert reply_result is not None
+        reply = reply_result[0]
+        self.assertEqual(reply["reply_to_message_id"], original["id"])
+        self.assertNotIn("reply_to", reply)
+
+        with (
+            mock.patch.object(
+                self.store.repository,
+                "messages_by_ids",
+                wraps=self.store.repository.messages_by_ids,
+            ) as replies_read,
+            mock.patch.object(
+                self.store.repository,
+                "reactions_for_messages",
+                wraps=self.store.repository.reactions_for_messages,
+            ) as reactions_read,
+        ):
+            page = self.store.get_messages_page(self.room_id, "alice", limit=30)
+        assert page is not None
+        hydrated_reply = next(item for item in page["items"] if item["id"] == reply["id"])
+        self.assertEqual(hydrated_reply["reply_to"]["text"], "original")
+        self.assertFalse(hydrated_reply["reply_to"]["deleted"])
+        self.assertEqual(hydrated_reply["reactions"], [])
+        self.assertEqual(replies_read.call_count, 1)
+        self.assertEqual(reactions_read.call_count, 1)
+
+        first_toggle = self.store.toggle_message_reaction(
+            self.room_id, "alice", reply["id"], "👍"
+        )
+        second_toggle = self.store.toggle_message_reaction(
+            self.room_id, "bob", reply["id"], "👍"
+        )
+        assert first_toggle is not None and second_toggle is not None
+        self.assertTrue(first_toggle[1])
+        self.assertEqual(second_toggle[2], 2)
+
+        before_edit = dict(reply)
+        edit_result = self.store.edit_message(self.room_id, "alice", reply["id"], "edited reply")
+        assert edit_result is not None
+        edited = edit_result[0]
+        self.assertEqual(edited["id"], before_edit["id"])
+        self.assertEqual(edited["timestamp"], before_edit["timestamp"])
+        self.assertEqual(edited.get("attachment"), before_edit.get("attachment"))
+        self.assertTrue(edited["edited_at"])
+
+        visible = self.store.message_for_user(self.room_id, "alice", edited)
+        assert visible is not None
+        self.assertEqual(
+            visible["reactions"],
+            [{"emoji": "👍", "count": 2, "reacted_by_me": True}],
+        )
+
+        self.assertTrue(self.store.delete_message(self.room_id, "bob", original["id"])[0])
+        tombstone = self.store.message_for_user(self.room_id, "alice", edited)
+        assert tombstone is not None
+        self.assertEqual(
+            tombstone["reply_to"],
+            {"id": original["id"], "deleted": True},
+        )
+
+        state_path = self.store.path
+        self.assertTrue(self.store.close())
+        self.store = server.StateStore(state_path)
+        persisted = self.store.message_for_user(self.room_id, "alice", edited)
+        assert persisted is not None
+        self.assertEqual(persisted["text"], "edited reply")
+        self.assertEqual(persisted["reactions"][0]["count"], 2)
+
+    def test_reply_idempotency_includes_target_and_rejects_cross_room_target(self) -> None:
+        first = self.store.add_message(self.room_id, "bob", "first")[0]
+        second = self.store.add_message(self.room_id, "bob", "second")[0]
+        key = "reply-idempotency-0001"
+        created = self.store.add_message(
+            self.room_id,
+            "alice",
+            "same payload",
+            client_message_id=key,
+            reply_to_message_id=first["id"],
+        )
+        retried = self.store.add_message(
+            self.room_id,
+            "alice",
+            "same payload",
+            client_message_id=key,
+            reply_to_message_id=first["id"],
+        )
+        assert created is not None and retried is not None
+        self.assertTrue(created[2])
+        self.assertFalse(retried[2])
+        edited = self.store.edit_message(
+            self.room_id,
+            "alice",
+            created[0]["id"],
+            "edited after acknowledgement loss",
+        )
+        self.assertIsNone(edited[2])
+        retried_after_edit = self.store.add_message(
+            self.room_id,
+            "alice",
+            "same payload",
+            client_message_id=key,
+            reply_to_message_id=first["id"],
+        )
+        assert retried_after_edit is not None
+        self.assertFalse(retried_after_edit[2])
+        self.assertEqual(retried_after_edit[0]["text"], "edited after acknowledgement loss")
+        visible = self.store.message_for_user(self.room_id, "alice", retried_after_edit[0])
+        assert visible is not None
+        self.assertNotIn("_client_payload_fingerprint", visible)
+        room = next(
+            item
+            for item in self.store.get_rooms_page(self.alice, limit=20)["items"]
+            if item["id"] == self.room_id
+        )
+        self.assertNotIn("_client_payload_fingerprint", room["last_message"])
+        with self.assertRaises(ValueError):
+            self.store.add_message(
+                self.room_id,
+                "alice",
+                "edited after acknowledgement loss",
+                client_message_id=key,
+                reply_to_message_id=first["id"],
+            )
+        with self.assertRaises(ValueError):
+            self.store.add_message(
+                self.room_id,
+                "alice",
+                "same payload",
+                client_message_id=key,
+                reply_to_message_id=second["id"],
+            )
+        with self.assertRaises(LookupError):
+            self.store.add_message(
+                "lobby",
+                "alice",
+                "wrong room",
+                reply_to_message_id=first["id"],
+            )
+
+    def test_reactions_work_in_legacy_in_memory_mode(self) -> None:
+        repository = self.store.repository
+        self.store.repository = None
+        try:
+            room_id = "lobby"
+            result = self.store.add_message(room_id, "alice", "memory-only")
+            assert result is not None
+            message = result[0]
+            toggled = self.store.toggle_message_reaction(
+                room_id,
+                "bob",
+                message["id"],
+                "❤️",
+            )
+            self.assertIsNotNone(toggled[0])
+            self.assertTrue(toggled[1])
+            self.assertEqual(toggled[2], 1)
+            visible = self.store.message_for_user(room_id, "bob", message)
+            assert visible is not None
+            self.assertEqual(
+                visible["reactions"],
+                [{"emoji": "❤️", "count": 1, "reacted_by_me": True}],
+            )
+            page = self.store.get_messages_page(room_id, "bob", limit=30)
+            assert page is not None
+            paged_message = next(item for item in page["items"] if item["id"] == message["id"])
+            self.assertEqual(
+                paged_message["reactions"],
+                [{"emoji": "❤️", "count": 1, "reacted_by_me": True}],
+            )
+            toggled_off = self.store.toggle_message_reaction(
+                room_id,
+                "bob",
+                message["id"],
+                "❤️",
+            )
+            self.assertFalse(toggled_off[1])
+            self.assertEqual(toggled_off[2], 0)
+        finally:
+            self.store.repository = repository
+
+    def test_message_mutations_recheck_current_membership_in_sqlite_transaction(self) -> None:
+        created = self.store.add_message(self.room_id, "alice", "before leaving")
+        assert created is not None
+        message_id = created[0]["id"]
+        with self.store.repository.connection() as database:
+            database.execute(
+                "DELETE FROM room_members WHERE room_id=? AND user_id=?",
+                (self.room_id, self.alice["id"]),
+            )
+
+        services = server.ApplicationServices(
+            self.store,
+            server.PresenceStore(self.store.repository, "stale-membership-test"),
+        )
+        commands = (
+            lambda: services.create_message(
+                self.alice,
+                {
+                    "roomId": self.room_id,
+                    "text": "must not send",
+                    "clientMessageId": "stale-member-create-0001",
+                },
+                lambda _value, _username: None,
+            ),
+            lambda: services.edit_message(
+                self.alice,
+                {"roomId": self.room_id, "messageId": message_id, "text": "must not edit"},
+            ),
+            lambda: services.toggle_message_reaction(
+                self.alice,
+                {
+                    "roomId": self.room_id,
+                    "messageId": message_id,
+                    "emoji": "👍",
+                    "reacted": True,
+                },
+            ),
+            lambda: services.delete_message(
+                self.alice,
+                {"roomId": self.room_id, "messageId": message_id},
+            ),
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                with self.assertRaises(server.CommandFailure) as caught:
+                    command()
+                self.assertEqual(caught.exception.status, server.HTTPStatus.FORBIDDEN)
+
+        self.assertIsNotNone(self.store.repository.message_by_id(self.room_id, message_id))
+
+    def test_concurrent_edit_and_reaction_share_a_monotonic_message_revision(self) -> None:
+        created = self.store.add_message(self.room_id, "alice", "before concurrent mutation")
+        assert created is not None
+        message_id = created[0]["id"]
+        second_repository = server.NormalizedSqliteRepository(self.store.repository.path)
+        barrier = threading.Barrier(2)
+
+        def edit_message():
+            barrier.wait()
+            return second_repository.update_message_text(
+                self.room_id,
+                message_id,
+                self.alice["id"],
+                "concurrent edit",
+                "2026-09-03T00:00:00+00:00",
+            )
+
+        def react_to_message():
+            barrier.wait()
+            return self.store.repository.toggle_message_reaction(
+                self.room_id,
+                message_id,
+                self.bob["id"],
+                "❤️",
+                "2026-09-03T00:00:00+00:00",
+                True,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            edited_future = executor.submit(edit_message)
+            reaction_future = executor.submit(react_to_message)
+            edited, edit_error = edited_future.result()
+            reaction, reaction_error = reaction_future.result()
+
+        self.assertIsNone(edit_error)
+        self.assertIsNone(reaction_error)
+        assert edited is not None and reaction is not None
+        self.assertEqual(
+            {edited["mutation_revision"], reaction["mutation_revision"]},
+            {1, 2},
+        )
+        snapshots = [edited, reaction["message"]]
+        latest = max(snapshots, key=lambda message: message["mutation_revision"])
+        self.assertEqual(latest["text"], "concurrent edit")
+        self.assertEqual(
+            latest["_event_reaction_rows"],
+            [{"message_id": message_id, "user_id": self.bob["id"], "emoji": "❤️"}],
+        )
+
+    def test_message_older_than_page_window_can_be_edited_and_deleted(self) -> None:
+        oldest = self.store.add_message(self.room_id, "alice", "oldest")[0]
+        for index in range(server.MAX_MESSAGES_PER_ROOM + 5):
+            self.store.add_message(self.room_id, "alice", f"newer-{index}")
+
+        edited = self.store.edit_message(self.room_id, "alice", oldest["id"], "still editable")
+        assert edited is not None
+        self.assertEqual(edited[0]["text"], "still editable")
+        deleted = self.store.delete_message(self.room_id, "alice", oldest["id"])
+        self.assertIsNotNone(deleted)
+        assert deleted is not None
+        self.assertTrue(deleted[0])
+        self.assertIsNone(self.store.repository.message_by_id(self.room_id, oldest["id"]))
 
     def test_message_pages_are_bounded_and_cursor_based(self) -> None:
         for index in range(45):

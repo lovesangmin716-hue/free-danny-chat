@@ -36,6 +36,23 @@ class ConcurrentUpdateError(RuntimeError):
     pass
 
 
+def attach_message_event_snapshot(message: dict, result: dict) -> None:
+    """Attach transaction-owned event data without persisting private fields."""
+    if "reply_to_message" in result:
+        reply_target = result.get("reply_to_message")
+        message["_event_reply_to"] = dict(reply_target) if isinstance(reply_target, dict) else None
+    reaction_rows = result.get("reactions")
+    if isinstance(reaction_rows, list):
+        message["_event_reaction_rows"] = [
+            dict(row) for row in reaction_rows if isinstance(row, dict)
+        ]
+    recipient_usernames = result.get("recipient_usernames")
+    if isinstance(recipient_usernames, list):
+        message["_event_recipient_usernames"] = [
+            str(username) for username in recipient_usernames if username
+        ]
+
+
 def split_legacy_profile_art(user: dict) -> tuple[dict, bytes | None, bool]:
     compact = compact_user_profile_fields(user)
     pixels = user.get("profile_pixels")
@@ -285,32 +302,193 @@ class NormalizedSupabaseRepository:
             "room_id,user_id",
         )
 
-    def insert_message(self, message: dict, sender_id: str, room: dict, keep: int) -> bool:
-        result = self.rpc("colorless_insert_message", {"message_data": message, "sender_user_id": sender_id, "room_data": room, "keep_count": keep})
-        if not result:
-            return False
-        room["_revision"] = int(result)
-        return True
+    def room_member_usernames(self, room_id: str) -> set[str]:
+        rows = self.all_rows(
+            "room_members",
+            {
+                "select": "user:users(username)",
+                "room_id": f"eq.{room_id}",
+                "order": "user_id.asc",
+            },
+            page_size=500,
+        )
+        return {
+            str(user.get("username", ""))
+            for row in rows
+            if isinstance((user := row.get("user")), dict) and user.get("username")
+        }
+
+    def insert_message(
+        self,
+        message: dict,
+        sender_id: str,
+        room: dict,
+        keep: int,
+    ) -> tuple[bool, str | None]:
+        result = self.rpc("colorless_insert_message_v2", {"message_data": message, "sender_user_id": sender_id, "room_data": room, "keep_count": keep})
+        if not isinstance(result, dict):
+            return False, "conflict"
+        error = str(result.get("error", "") or "")
+        if error:
+            return False, error
+        revision = int(result.get("revision", 0))
+        if revision < 1:
+            return False, "conflict"
+        room["_revision"] = revision
+        attach_message_event_snapshot(message, result)
+        return True, None
 
     def message_by_client_id(self, room_id: str, sender_id: str, client_message_id: str) -> dict | None:
         rows = self.rows("messages", {"select": "data", "room_id": f"eq.{room_id}", "sender_id": f"eq.{sender_id}", "client_message_id": f"eq.{client_message_id}", "limit": "1"})
         return dict(rows[0]["data"]) if rows else None
 
-    def delete_message(self, room_id: str, message_id: str, sender_id: str) -> bool:
-        query = urlencode(
+    def message_by_id(self, room_id: str, message_id: str) -> dict | None:
+        rows = self.rows(
+            "messages",
             {
+                "select": "data",
                 "room_id": f"eq.{room_id}",
                 "id": f"eq.{message_id}",
-                "sender_id": f"eq.{sender_id}",
-                "select": "id",
-            }
+                "limit": "1",
+            },
         )
-        deleted = self.transport(
-            f"/rest/v1/messages?{query}",
-            method="DELETE",
-            prefer="return=representation",
+        return dict(rows[0]["data"]) if rows else None
+
+    def messages_by_ids(self, message_ids: list[str]) -> dict[str, dict]:
+        unique_ids = list(dict.fromkeys(message_id for message_id in message_ids if message_id))
+        if not unique_ids:
+            return {}
+        rows = self.rows(
+            "messages",
+            {
+                "select": "id,data",
+                "id": f"in.({','.join(unique_ids)})",
+                "limit": str(len(unique_ids)),
+            },
         )
-        return isinstance(deleted, list) and bool(deleted)
+        return {
+            str(row["id"]): dict(row["data"])
+            for row in rows
+            if isinstance(row.get("data"), dict)
+        }
+
+    def update_message_text(
+        self,
+        room_id: str,
+        message_id: str,
+        sender_id: str,
+        text: str,
+        edited_at: str,
+    ) -> tuple[dict | None, str | None]:
+        result = self.rpc(
+            "colorless_edit_message",
+            {
+                "message_room_id": room_id,
+                "target_message_id": message_id,
+                "editor_user_id": sender_id,
+                "edited_text": text,
+                "edited_timestamp": edited_at,
+            },
+        )
+        if not isinstance(result, dict):
+            return None, "not_found"
+        error = str(result.get("error", "") or "")
+        if error:
+            return None, error
+        message = result.get("message")
+        if isinstance(message, dict):
+            stored_message = dict(message)
+            attach_message_event_snapshot(stored_message, result)
+            return stored_message, None
+        # Rolling compatibility with the original RPC response shape.
+        return dict(result), None
+
+    def toggle_message_reaction(
+        self,
+        room_id: str,
+        message_id: str,
+        user_id: str,
+        emoji: str,
+        created_at: str,
+        desired_reacted: bool | None = None,
+    ) -> tuple[dict | None, str | None]:
+        result = self.rpc(
+            "colorless_toggle_message_reaction",
+            {
+                "reaction_room_id": room_id,
+                "reaction_message_id": message_id,
+                "reaction_user_id": user_id,
+                "reaction_emoji": emoji,
+                "reaction_created_at": created_at,
+                "desired_reacted": desired_reacted,
+            },
+        )
+        if not isinstance(result, dict):
+            return None, "not_found"
+        error = str(result.get("error", "") or "")
+        if error:
+            return None, error
+        response = dict(result)
+        message = response.get("message")
+        if isinstance(message, dict):
+            stored_message = dict(message)
+            attach_message_event_snapshot(stored_message, response)
+            response["message"] = stored_message
+        return response, None
+
+    def reactions_for_messages(self, message_ids: list[str]) -> dict[str, list[dict]]:
+        unique_ids = list(dict.fromkeys(message_id for message_id in message_ids if message_id))
+        if not unique_ids:
+            return {}
+        rows = self.all_rows(
+            "message_reactions",
+            {
+                "select": "message_id,user_id,emoji,created_at",
+                "message_id": f"in.({','.join(unique_ids)})",
+                "order": "message_id.asc,created_at.asc,user_id.asc",
+            },
+            page_size=500,
+        )
+        reactions: dict[str, list[dict]] = {}
+        for row in rows:
+            message_id = str(row.get("message_id", ""))
+            if message_id:
+                reactions.setdefault(message_id, []).append(dict(row))
+        return reactions
+
+    def delete_message(
+        self,
+        room_id: str,
+        message_id: str,
+        sender_id: str,
+    ) -> tuple[dict | None, str | None]:
+        result = self.rpc(
+            "colorless_delete_message",
+            {
+                "message_room_id": room_id,
+                "target_message_id": message_id,
+                "deleting_user_id": sender_id,
+            },
+        )
+        if not isinstance(result, dict):
+            return None, "not_found"
+        error = str(result.get("error", "") or "")
+        if error:
+            return None, error
+        if not result.get("deleted") or not isinstance(result.get("message"), dict):
+            return None, "not_found"
+        room = result.get("room")
+        if not isinstance(room, dict):
+            return None, "conflict"
+        outcome = dict(result)
+        outcome["message"] = dict(result["message"])
+        attach_message_event_snapshot(outcome["message"], result)
+        outcome["room"] = dict(room)
+        latest_message = result.get("latest_message")
+        outcome["latest_message"] = (
+            dict(latest_message) if isinstance(latest_message, dict) else None
+        )
+        return outcome, None
 
     def list_messages(self, room_id: str, *, limit: int = 200, before: str = "") -> list[dict]:
         return [
@@ -383,6 +561,27 @@ class NormalizedSupabaseRepository:
             str(row["room_id"]): dict(row["data"])
             for row in result if isinstance(row, dict) and isinstance(row.get("data"), dict)
         } if isinstance(result, list) else {}
+
+    def unread_counts_for_rooms(self, room_viewer_ids: dict[str, str]) -> dict[str, int]:
+        requested = [
+            {"room_id": room_id, "viewer_user_id": viewer_user_id}
+            for room_id, viewer_user_id in room_viewer_ids.items()
+            if room_id and viewer_user_id
+        ]
+        if not requested:
+            return {}
+        result = self.rpc("colorless_unread_counts", {"room_viewers": requested})
+        if not isinstance(result, dict):
+            raise SupabaseRequestError("unread count RPC returned an invalid response")
+        counts = {item["room_id"]: 0 for item in requested}
+        try:
+            for room_id in counts:
+                counts[room_id] = max(0, int(result.get(room_id, 0)))
+        except (TypeError, ValueError) as error:
+            raise SupabaseRequestError(
+                "unread count RPC returned an invalid response"
+            ) from error
+        return counts
 
     def attachment_room_ids(self, filename: str) -> set[str]:
         rows = self.all_rows(
@@ -863,6 +1062,15 @@ class NormalizedSqliteRepository:
                 );
                 CREATE INDEX IF NOT EXISTS messages_room_created_idx
                     ON messages(room_id, created_at DESC, id DESC);
+                CREATE TABLE IF NOT EXISTS message_reactions (
+                    message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    emoji TEXT NOT NULL CHECK(emoji IN ('👍', '❤️', '😂', '😮', '😢', '🙏')),
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(message_id, user_id, emoji)
+                );
+                CREATE INDEX IF NOT EXISTS message_reactions_message_idx
+                    ON message_reactions(message_id, emoji, created_at);
                 CREATE TABLE IF NOT EXISTS read_positions (
                     room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
                     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1329,6 +1537,35 @@ class NormalizedSqliteRepository:
                 (room_id, user_id, message_id),
             )
 
+    def room_member_usernames(self, room_id: str) -> set[str]:
+        with self.connection() as database:
+            rows = database.execute(
+                "SELECT users.username FROM room_members "
+                "JOIN users ON users.id=room_members.user_id "
+                "WHERE room_members.room_id=? ORDER BY users.username",
+                (room_id,),
+            ).fetchall()
+        return {str(row[0]) for row in rows if row[0]}
+
+    @staticmethod
+    def _event_recipient_usernames(
+        database: sqlite3.Connection,
+        room_id: str,
+        room_kind: str,
+    ) -> list[str]:
+        if room_kind == "public":
+            rows = database.execute(
+                "SELECT username FROM users ORDER BY username"
+            ).fetchall()
+        else:
+            rows = database.execute(
+                "SELECT users.username FROM room_members "
+                "JOIN users ON users.id=room_members.user_id "
+                "WHERE room_members.room_id=? ORDER BY users.username",
+                (room_id,),
+            ).fetchall()
+        return [str(row[0]) for row in rows if row[0]]
+
     def create_session(self, token_hash: str, account_id: str, active_user_id: str, created_at: float, expires_at: float, max_sessions: int) -> None:
         with self.connection() as database:
             database.execute("BEGIN IMMEDIATE")
@@ -1610,7 +1847,13 @@ class NormalizedSqliteRepository:
             "shorts_feeds": shorts_feeds,
         }
 
-    def insert_message(self, message: dict, sender_id: str, room: dict, keep: int) -> bool:
+    def insert_message(
+        self,
+        message: dict,
+        sender_id: str,
+        room: dict,
+        keep: int,
+    ) -> tuple[bool, str | None]:
         try:
             with self.connection() as database:
                 database.execute("BEGIN IMMEDIATE")
@@ -1619,13 +1862,28 @@ class NormalizedSqliteRepository:
                     (message["room_id"],),
                 ).fetchone()
                 if stored_room is None:
-                    return False
+                    return False, "not_found"
+                room_data = self.decode(stored_room[1])
+                if room_data.get("kind", "group") != "public":
+                    membership = database.execute(
+                        "SELECT 1 FROM room_members WHERE room_id=? AND user_id=?",
+                        (message["room_id"], sender_id),
+                    ).fetchone()
+                    if membership is None:
+                        return False, "forbidden"
+                reply_to_message_id = str(message.get("reply_to_message_id", ""))
+                if reply_to_message_id:
+                    reply_target = database.execute(
+                        "SELECT 1 FROM messages WHERE room_id=? AND id=?",
+                        (message["room_id"], reply_to_message_id),
+                    ).fetchone()
+                    if reply_target is None:
+                        return False, "reply_not_found"
                 inserted = self._insert_message(database, message, sender_id)
                 if not inserted:
                     database.rollback()
-                    return False
+                    return False, "conflict"
                 new_revision = int(stored_room[0]) + 1
-                room_data = self.decode(stored_room[1])
                 room_data["updated_at"] = message.get("timestamp", room_data.get("updated_at", ""))
                 room_data["_revision"] = new_revision
                 database.execute(
@@ -1638,10 +1896,29 @@ class NormalizedSqliteRepository:
                         "SELECT id FROM messages WHERE room_id=? ORDER BY rowid DESC LIMIT ?)",
                         (message["room_id"], message["room_id"], keep),
                     )
+                reply_target = None
+                if reply_to_message_id:
+                    reply_row = database.execute(
+                        "SELECT data_json FROM messages WHERE room_id=? AND id=?",
+                        (message["room_id"], reply_to_message_id),
+                    ).fetchone()
+                    reply_target = self.decode(reply_row[0]) if reply_row else None
+                attach_message_event_snapshot(
+                    message,
+                    {
+                        "reply_to_message": reply_target,
+                        "reactions": [],
+                        "recipient_usernames": self._event_recipient_usernames(
+                            database,
+                            message["room_id"],
+                            str(room_data.get("kind", "group")),
+                        ),
+                    },
+                )
             room["_revision"] = new_revision
-            return True
+            return True, None
         except sqlite3.IntegrityError:
-            return False
+            return False, "conflict"
 
     def message_by_client_id(self, room_id: str, sender_id: str, client_message_id: str) -> dict | None:
         with self.connection() as database:
@@ -1651,13 +1928,332 @@ class NormalizedSqliteRepository:
             ).fetchone()
         return self.decode(row[0]) if row else None
 
-    def delete_message(self, room_id: str, message_id: str, sender_id: str) -> bool:
+    def message_by_id(self, room_id: str, message_id: str) -> dict | None:
         with self.connection() as database:
+            row = database.execute(
+                "SELECT data_json FROM messages WHERE room_id=? AND id=?",
+                (room_id, message_id),
+            ).fetchone()
+        return self.decode(row[0]) if row else None
+
+    def messages_by_ids(self, message_ids: list[str]) -> dict[str, dict]:
+        unique_ids = list(dict.fromkeys(message_id for message_id in message_ids if message_id))
+        if not unique_ids:
+            return {}
+        placeholders = ",".join("?" for _ in unique_ids)
+        with self.connection() as database:
+            rows = database.execute(
+                f"SELECT id, data_json FROM messages WHERE id IN ({placeholders})",
+                tuple(unique_ids),
+            ).fetchall()
+        return {str(row[0]): self.decode(row[1]) for row in rows}
+
+    def update_message_text(
+        self,
+        room_id: str,
+        message_id: str,
+        sender_id: str,
+        text: str,
+        edited_at: str,
+    ) -> tuple[dict | None, str | None]:
+        with self.connection() as database:
+            database.execute("BEGIN IMMEDIATE")
+            row = database.execute(
+                "SELECT messages.sender_id, messages.data_json, rooms.kind, "
+                "EXISTS(SELECT 1 FROM room_members "
+                "WHERE room_members.room_id=messages.room_id AND room_members.user_id=?) "
+                "FROM messages JOIN rooms ON rooms.id=messages.room_id "
+                "WHERE messages.room_id=? AND messages.id=?",
+                (sender_id, room_id, message_id),
+            ).fetchone()
+            if row is None:
+                return None, "not_found"
+            if str(row[0]) != sender_id or (str(row[2]) != "public" and not bool(row[3])):
+                return None, "forbidden"
+            message = self.decode(row[1])
+            if not text and not isinstance(message.get("attachment"), dict):
+                return None, "empty"
+            message["text"] = text
+            message["edited_at"] = edited_at
+            message["mutation_revision"] = max(
+                0,
+                int(message.get("mutation_revision", 0)),
+            ) + 1
+            cursor = database.execute(
+                "UPDATE messages SET data_json=? WHERE room_id=? AND id=? AND sender_id=?",
+                (self.encode(message), room_id, message_id, sender_id),
+            )
+            if cursor.rowcount != 1:
+                return None, "not_found"
+            reaction_rows = [
+                {
+                    "message_id": str(row[0]),
+                    "user_id": str(row[1]),
+                    "emoji": str(row[2]),
+                }
+                for row in database.execute(
+                    "SELECT message_id, user_id, emoji FROM message_reactions "
+                    "WHERE message_id=? ORDER BY emoji, created_at, user_id",
+                    (message_id,),
+                ).fetchall()
+            ]
+            reply_target = None
+            reply_to_message_id = str(message.get("reply_to_message_id", ""))
+            if reply_to_message_id:
+                reply_row = database.execute(
+                    "SELECT data_json FROM messages WHERE room_id=? AND id=?",
+                    (room_id, reply_to_message_id),
+                ).fetchone()
+                reply_target = self.decode(reply_row[0]) if reply_row else None
+            recipient_usernames = self._event_recipient_usernames(
+                database,
+                room_id,
+                str(row[2]),
+            )
+        attach_message_event_snapshot(
+            message,
+            {
+                "reply_to_message": reply_target,
+                "reactions": reaction_rows,
+                "recipient_usernames": recipient_usernames,
+            },
+        )
+        return message, None
+
+    def toggle_message_reaction(
+        self,
+        room_id: str,
+        message_id: str,
+        user_id: str,
+        emoji: str,
+        created_at: str,
+        desired_reacted: bool | None = None,
+    ) -> tuple[dict | None, str | None]:
+        with self.connection() as database:
+            database.execute("BEGIN IMMEDIATE")
+            target = database.execute(
+                "SELECT rooms.kind, messages.data_json, EXISTS(SELECT 1 FROM room_members "
+                "WHERE room_members.room_id=messages.room_id AND room_members.user_id=?) "
+                "FROM messages JOIN rooms ON rooms.id=messages.room_id "
+                "WHERE messages.room_id=? AND messages.id=?",
+                (user_id, room_id, message_id),
+            ).fetchone()
+            if target is None:
+                return None, "not_found"
+            if str(target[0]) != "public" and not bool(target[2]):
+                return None, "forbidden"
+            message = self.decode(target[1])
+            existing_reaction = database.execute(
+                "SELECT 1 FROM message_reactions WHERE message_id=? AND user_id=? AND emoji=?",
+                (message_id, user_id, emoji),
+            ).fetchone()
+            was_reacted = existing_reaction is not None
+            reacted = not was_reacted if desired_reacted is None else desired_reacted
+            changed = reacted != was_reacted
+            if changed and reacted:
+                database.execute(
+                    "INSERT INTO message_reactions(message_id, user_id, emoji, created_at) VALUES(?, ?, ?, ?)",
+                    (message_id, user_id, emoji, created_at),
+                )
+            elif changed:
+                database.execute(
+                    "DELETE FROM message_reactions WHERE message_id=? AND user_id=? AND emoji=?",
+                    (message_id, user_id, emoji),
+                )
+            count = int(database.execute(
+                "SELECT COUNT(*) FROM message_reactions WHERE message_id=? AND emoji=?",
+                (message_id, emoji),
+            ).fetchone()[0])
+            mutation_revision = max(
+                0,
+                int(message.get("mutation_revision", 0)),
+            )
+            if changed:
+                mutation_revision += 1
+            message["mutation_revision"] = mutation_revision
+            if changed:
+                database.execute(
+                    "UPDATE messages SET data_json=? WHERE room_id=? AND id=?",
+                    (self.encode(message), room_id, message_id),
+                )
+            reaction_rows = [
+                {
+                    "message_id": str(row[0]),
+                    "user_id": str(row[1]),
+                    "emoji": str(row[2]),
+                }
+                for row in database.execute(
+                    "SELECT message_id, user_id, emoji FROM message_reactions "
+                    "WHERE message_id=? ORDER BY emoji, created_at, user_id",
+                    (message_id,),
+                ).fetchall()
+            ]
+            reply_target = None
+            reply_to_message_id = str(message.get("reply_to_message_id", ""))
+            if reply_to_message_id:
+                reply_row = database.execute(
+                    "SELECT data_json FROM messages WHERE room_id=? AND id=?",
+                    (room_id, reply_to_message_id),
+                ).fetchone()
+                reply_target = self.decode(reply_row[0]) if reply_row else None
+            recipient_usernames = self._event_recipient_usernames(
+                database,
+                room_id,
+                str(target[0]),
+            )
+        attach_message_event_snapshot(
+            message,
+            {
+                "reply_to_message": reply_target,
+                "reactions": reaction_rows,
+                "recipient_usernames": recipient_usernames,
+            },
+        )
+        return {
+            "reacted": reacted,
+            "count": count,
+            "mutation_revision": mutation_revision,
+            "changed": changed,
+            "message": message,
+            "reactions": reaction_rows,
+        }, None
+
+    def reactions_for_messages(self, message_ids: list[str]) -> dict[str, list[dict]]:
+        unique_ids = list(dict.fromkeys(message_id for message_id in message_ids if message_id))
+        if not unique_ids:
+            return {}
+        placeholders = ",".join("?" for _ in unique_ids)
+        with self.connection() as database:
+            rows = database.execute(
+                "SELECT message_id, user_id, emoji, created_at FROM message_reactions "
+                f"WHERE message_id IN ({placeholders}) ORDER BY message_id, created_at, user_id",
+                tuple(unique_ids),
+            ).fetchall()
+        reactions: dict[str, list[dict]] = {}
+        for message_id, user_id, emoji, created_at in rows:
+            reactions.setdefault(str(message_id), []).append(
+                {
+                    "message_id": str(message_id),
+                    "user_id": str(user_id),
+                    "emoji": str(emoji),
+                    "created_at": str(created_at),
+                }
+            )
+        return reactions
+
+    def delete_message(
+        self,
+        room_id: str,
+        message_id: str,
+        sender_id: str,
+    ) -> tuple[dict | None, str | None]:
+        with self.connection() as database:
+            database.execute("BEGIN IMMEDIATE")
+            target = database.execute(
+                "SELECT messages.sender_id, messages.data_json, messages.rowid, "
+                "rooms.kind, rooms.revision, rooms.data_json, rooms.updated_at, "
+                "EXISTS(SELECT 1 FROM room_members "
+                "WHERE room_members.room_id=messages.room_id AND room_members.user_id=?) "
+                "FROM messages JOIN rooms ON rooms.id=messages.room_id "
+                "WHERE messages.room_id=? AND messages.id=?",
+                (sender_id, room_id, message_id),
+            ).fetchone()
+            if target is None:
+                return None, "not_found"
+            if str(target[0]) != sender_id or (str(target[3]) != "public" and not bool(target[7])):
+                return None, "forbidden"
+
+            deleted_message = self.decode(target[1])
+            previous_row = database.execute(
+                "SELECT id FROM messages WHERE room_id=? AND rowid<? "
+                "ORDER BY rowid DESC LIMIT 1",
+                (room_id, int(target[2])),
+            ).fetchone()
+            previous_message_id = str(previous_row[0]) if previous_row else ""
+            if previous_message_id:
+                database.execute(
+                    "UPDATE read_positions SET message_id=? "
+                    "WHERE room_id=? AND message_id=?",
+                    (previous_message_id, room_id, message_id),
+                )
+            else:
+                database.execute(
+                    "DELETE FROM read_positions WHERE room_id=? AND message_id=?",
+                    (room_id, message_id),
+                )
             cursor = database.execute(
                 "DELETE FROM messages WHERE room_id=? AND id=? AND sender_id=?",
                 (room_id, message_id, sender_id),
             )
-        return cursor.rowcount == 1
+            if cursor.rowcount != 1:
+                return None, "not_found"
+
+            latest_row = database.execute(
+                "SELECT data_json FROM messages WHERE room_id=? ORDER BY rowid DESC LIMIT 1",
+                (room_id,),
+            ).fetchone()
+            latest_message = self.decode(latest_row[0]) if latest_row else None
+            deleted_attachment = deleted_message.get("attachment")
+            deleted_attachment_url = (
+                str(deleted_attachment.get("url", ""))
+                if isinstance(deleted_attachment, dict) else ""
+            )
+            attachment_still_used = bool(
+                deleted_attachment_url
+                and database.execute(
+                    "SELECT 1 FROM messages WHERE room_id=? "
+                    "AND json_extract(data_json, '$.attachment.url')=? LIMIT 1",
+                    (room_id, deleted_attachment_url),
+                ).fetchone()
+            )
+            room_data = self.decode(target[5])
+            updated_at = (
+                str(latest_message.get("timestamp", ""))
+                if latest_message is not None
+                else str(room_data.get("created_at", target[6]))
+            )
+            last_read_by = {
+                str(user_id): str(read_message_id)
+                for user_id, read_message_id in database.execute(
+                    "SELECT user_id, message_id FROM read_positions "
+                    "WHERE room_id=? ORDER BY user_id",
+                    (room_id,),
+                ).fetchall()
+            }
+            new_revision = int(target[4]) + 1
+            room_data["updated_at"] = updated_at
+            room_data["last_read_by"] = last_read_by
+            room_data["_revision"] = new_revision
+            updated = database.execute(
+                "UPDATE rooms SET updated_at=?, revision=?, data_json=? "
+                "WHERE id=? AND revision=?",
+                (
+                    updated_at,
+                    new_revision,
+                    self.encode(room_data),
+                    room_id,
+                    int(target[4]),
+                ),
+            )
+            if updated.rowcount != 1:
+                raise ConcurrentUpdateError("room revision conflict")
+            recipient_usernames = self._event_recipient_usernames(
+                database,
+                room_id,
+                str(target[3]),
+            )
+        attach_message_event_snapshot(
+            deleted_message,
+            {"recipient_usernames": recipient_usernames},
+        )
+        return {
+            "deleted": True,
+            "message": deleted_message,
+            "room": room_data,
+            "latest_message": latest_message,
+            "attachment_still_used": attachment_still_used,
+            "revision": new_revision,
+        }, None
 
     def list_messages(self, room_id: str, *, limit: int = 200, before: str = "") -> list[dict]:
         return [
@@ -1737,6 +2333,41 @@ class NormalizedSqliteRepository:
                 tuple(room_ids),
             ).fetchall()
         return {str(row[0]): self.decode(row[1]) for row in rows}
+
+    def unread_counts_for_rooms(self, room_viewer_ids: dict[str, str]) -> dict[str, int]:
+        requested = [
+            {"room_id": room_id, "viewer_user_id": viewer_user_id}
+            for room_id, viewer_user_id in room_viewer_ids.items()
+            if room_id and viewer_user_id
+        ]
+        if not requested:
+            return {}
+        with self.connection() as database:
+            rows = database.execute(
+                "WITH requested AS ("
+                "SELECT json_extract(value, '$.room_id') AS room_id, "
+                "json_extract(value, '$.viewer_user_id') AS viewer_user_id "
+                "FROM json_each(?)"
+                "), read_sequences AS ("
+                "SELECT requested.room_id, requested.viewer_user_id, "
+                "COALESCE(read_message.rowid, 0) AS last_read_sequence "
+                "FROM requested "
+                "LEFT JOIN read_positions ON read_positions.room_id=requested.room_id "
+                "AND read_positions.user_id=requested.viewer_user_id "
+                "LEFT JOIN messages AS read_message ON read_message.id=read_positions.message_id "
+                "AND read_message.room_id=requested.room_id"
+                ") "
+                "SELECT read_sequences.room_id, COUNT(messages.id) "
+                "FROM read_sequences "
+                "LEFT JOIN messages ON messages.room_id=read_sequences.room_id "
+                "AND messages.rowid>read_sequences.last_read_sequence "
+                "AND messages.sender_id<>read_sequences.viewer_user_id "
+                "GROUP BY read_sequences.room_id",
+                (self.encode(requested),),
+            ).fetchall()
+        counts = {item["room_id"]: 0 for item in requested}
+        counts.update({str(row[0]): max(0, int(row[1])) for row in rows})
+        return counts
 
     def attachment_room_ids(self, filename: str) -> set[str]:
         pattern = f'%"url":"/uploads/{filename}"%'
@@ -1924,7 +2555,7 @@ class NormalizedSqliteRepository:
             counts = {
                 table: int(database.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
                 for table in (
-                    "users", "friendships", "rooms", "room_members", "messages",
+                    "users", "friendships", "rooms", "room_members", "messages", "message_reactions",
                     "read_positions", "sessions", "shorts_catalog", "shorts_collection_state",
                     "realtime_events", "presence_leases",
                 )

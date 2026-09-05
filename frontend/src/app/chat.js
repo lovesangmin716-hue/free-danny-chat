@@ -1,24 +1,21 @@
 "use strict";
 
-import { CHAT_MESSAGE_MEMORY_LIMIT, CHAT_MESSAGE_PAGE_SIZE, appStore, chatMessageInput, chatMessageList, chatRoom, chatRoomAvatar, chatRoomName, chatRoomPresence, formatTime, messageReadMenu, messageReadMenuCopy, messageReadMenuTitle, normalizeStatusEmoji, openRoomSettingsButton, registerCoreHooks, requestAction, roomSettingsSheet, setAppStatus, state, syncAppStatusForActiveTab } from "./core.js";
+import { CHAT_MESSAGE_MEMORY_LIMIT, CHAT_MESSAGE_PAGE_SIZE, appStore, chatMessageInput, chatMessageList, chatRoom, chatRoomAvatar, chatRoomName, chatRoomPresence, clearChatDraft, formatTime, getChatDraft, normalizeStatusEmoji, openRoomSettingsButton, registerCoreHooks, requestAction, roomSettingsSheet, setAppStatus, state, syncAppStatusForActiveTab } from "./core.js";
 import { createRoomAvatar, currentRoom, renderChats, roomParticipantDisplayName, upsertMessengerRoom, upsertRoomAfterMessageDeletion } from "./messenger.js";
 import { clearChatAttachment, discardUploadedAttachment, renderChatAttachmentPreview, renderChatAttachmentTray, uploadChatAttachment } from "./attachments.js";
 import { formatVoiceDuration } from "./voice.js";
 import { chatVirtualRange, createChatVirtualSpacer, measureRenderedChatMessages } from "./chat-virtual.js";
 import { loadOlderChatMessages, mergeEntitiesById } from "./app.js";
 import { ColorlessImageProcessing } from "./platform/image-processing.js";
+import { messageReadReceiptLabel, shouldShowMessageTime } from "./platform/message-display.js";
+import { createClientMessageId, postMessageWithRetry } from "./platform/message-retry.js";
+import { isPersistedOutboxReplacement } from "./platform/outbox.js";
+import { readBoundaryIndex } from "./platform/room-snapshots.js";
+import { canMarkSelectedRoomRead, closeMessageReadMenu, completeReplyContext, composerReplySnapshot, composerReplyTarget, decorateMessageRow, registerMessageInteractionHooks, renderComposerContext, resetMessageInteractionState, submitComposerEdit, syncComposerHeight, updateReplyReferences } from "./message-interactions.js";
 
 // Message state, incremental rendering, pagination, retries, and sending.
-const MESSAGE_TIME_CLUSTER_MS = 5 * 60 * 1000;
-const MESSAGE_READ_SWIPE_THRESHOLD = 34;
-const MESSAGE_ERASE_TURN_DISTANCE = 18;
-const MESSAGE_ERASE_REQUIRED_TURNS = 4;
-const MESSAGE_ERASE_REQUIRED_TRAVEL = 150;
-const MESSAGE_ERASE_MAX_DURATION_MS = 3000;
 const CHAT_HISTORY_PAGE_SIZE = typeof CHAT_MESSAGE_PAGE_SIZE === "number" ? CHAT_MESSAGE_PAGE_SIZE : 30;
 const CHAT_MEMORY_LIMIT = typeof CHAT_MESSAGE_MEMORY_LIMIT === "number" ? CHAT_MESSAGE_MEMORY_LIMIT : 300;
-let messageReadSwipe = null;
-let suppressMessageClick = false;
 
 function currentRoomIdentity() {
   return currentRoom()?.viewer_identity || state.messenger.user || null;
@@ -26,14 +23,6 @@ function currentRoomIdentity() {
 
 function currentRoomUsername() {
   return currentRoomIdentity()?.username || "";
-}
-
-function shouldShowMessageTime(message, nextMessage) {
-  if (!nextMessage || nextMessage.username !== message.username) return true;
-  const timestamp = Date.parse(message.timestamp);
-  const nextTimestamp = Date.parse(nextMessage.timestamp);
-  if (!Number.isFinite(timestamp) || !Number.isFinite(nextTimestamp) || nextTimestamp < timestamp) return true;
-  return nextTimestamp - timestamp > MESSAGE_TIME_CLUSTER_MS;
 }
 
 function messageSenderDisplayName(room, message) {
@@ -89,12 +78,12 @@ function addMessageReader(message, username, room = currentRoom()) {
   };
 }
 
-function applyMessageReaderToCurrentMessages(username, transactionName = "messages.reader") {
+function applyMessageReaderToCurrentMessages(username, transactionName = "messages.reader", lastReadMessageId = "") {
+  const lastReadIndex = readBoundaryIndex(state.messages, state.messageIndexes, lastReadMessageId);
+  if (lastReadIndex < 0) return;
   const changedMessages = [];
   appStore.transact(transactionName, () => {
-    // Read positions are monotonic. Walk only the unread tail and stop at the
-    // first eligible message that already contains this reader.
-    for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    for (let index = lastReadIndex; index >= 0; index -= 1) {
       const message = state.messages[index];
       if (message.username === username) continue;
       if ((message.read_by || []).some((reader) => reader.username === username)) break;
@@ -134,13 +123,6 @@ function shouldShowMessageReadReceipt(message, messageIndex) {
   if (nextIndex < 0) return true;
   const nextReaders = new Set((state.messages[nextIndex].read_by || []).map((reader) => reader.username));
   return (message.read_by || []).some((reader) => !nextReaders.has(reader.username));
-}
-
-function messageReadReceiptLabel(message, room = currentRoom()) {
-  if (message.pending) return "보내는 중";
-  if (message.failed) return "전송 실패";
-  const readerCount = Array.isArray(message.read_by) ? message.read_by.length : 0;
-  return room?.kind === "group" ? `${readerCount}명 읽음` : (readerCount ? "읽음" : "안 읽음");
 }
 
 function syncMessageMetaEmpty(row) {
@@ -214,6 +196,7 @@ if (attachment.kind === "voice" && attachment.type?.startsWith("audio/")) {
         requestAnimationFrame(() => measureRenderedChatMessages());
       }, { once: true });
       attachmentLink.appendChild(image);
+      bubble.appendChild(attachmentLink);
 
     } else {
       const attachmentLink = document.createElement("a");
@@ -221,19 +204,10 @@ if (attachment.kind === "voice" && attachment.type?.startsWith("audio/")) {
       attachmentLink.href = attachment.url;
       attachmentLink.target = "_blank";
       attachmentLink.rel = "noopener";
-      if (attachment.type?.startsWith("image/")) {
-        const image = document.createElement("img");
-        image.className = "message-image";
-        image.src = attachment.url;
-        image.alt = attachment.name || "Attached photo";
-        image.loading = "lazy";
-        attachmentLink.appendChild(image);
-      } else {
-        attachmentLink.classList.add("message-file");
-        const isPdf = attachment.type === "application/pdf";
-        attachmentLink.textContent = `${isPdf ? "PDF" : "파일"} · ${attachment.name || "attachment"}`;
-        if (!isPdf) attachmentLink.download = attachment.name || "attachment";
-      }
+      attachmentLink.classList.add("message-file");
+      const isPdf = attachment.type === "application/pdf";
+      attachmentLink.textContent = `${isPdf ? "PDF" : "파일"} · ${attachment.name || "attachment"}`;
+      if (!isPdf) attachmentLink.download = attachment.name || "attachment";
       bubble.appendChild(attachmentLink);
     }
   }
@@ -262,6 +236,7 @@ if (attachment.kind === "voice" && attachment.type?.startsWith("audio/")) {
   time.textContent = formatTime(message.timestamp);
   meta.appendChild(time);
   row.append(bubble, meta);
+  decorateMessageRow(row, bubble, meta, message, { mine });
   setMessageGroupMetaVisibility(row, message, nextMessage);
   return row;
 }
@@ -272,133 +247,6 @@ function syncMessageTimeVisibility(messageIndex) {
   const row = state.messageNodes.get(message.id);
   if (!row) return;
   setMessageGroupMetaVisibility(row, message, state.messages[messageIndex + 1]);
-}
-
-function closeMessageReadMenu() {
-  messageReadMenu.classList.add("hidden");
-  messageReadMenu.setAttribute("aria-hidden", "true");
-}
-
-function openMessageReadMenu(message, row) {
-  const unreadNames = (message.unread_by || [])
-    .map((reader) => reader.display_name || reader.username)
-    .filter(Boolean);
-  messageReadMenuTitle.textContent = `안 읽은 사람 ${unreadNames.length}명`;
-  messageReadMenuCopy.textContent = unreadNames.length
-    ? unreadNames.join(", ")
-    : "모두 읽었어요.";
-  messageReadMenu.classList.remove("hidden");
-  messageReadMenu.setAttribute("aria-hidden", "false");
-  const width = messageReadMenu.offsetWidth;
-  const height = messageReadMenu.offsetHeight;
-  const rect = row.getBoundingClientRect();
-  const preferredLeft = row.classList.contains("mine") ? rect.left - width - 10 : rect.right + 10;
-  messageReadMenu.style.left = `${Math.max(8, Math.min(preferredLeft, window.innerWidth - width - 8))}px`;
-  messageReadMenu.style.top = `${Math.max(8, Math.min(rect.top + ((rect.height - height) / 2), window.innerHeight - height - 8))}px`;
-}
-
-function beginMessageReadSwipe(event) {
-  if (event.button !== undefined && event.button !== 0) return;
-  if (event.target.closest?.("audio, button, a, input")) return;
-  const row = event.target.closest?.(".message-row");
-  if (!row || !currentRoom()) return;
-  const message = state.messages[state.messageIndexes.get(row.dataset.messageId)];
-  if (!message || message.pending || message.failed) return;
-  closeMessageReadMenu();
-  messageReadSwipe = {
-    pointerId: event.pointerId,
-    startX: event.clientX,
-    startY: event.clientY,
-    message,
-    row,
-    revealed: false,
-    canErase: message.username === currentRoomUsername(),
-    startedAt: performance.now(),
-    lastX: event.clientX,
-    directionAnchorX: event.clientX,
-    direction: 0,
-    turns: 0,
-    travel: 0,
-    erasing: false,
-    deleting: false,
-  };
-  row.setPointerCapture?.(event.pointerId);
-}
-
-function updateMessageReadSwipe(event) {
-  const swipe = messageReadSwipe;
-  if (!swipe || swipe.pointerId !== event.pointerId || swipe.deleting) return;
-  const deltaX = event.clientX - swipe.startX;
-  const deltaY = event.clientY - swipe.startY;
-  const horizontal = Math.abs(deltaX) > Math.abs(deltaY) * 1.15;
-  if (!horizontal) return;
-  event.preventDefault();
-  if (!swipe.revealed && deltaX <= -MESSAGE_READ_SWIPE_THRESHOLD) {
-    swipe.revealed = true;
-    swipe.row.classList.add("showing-readers");
-    openMessageReadMenu(swipe.message, swipe.row);
-  }
-
-  if (!swipe.canErase) return;
-  swipe.travel += Math.abs(event.clientX - swipe.lastX);
-  swipe.lastX = event.clientX;
-  const directionDelta = event.clientX - swipe.directionAnchorX;
-  if (Math.abs(directionDelta) >= MESSAGE_ERASE_TURN_DISTANCE) {
-    const nextDirection = Math.sign(directionDelta);
-    if (swipe.direction && nextDirection !== swipe.direction) swipe.turns += 1;
-    swipe.direction = nextDirection;
-    swipe.directionAnchorX = event.clientX;
-  }
-  if (swipe.turns > 0) {
-    swipe.erasing = true;
-    swipe.row.classList.add("erasing");
-    swipe.row.classList.remove("showing-readers");
-    closeMessageReadMenu();
-    const turnProgress = swipe.turns / MESSAGE_ERASE_REQUIRED_TURNS;
-    const travelProgress = swipe.travel / MESSAGE_ERASE_REQUIRED_TRAVEL;
-    const eraseProgress = Math.min(1, Math.min(turnProgress, travelProgress));
-    swipe.row.style.setProperty("--erase-progress", String(eraseProgress));
-    swipe.row.style.setProperty("--erase-opacity", String(1 - (eraseProgress * 0.62)));
-    swipe.row.style.setProperty("--erase-offset", `${(eraseProgress - 0.5) * 8}px`);
-  }
-  if (
-    swipe.turns >= MESSAGE_ERASE_REQUIRED_TURNS
-    && swipe.travel >= MESSAGE_ERASE_REQUIRED_TRAVEL
-    && performance.now() - swipe.startedAt <= MESSAGE_ERASE_MAX_DURATION_MS
-  ) {
-    swipe.deleting = true;
-    swipe.row.classList.add("erase-committing");
-    void deleteChatMessage(swipe.message, swipe.row);
-  }
-}
-
-function finishMessageReadSwipe(event) {
-  const swipe = messageReadSwipe;
-  if (!swipe || (event?.pointerId !== undefined && swipe.pointerId !== event.pointerId)) return;
-  if (swipe.revealed || swipe.erasing) {
-    suppressMessageClick = true;
-    window.setTimeout(() => { suppressMessageClick = false; }, 0);
-  }
-  messageReadSwipe = null;
-  swipe.row.classList.remove("showing-readers");
-  if (!swipe.deleting) {
-    swipe.row.classList.remove("erasing");
-    swipe.row.style.removeProperty("--erase-progress");
-    swipe.row.style.removeProperty("--erase-opacity");
-    swipe.row.style.removeProperty("--erase-offset");
-  }
-  if (swipe.row.hasPointerCapture?.(swipe.pointerId)) swipe.row.releasePointerCapture(swipe.pointerId);
-  closeMessageReadMenu();
-}
-
-function suppressMessageReadContextMenu(event) {
-  if (event.target.closest?.(".message-row")) event.preventDefault();
-}
-
-function suppressClickAfterMessageSwipe(event) {
-  if (!suppressMessageClick) return;
-  event.preventDefault();
-  event.stopPropagation();
 }
 
 function rebuildMessageIndexes() {
@@ -431,8 +279,6 @@ function trimChatMessageHistory() {
     state.messageNodes.delete(message.id);
   }
   rebuildMessageIndexes();
-  // The first retained message becomes the cursor boundary, so dropped rows
-  // can still be fetched again if the user scrolls upward.
   state.messagesNextCursor = state.messages[0]?.id || state.messagesNextCursor;
   state.renderedMessageStart = -1;
   state.renderedMessageEnd = -1;
@@ -450,11 +296,69 @@ function appendChatMessageState(message) {
 
 function replaceChatMessageState(messageId, message) {
   const index = state.messageIndexes.get(messageId);
-  if (index === undefined) return false;
+  if (index === undefined || !message?.id) return false;
+  state.messageHeights.delete(messageId);
+  state.messageHeights.delete(message.id);
   state.messages[index] = message;
   state.messageIndexes.delete(messageId);
   state.messageIndexes.set(message.id, index);
   state.messageRevision += 1;
+  return true;
+}
+
+function applyUpdatedChatMessage(messageId, incomingMessage) {
+  const record = state.messageEventJournal.snapshot(
+    state.selectedRoomId, incomingMessage, incomingMessage?.mutation_revision,
+  );
+  if (record?.deleted) return false;
+  incomingMessage = record?.message || incomingMessage;
+  const index = state.messageIndexes.get(messageId);
+  if (!Number.isInteger(index) || !incomingMessage?.id) return false;
+  const existing = state.messages[index];
+  const currentMutationRevision = Number(existing.mutation_revision);
+  const incomingMutationRevision = Number(incomingMessage.mutation_revision);
+  if (
+    Number.isSafeInteger(currentMutationRevision)
+    && Number.isSafeInteger(incomingMutationRevision)
+    && incomingMutationRevision < currentMutationRevision
+  ) return false;
+  const priorReactionState = new Map((existing.reactions || []).map(
+    (reaction) => [reaction.emoji, Boolean(reaction.reacted_by_me)],
+  ));
+  const reactions = incomingMessage.reactions === undefined
+    ? (existing.reactions || [])
+    : incomingMessage.reactions.map((reaction) => ({
+        ...reaction,
+        reacted_by_me: reaction.reacted_by_me
+          ?? (Array.isArray(reaction.usernames)
+            ? reaction.usernames.includes(currentRoomUsername())
+            : (priorReactionState.get(reaction.emoji) ?? false)),
+      }));
+  const message = {
+    ...existing,
+    ...incomingMessage,
+    read_by: incomingMessage.read_by ?? existing.read_by,
+    unread_by: incomingMessage.unread_by ?? existing.unread_by,
+    reactions,
+  };
+  const optimistic = isPersistedOutboxReplacement(existing, message);
+  if (optimistic) {
+    if (existing.retry_data) existing.retry_data.reconciled = true;
+    state.chatOutbox.remove(state.selectedRoomId, existing.id);
+    Object.assign(message, { pending: false, failed: false });
+    delete message.retry_data;
+    delete message.preview_url;
+    if (existing.preview_url) URL.revokeObjectURL(existing.preview_url);
+  }
+  if (!replaceChatMessageState(messageId, message)) return false;
+  replaceChatMessageNode(messageId, message);
+  updateReplyReferences(messageId, message);
+  const room = currentRoom();
+  if (room?.last_message?.id === messageId) {
+    room.last_message = message;
+    room.updated_at = message.timestamp || room.updated_at;
+    renderChats();
+  }
   return true;
 }
 
@@ -468,24 +372,25 @@ function removeChatMessageState(messageId) {
   return true;
 }
 
-async function deleteChatMessage(message, row) {
+async function deleteChatMessage(message) {
   const roomId = state.selectedRoomId;
+  const authEpoch = state.authEpoch;
   try {
     const payload = await requestAction("messages.delete", "/messages/delete", {
       method: "POST",
       body: JSON.stringify({ roomId, messageId: message.id }),
     });
+    if (state.authEpoch !== authEpoch || state.selectedRoomId !== roomId) return;
+    state.messageEventJournal.tombstone(roomId, message.id, payload.mutationRevision, payload.room);
     if (payload.room) upsertRoomAfterMessageDeletion(payload.room);
     if (state.selectedRoomId === roomId && removeChatMessageState(message.id)) {
+      updateReplyReferences(message.id);
       renderAllChatMessages();
     }
     renderChats();
     setAppStatus("메시지를 지웠어요.", "success");
   } catch (error) {
-    row.classList.remove("erasing", "erase-committing");
-    row.style.removeProperty("--erase-progress");
-    row.style.removeProperty("--erase-opacity");
-    row.style.removeProperty("--erase-offset");
+    if (state.authEpoch !== authEpoch) return;
     setAppStatus(error.message, "error");
   }
 }
@@ -555,7 +460,10 @@ function renderAllChatMessages({ scrollToBottom = false, preserveScrollHeight = 
         : previousScrollTop;
     }
     measureRenderedChatMessages();
-    if (scrollToBottom || wasNearBottom) chatMessageList.scrollTop = chatMessageList.scrollHeight;
+    if (
+      scrollToBottom
+      || (!Number.isFinite(restoreScrollTop) && !preserveScrollHeight && wasNearBottom)
+    ) chatMessageList.scrollTop = chatMessageList.scrollHeight;
     requestAnimationFrame(() => {
       if (state.chatVirtualRenderId !== renderId || state.renderedMessageRoomId !== state.selectedRoomId) return;
       state.chatVirtualAdjusting = false;
@@ -583,8 +491,11 @@ function scheduleChatVirtualRender() {
   });
 }
 
-function appendChatMessageNode(_message, scrollToBottom = false) {
-  renderAllChatMessages({ scrollToBottom });
+function appendChatMessageNode(_message, scrollToBottom = false, preservePosition = false) {
+  renderAllChatMessages({
+    scrollToBottom,
+    restoreScrollTop: preservePosition ? chatMessageList.scrollTop : null,
+  });
 }
 
 function replaceChatMessageNode(messageId, message) {
@@ -627,13 +538,13 @@ function renderChatRoom({ scrollToBottom = false, preserveScrollHeight = 0, rest
   openRoomSettingsButton.classList.toggle("hidden", !hasRoomSettings);
   renderChatAttachmentTray();
   renderChatAttachmentPreview();
-  const draft = state.chatDrafts[room.id] || "";
-  if (chatMessageInput.value !== draft) chatMessageInput.value = draft;
+  const draft = getChatDraft(room.id);
+  if (state.composerContext?.mode !== "edit" && chatMessageInput.value !== draft) chatMessageInput.value = draft;
+  renderComposerContext();
+  syncComposerHeight();
   chatRoomAvatar.replaceChildren(createRoomAvatar(room));
-  chatRoomName.textContent = room.name; /*
-  chatRoomPresence.textContent = isInThisRoom ? "대화방에 접속 중" : (presence?.online ? "활동 중" : "");
-
-  */ chatRoomPresence.textContent = room.kind === "ticket_listing" || room.kind === "ticket_deal"
+  chatRoomName.textContent = room.name;
+  chatRoomPresence.textContent = room.kind === "ticket_listing" || room.kind === "ticket_deal"
     ? [room.ticket?.matchup, room.ticket?.seat].filter(Boolean).join(" · ")
     : isGroupRoom
       ? `${room.participant_count || room.participants?.length || 0}명`
@@ -661,16 +572,26 @@ async function updatePresence() {
 }
 
 function scheduleRoomRead(roomId) {
-  if (!roomId) return;
+  if (!roomId || !canMarkSelectedRoomRead(roomId)) return;
+  const authEpoch = state.authEpoch;
   window.clearTimeout(state.roomReadTimers.get(roomId));
   const timer = window.setTimeout(() => {
     state.roomReadTimers.delete(roomId);
+    if (state.authEpoch !== authEpoch || !canMarkSelectedRoomRead(roomId)) return;
     void requestAction("rooms.mark-read", "/rooms/read", {
       method: "POST",
       body: JSON.stringify({ roomId }),
-    }).then(() => {
-      if (state.selectedRoomId === roomId) {
-        applyMessageReaderToCurrentMessages(currentRoomUsername(), "messages.mark-read");
+    }).then((payload) => {
+      if (state.authEpoch === authEpoch && state.selectedRoomId === roomId) {
+        const lastReadMessageId = payload.room?.last_message?.id || "";
+        if (!lastReadMessageId) return;
+        applyMessageReaderToCurrentMessages(currentRoomUsername(), "messages.mark-read", lastReadMessageId);
+        const room = currentRoom();
+        if (room?.last_message?.id === lastReadMessageId) {
+          room.unread_count = 0;
+          room._local_unread_known = true;
+        }
+        renderChats();
       }
     }).catch(() => {});
   }, 120);
@@ -680,12 +601,16 @@ function scheduleRoomRead(roomId) {
 async function loadChatMessages({ markRead = true, scrollToBottom = false, aroundMessageId = "" } = {}) {
   if (!state.selectedRoomId) return;
   const roomId = state.selectedRoomId;
+  const authEpoch = state.authEpoch;
+  const journalCheckpoint = state.messageEventJournal.checkpoint();
+  if (aroundMessageId) state.chatHistoryMode = true;
   state.messagesLoadController?.abort();
   const controller = new AbortController();
   const loadEpoch = state.messagesLoadEpoch + 1;
   state.messagesLoadEpoch = loadEpoch;
   state.messagesLoadController = controller;
   state.messagesInitialLoading = true;
+  chatMessageList.setAttribute("aria-busy", "true");
   renderChatRoom();
   try {
     const aroundQuery = aroundMessageId ? `&around=${encodeURIComponent(aroundMessageId)}` : "";
@@ -694,17 +619,24 @@ async function loadChatMessages({ markRead = true, scrollToBottom = false, aroun
       `/messages?room_id=${encodeURIComponent(roomId)}&limit=${CHAT_HISTORY_PAGE_SIZE}${aroundQuery}`,
       { signal: controller.signal },
     );
-    if (state.selectedRoomId !== roomId || state.messagesLoadEpoch !== loadEpoch) return;
-    const messages = Array.isArray(payload) ? payload : (payload.items || []);
+    if (state.authEpoch !== authEpoch || state.selectedRoomId !== roomId || state.messagesLoadEpoch !== loadEpoch) return;
+    const messages = state.messageEventJournal.resolveAll(
+      roomId,
+      Array.isArray(payload) ? payload : (payload.items || []),
+      journalCheckpoint,
+    );
     const serverClientMessageIds = new Set();
     for (const message of messages) {
       if (message.client_message_id) serverClientMessageIds.add(message.client_message_id);
     }
-    for (const pendingMessage of state.messages) {
-      if (
-        pendingMessage.pending
-        && !serverClientMessageIds.has(pendingMessage.client_message_id)
-      ) messages.push(pendingMessage);
+    for (const optimisticMessage of state.chatOutbox.list(roomId)) {
+      if (serverClientMessageIds.has(optimisticMessage.client_message_id)) {
+        if (optimisticMessage.retry_data) optimisticMessage.retry_data.reconciled = true;
+        state.chatOutbox.remove(roomId, optimisticMessage.id);
+        if (optimisticMessage.preview_url) URL.revokeObjectURL(optimisticMessage.preview_url);
+      } else {
+        messages.push(optimisticMessage);
+      }
     }
     setChatMessages(messages);
     state.messagesNextCursor = Array.isArray(payload) ? "" : (payload.next_cursor || "");
@@ -718,16 +650,19 @@ async function loadChatMessages({ markRead = true, scrollToBottom = false, aroun
         window.setTimeout(() => target.classList.remove("search-target"), 1900);
       }));
     }
-    if (markRead && state.selectedRoomId === roomId) {
+    if (markRead && !aroundMessageId && canMarkSelectedRoomRead(roomId)) {
       scheduleRoomRead(roomId);
     }
+    return true;
   } catch (error) {
     if (error?.name === "AbortError") return;
     setAppStatus(error.message, "error");
+    return false;
   } finally {
     if (state.messagesLoadEpoch === loadEpoch) {
       state.messagesLoadController = null;
       state.messagesInitialLoading = false;
+      chatMessageList.setAttribute("aria-busy", "false");
       if (state.selectedRoomId === roomId) {
         if (!state.messages.length) state.renderedMessageRoomId = "";
         renderChatRoom();
@@ -737,6 +672,7 @@ async function loadChatMessages({ markRead = true, scrollToBottom = false, aroun
 }
 
 function unloadChatMessages() {
+  const roomId = state.selectedRoomId;
   state.messagesLoadEpoch += 1;
   state.messagesLoadController?.abort();
   state.messagesOlderLoadController?.abort();
@@ -748,6 +684,9 @@ function unloadChatMessages() {
   state.messagesOlderLoadController = null;
   state.messagesInitialLoading = false;
   state.messagesLoadingOlder = false;
+  for (const message of state.messages) {
+    if (message.preview_url && !state.chatOutbox.has(roomId, message.id)) URL.revokeObjectURL(message.preview_url);
+  }
   setChatMessages([]);
   state.messagesNextCursor = "";
   state.messageNodes.clear();
@@ -761,6 +700,7 @@ async function loadRoomMembers(roomId, { reset = true } = {}) {
   const room = state.roomById.get(roomId);
   if (!room || room.kind !== "group" || state.roomMembersLoading.has(roomId)) return;
   const cursor = reset ? "" : (state.roomMemberCursors.get(roomId) || "");
+  const authEpoch = state.authEpoch;
   if (!reset && !cursor) return;
   state.roomMembersLoading.add(roomId);
   try {
@@ -769,7 +709,7 @@ async function loadRoomMembers(roomId, { reset = true } = {}) {
       "rooms.members",
       `/rooms/${encodeURIComponent(roomId)}/members?limit=50${suffix}`,
     );
-    if (state.roomById.get(roomId) !== room) return;
+    if (state.authEpoch !== authEpoch || state.roomById.get(roomId) !== room) return;
     const existing = reset ? [] : (room.participants || []);
     room.participants = mergeEntitiesById(existing, page.items || [], false);
     room.participant_count = Math.max(room.participant_count || 0, room.participants.length);
@@ -785,18 +725,27 @@ async function loadRoomMembers(roomId, { reset = true } = {}) {
 }
 
 async function openChatRoom(roomId, { aroundMessageId = "", focusInput = true } = {}) {
-  if (state.selectedRoomId && state.selectedRoomId !== roomId) unloadChatMessages();
+  const authEpoch = state.authEpoch;
+  if (state.selectedRoomId && state.selectedRoomId !== roomId) {
+    unloadChatMessages();
+    clearChatAttachment();
+  }
+  state.chatHistoryMode = Boolean(aroundMessageId);
+  resetMessageInteractionState();
   state.selectedRoomId = roomId;
   state.messagesInitialLoading = true;
   state.renderedMessageRoomId = "";
-  chatMessageInput.value = state.chatDrafts[roomId] || "";
+  chatMessageInput.value = getChatDraft(roomId);
+  syncComposerHeight();
   renderChatRoom();
   await Promise.all([
     updatePresence(),
     loadRoomMembers(roomId),
     loadChatMessages({ scrollToBottom: !aroundMessageId, aroundMessageId }),
   ]);
-  if (focusInput) chatMessageInput.focus({ preventScroll: true });
+  if (focusInput && state.authEpoch === authEpoch && state.selectedRoomId === roomId) {
+    chatMessageInput.focus({ preventScroll: true });
+  }
 }
 
 async function openChatRoomAtMessage(room, messageId) {
@@ -804,9 +753,22 @@ async function openChatRoomAtMessage(room, messageId) {
   await openChatRoom(room.id, { aroundMessageId: messageId, focusInput: false });
 }
 
+async function jumpToLatestChatMessages() {
+  const roomId = state.selectedRoomId;
+  if (!roomId) return false;
+  const loaded = await loadChatMessages({ markRead: false, scrollToBottom: true });
+  if (!loaded || state.selectedRoomId !== roomId) return false;
+  state.chatHistoryMode = false;
+  renderChatRoom({ scrollToBottom: true });
+  scheduleRoomRead(roomId);
+  return true;
+}
+
 function closeChatRoom() {
-  state.selectedRoomId = "";
+  resetMessageInteractionState();
   unloadChatMessages();
+  state.selectedRoomId = "";
+  state.chatHistoryMode = false;
   state.renderedMessageRoomId = "";
   closeMessageReadMenu();
   clearChatAttachment();
@@ -821,33 +783,111 @@ function closeChatRoom() {
   updatePresence();
 }
 
-function createClientMessageId() {
-  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  return `client_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}`;
+function postChatMessageWithRetry(payload, authEpoch = state.authEpoch) {
+  return postMessageWithRetry(requestAction, payload, () => state.authEpoch === authEpoch);
 }
 
-function retryDelay(milliseconds) {
-  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-}
-
-async function postChatMessageWithRetry(payload) {
-  const maxAttempts = 3;
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    try {
-      return await requestAction("messages.send", "/messages", { method: "POST", body: JSON.stringify(payload) });
-    } catch (error) {
-      const retryable = !error?.status || error.status === 429 || error.status >= 500;
-      if (!retryable || attempt === maxAttempts - 1) throw error;
-      const retryAfter = Math.min(Number(error.retryAfter || 0) * 1000, 3000);
-      const backoff = 250 * (2 ** attempt) + Math.floor(Math.random() * 100);
-      await retryDelay(Math.max(retryAfter, backoff));
-    }
+function reconcileSentMessage(pendingId, message) {
+  if (!message?.id) return;
+  state.messageEventJournal.snapshot(state.selectedRoomId, message, message.mutation_revision, true);
+  if (state.messageIndexes.has(message.id) && message.id !== pendingId) {
+    removeChatMessageState(pendingId);
+    applyUpdatedChatMessage(message.id, message);
+    renderAllChatMessages({ scrollToBottom: true });
+    return;
   }
-  throw new Error("메시지를 전송하지 못했습니다.");
+  if (replaceChatMessageState(pendingId, message)) replaceChatMessageNode(pendingId, message);
+}
+
+async function deliverPendingMessage(pendingId, pendingMessage, retryData) {
+  const { roomId, text, attachmentFile, attachmentType, clientMessageId, replyToMessageId } = retryData;
+  const authEpoch = retryData.authEpoch ?? state.authEpoch;
+  const active = () => state.authEpoch === authEpoch && !retryData.cancelled;
+  const attachmentUpload = retryData.attachmentUpload;
+  retryData.attachmentUpload = null;
+  let uploadedAttachment = retryData.completedAttachment || null;
+  let delivered = false;
+  try {
+    let attachment = retryData.completedAttachment || null;
+    if (attachmentFile && !attachment) {
+      const uploadResult = attachmentUpload
+        ? await attachmentUpload.promise
+        : { attachment: await uploadChatAttachment(attachmentFile, attachmentType), error: null };
+      if (uploadResult.error || !uploadResult.attachment) {
+        throw uploadResult.error || new Error("첨부 파일을 업로드하지 못했습니다.");
+      }
+      attachment = uploadResult.attachment;
+      uploadedAttachment = attachment;
+      retryData.completedAttachment = attachment;
+    }
+    if (!active()) {
+      if (attachment) void discardUploadedAttachment(attachment);
+      delivered = true;
+      return;
+    }
+    const messagePayload = { roomId, text, attachment, clientMessageId };
+    if (replyToMessageId) messagePayload.replyToMessageId = replyToMessageId;
+    const savedMessage = await postChatMessageWithRetry(messagePayload, authEpoch);
+    delivered = true;
+    if (!active()) return;
+    if (uploadedAttachment && savedMessage.attachment?.url !== uploadedAttachment.url) {
+      void discardUploadedAttachment(uploadedAttachment);
+    }
+    const room = state.messenger.rooms.find((candidate) => candidate.id === roomId);
+    const message = { ...savedMessage, read: Boolean(savedMessage.read) };
+    state.messageEventJournal.snapshot(roomId, message, message.mutation_revision, true);
+    state.chatOutbox.remove(roomId, pendingId);
+    if (state.selectedRoomId === roomId) reconcileSentMessage(pendingId, message);
+    if (room) {
+      room.last_message = message;
+      room.updated_at = message.timestamp;
+      state.messenger.rooms.sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)));
+      renderChats();
+    }
+  } catch (error) {
+    if (!state.chatOutbox.has(roomId, pendingId) && retryData.reconciled) {
+      delivered = true;
+      return;
+    }
+    if (!active()) {
+      if (uploadedAttachment) void discardUploadedAttachment(uploadedAttachment);
+      delivered = true;
+      return;
+    }
+    if (!state.chatOutbox.has(roomId, pendingId)) {
+      if (uploadedAttachment) void discardUploadedAttachment(uploadedAttachment);
+      delivered = true;
+      setAppStatus(error.message, "error");
+      return;
+    }
+    const failedMessage = { ...pendingMessage, pending: false, failed: true, retry_data: retryData };
+    state.chatOutbox.replace(roomId, pendingId, failedMessage);
+    if (state.selectedRoomId === roomId && state.messageIndexes.has(pendingId)) {
+      replaceChatMessageState(pendingId, failedMessage);
+      replaceChatMessageNode(pendingId, failedMessage);
+    }
+    setAppStatus(error.message, "error");
+  } finally {
+    if (delivered && pendingMessage.preview_url) URL.revokeObjectURL(pendingMessage.preview_url);
+  }
+}
+
+async function retryFailedMessage(message) {
+  if (!message?.failed || !message.retry_data || !state.messageIndexes.has(message.id)) return;
+  const pendingMessage = { ...message, pending: true, failed: false };
+  state.chatOutbox.replace(message.retry_data.roomId, message.id, pendingMessage);
+  replaceChatMessageState(message.id, pendingMessage);
+  replaceChatMessageNode(message.id, pendingMessage);
+  setAppStatus("메시지를 다시 보내고 있어요.");
+  await deliverPendingMessage(message.id, pendingMessage, message.retry_data);
 }
 
 function sendChatMessage(event) {
   event.preventDefault();
+  if (state.composerContext?.mode === "edit") {
+    void submitComposerEdit();
+    return;
+  }
   if (state.voiceRecording || state.voiceRecordingStarting) {
     setAppStatus("녹음을 먼저 중지한 뒤 보내기 버튼을 눌러 주세요.");
     return;
@@ -857,7 +897,7 @@ function sendChatMessage(event) {
     return;
   }
   const roomId = state.selectedRoomId;
-  const text = (chatMessageInput.value || state.chatDrafts[roomId] || "").trim();
+  const text = (chatMessageInput.value || getChatDraft(roomId)).trim();
   const attachmentFile = state.chatAttachment;
   const attachmentType = state.chatAttachmentType;
   const attachmentUpload = state.chatAttachmentUpload;
@@ -865,6 +905,8 @@ function sendChatMessage(event) {
 
   const clientMessageId = createClientMessageId();
   const pendingId = `pending-${clientMessageId}`;
+  const replyToMessageId = composerReplyTarget();
+  const replyTo = composerReplySnapshot();
   const previewUrl = attachmentFile && (attachmentType.startsWith("image/") || attachmentType.startsWith("audio/"))
     ? URL.createObjectURL(attachmentFile)
     : "";
@@ -881,12 +923,28 @@ function sendChatMessage(event) {
     } : null,
     timestamp: new Date().toISOString(),
     client_message_id: clientMessageId,
+    reply_to: replyTo,
     read: false,
     pending: true,
+    preview_url: previewUrl,
   };
+  const retryData = {
+    roomId,
+    text,
+    attachmentFile,
+    attachmentType,
+    attachmentUpload,
+    clientMessageId,
+    replyToMessageId,
+    authEpoch: state.authEpoch,
+  };
+  pendingMessage.retry_data = retryData;
+  state.chatOutbox.put(roomId, pendingMessage);
 
-  state.chatDrafts[roomId] = "";
+  clearChatDraft(roomId);
   chatMessageInput.value = "";
+  completeReplyContext();
+  syncComposerHeight();
   clearChatAttachment({ preserveUpload: true });
   if (state.selectedRoomId === roomId) {
     appendChatMessageState(pendingMessage);
@@ -894,67 +952,26 @@ function sendChatMessage(event) {
   }
   chatMessageInput.focus({ preventScroll: true });
 
-  let uploadedAttachment = null;
-  void (async () => {
-    try {
-      let attachment = null;
-      if (attachmentFile) {
-        const uploadResult = attachmentUpload
-          ? await attachmentUpload.promise
-          : { attachment: await uploadChatAttachment(attachmentFile, attachmentType), error: null };
-        if (uploadResult.error || !uploadResult.attachment) {
-          throw uploadResult.error || new Error("첨부 파일을 업로드하지 못했습니다.");
-        }
-        attachment = uploadResult.attachment;
-        uploadedAttachment = attachment;
-      }
-      const savedMessage = await postChatMessageWithRetry({
-        roomId,
-        text,
-        attachment,
-        clientMessageId,
-      });
-      const room = state.messenger.rooms.find((candidate) => candidate.id === roomId);
-      const message = {
-        ...savedMessage,
-        read: Boolean(savedMessage.read),
-      };
-      if (state.selectedRoomId === roomId) {
-        replaceChatMessageState(pendingId, message);
-        replaceChatMessageNode(pendingId, message);
-      }
-      if (room) {
-        room.last_message = message;
-        room.updated_at = message.timestamp;
-        state.messenger.rooms.sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)));
-        renderChats();
-      }
-    } catch (error) {
-      if (uploadedAttachment) void discardUploadedAttachment(uploadedAttachment);
-      if (state.selectedRoomId === roomId) {
-        const failedMessage = { ...pendingMessage, pending: false, failed: true };
-        replaceChatMessageState(pendingId, failedMessage);
-        replaceChatMessageNode(pendingId, failedMessage);
-      }
-      setAppStatus(error.message, "error");
-    } finally {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-    }
-  })();
+  void deliverPendingMessage(pendingId, pendingMessage, retryData);
 }
 
 registerCoreHooks({ updatePresence });
+registerMessageInteractionHooks({
+  deleteMessage: deleteChatMessage,
+  jumpToLatest: jumpToLatestChatMessages,
+  replaceMessage: applyUpdatedChatMessage,
+  retryMessage: retryFailedMessage,
+  scheduleRoomRead,
+});
 
 export {
   addMessageReader,
   appendChatMessageNode,
   appendChatMessageState,
   applyMessageReaderToCurrentMessages,
-  beginMessageReadSwipe,
+  applyUpdatedChatMessage,
   closeChatRoom,
-  closeMessageReadMenu,
   createClientMessageId,
-  finishMessageReadSwipe,
   loadChatMessages,
   openChatRoom,
   openChatRoomAtMessage,
@@ -963,12 +980,9 @@ export {
   removeChatMessageState,
   renderAllChatMessages,
   renderChatRoom,
-  retryDelay,
   scheduleChatVirtualRender,
   scheduleRoomRead,
   sendChatMessage,
-  suppressClickAfterMessageSwipe,
-  suppressMessageReadContextMenu,
-  updateMessageReadSwipe,
+  updateReplyReferences,
   updatePresence,
 };

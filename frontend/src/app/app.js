@@ -2,10 +2,11 @@
 
 import { CHAT_MESSAGE_PAGE_SIZE, appScreen, appTitle, chatList, chatsTab, createAvatar, createNewChatButton, directorySheet, friendCodeInput, friendList, friendsTab, getDisplayName, myDisplayName, myFriendCode, myProfileAvatar, myTab, myView, newChatGroupName, newChatGroupNameField, newChatMemberList, newChatSearch, newChatSheet, openDirectoryButton, openLoginButton, openNewChatButton, realtimeEvents, registerCoreHooks, renderStatusEmojiControl, requestAction, setAppStatus, shortShareBar, showApp, state, syncAppStatusForActiveTab } from "./core.js";
 import { connectEvents, rebuildPresenceIndexes, registerRealtimeHandlers, renderChats, renderDirectory, renderFriends, upsertMessengerRoom } from "./messenger.js";
-import { openChatRoom, rebuildMessageIndexes, renderChatRoom, retryDelay } from "./chat.js";
+import { openChatRoom, rebuildMessageIndexes, renderChatRoom } from "./chat.js";
 import { captureChatVirtualAnchor, chatVirtualScrollTopForAnchor } from "./chat-virtual.js";
 import { renderWorkModeControl, syncWorkModeVisibility } from "./work-mode.js";
 import { activeActionBarState, renderContextActionBar, renderFriendActionBar, renderHeaderSearch } from "./action-bar.js";
+import { mergeAuthoritativeRoomSnapshot, mergeRealtimeRoomSnapshot } from "./platform/room-snapshots.js";
 
 const accountIdentifier = document.getElementById("account-identifier");
 const identitySwitcher = document.getElementById("identity-switcher");
@@ -46,6 +47,13 @@ function renderMessenger() {
   renderContextActionBar();
   shortShareBar.classList.toggle("hidden", state.activeList === "my");
   if (!directorySheet.classList.contains("hidden")) renderDirectory();
+}
+
+function resetApplicationUi() {
+  identityCreateModal.classList.add("hidden");
+  identityCreateForm.reset();
+  identityFormStatus.textContent = "";
+  identityCreateStatus.textContent = "";
 }
 
 function renderMy() {
@@ -154,8 +162,19 @@ function applyMessengerData(data, { resetFriends = true, resetRooms = true } = {
   const friends = mergeEntitiesById(state.messenger.friends, data.friends || [], resetFriends)
     .sort((left, right) => String(left.username).localeCompare(String(right.username)));
   const friendsById = new Map(friends.map((friend) => [friend.id, friend]));
-  const mergedRooms = mergeEntitiesById(state.messenger.rooms, data.rooms || [], resetRooms);
+  const currentRooms = new Map(state.messenger.rooms.map((room) => [room.id, room]));
+  const roomSnapshots = (data.rooms || []).map(
+    (room) => mergeAuthoritativeRoomSnapshot(currentRooms.get(room.id), room),
+  );
+  const mergedRooms = mergeEntitiesById(state.messenger.rooms, roomSnapshots, resetRooms);
   const rooms = mergedRooms.map((room) => {
+    const resolved = room.last_message?.id
+      ? state.messageEventJournal.resolve(room.id, room.last_message)
+      : null;
+    if (resolved?.deleted) room = resolved.room
+      ? mergeRealtimeRoomSnapshot(room, resolved.room)
+      : { ...room, last_message: null };
+    else if (resolved?.message) room = { ...room, last_message: resolved.message };
     const friend = room.peer?.id ? friendsById.get(room.peer.id) : null;
     return friend ? { ...room, peer: { ...friend, ...room.peer } } : room;
   }).sort((left, right) => {
@@ -184,14 +203,16 @@ function applyMessengerData(data, { resetFriends = true, resetRooms = true } = {
 
 async function loadFriendsPage({ reset = false, render = false } = {}) {
   if (state.friendsLoading || (!reset && !state.friendsNextCursor)) return [];
+  const authEpoch = state.authEpoch;
   state.friendsLoading = true;
   try {
     const cursor = reset ? "" : state.friendsNextCursor;
     const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
     const page = await requestAction("friends.page", `/friends?limit=30${suffix}`, {}, {
-      key: `friends.page:${cursor || "first"}`,
+      key: `friends.page:${authEpoch}:${cursor || "first"}`,
       policy: "join",
     });
+    if (state.authEpoch !== authEpoch) return [];
     state.friendsNextCursor = page.next_cursor || "";
     applyMessengerData({ friends: page.items || [] }, { resetFriends: reset, resetRooms: false });
     if (render) {
@@ -200,20 +221,29 @@ async function loadFriendsPage({ reset = false, render = false } = {}) {
     }
     return page.items || [];
   } finally {
-    state.friendsLoading = false;
+    if (state.authEpoch === authEpoch) state.friendsLoading = false;
   }
 }
 
 async function loadRoomsPage({ reset = false, render = false } = {}) {
-  if (state.roomsLoading || (!reset && !state.roomsNextCursor)) return [];
+  if (state.roomsLoading) {
+    if (reset) {
+      state.roomsResetPending = true;
+      state.roomsResetRender ||= render;
+    }
+    return [];
+  }
+  if (!reset && !state.roomsNextCursor) return [];
+  const authEpoch = state.authEpoch;
   state.roomsLoading = true;
   try {
     const cursor = reset ? "" : state.roomsNextCursor;
     const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
     const page = await requestAction("rooms.page", `/rooms?limit=30${suffix}`, {}, {
-      key: `rooms.page:${cursor || "first"}`,
+      key: `rooms.page:${authEpoch}:${cursor || "first"}`,
       policy: "join",
     });
+    if (state.authEpoch !== authEpoch) return [];
     state.roomsNextCursor = page.next_cursor || "";
     applyMessengerData({ rooms: page.items || [] }, { resetFriends: false, resetRooms: reset });
     if (render) {
@@ -222,19 +252,30 @@ async function loadRoomsPage({ reset = false, render = false } = {}) {
     }
     return page.items || [];
   } finally {
-    state.roomsLoading = false;
+    if (state.authEpoch === authEpoch) {
+      state.roomsLoading = false;
+      if (state.roomsResetPending) {
+        const pendingRender = state.roomsResetRender;
+        state.roomsResetPending = false;
+        state.roomsResetRender = false;
+        void loadRoomsPage({ reset: true, render: pendingRender }).catch(() => {});
+      }
+    }
   }
 }
 
 async function loadMessenger(render = true) {
+  const authEpoch = state.authEpoch;
   const me = await requestAction("messenger.me", "/me", {}, {
-    key: "messenger.load",
+    key: `messenger.load:${authEpoch}`,
     policy: "join",
   });
+  if (state.authEpoch !== authEpoch || !state.session?.user) return false;
   const [friendsPage, roomsPage] = await Promise.all([
     requestAction("friends.first-page", "/friends?limit=30"),
     requestAction("rooms.first-page", "/rooms?limit=30"),
   ]);
+  if (state.authEpoch !== authEpoch || !state.session?.user) return false;
   state.friendsNextCursor = friendsPage.next_cursor || "";
   state.roomsNextCursor = roomsPage.next_cursor || "";
   const user = { ...(state.session?.user || {}), ...(me.user || {}) };
@@ -266,6 +307,7 @@ async function loadAllFriends() {
 
 async function syncLiveState() {
   if (!state.session?.user || state.liveSyncBusy) return;
+  const authEpoch = state.authEpoch;
   state.liveSyncBusy = true;
   try {
     let hasMore = true;
@@ -274,12 +316,18 @@ async function syncLiveState() {
         "messenger.sync",
         `/sync?after_revision=${encodeURIComponent(state.syncRevision)}&limit=200`,
       );
+      if (state.authEpoch !== authEpoch || !state.session?.user) return;
       if (payload.reset_required) {
         await loadMessenger();
         break;
       }
       for (const event of payload.events || []) {
-        await realtimeEvents.dispatch(event, {});
+        const handled = await realtimeEvents.dispatch(event, {});
+        if (state.authEpoch !== authEpoch) return;
+        if (!handled) {
+          await loadMessenger();
+          realtimeEvents.markHandled?.(event);
+        }
         recordSyncRevision(event.revision);
       }
       recordSyncRevision(payload.revision);
@@ -287,7 +335,7 @@ async function syncLiveState() {
     }
   } catch (_) {
   } finally {
-    state.liveSyncBusy = false;
+    if (state.authEpoch === authEpoch) state.liveSyncBusy = false;
   }
 }
 
@@ -302,12 +350,14 @@ function stopLiveSync() {
 }
 
 async function startApp() {
+  const authEpoch = state.authEpoch;
   state.isGuest = false;
   showApp();
   try {
     registerRealtimeHandlers();
-    await loadMessenger();
+    if (!await loadMessenger() || state.authEpoch !== authEpoch) return;
     await syncLiveState();
+    if (state.authEpoch !== authEpoch || !state.session?.user) return;
     connectEvents();
     startLiveSync();
     window.clearTimeout(state.appStartRetryTimer);
@@ -315,12 +365,13 @@ async function startApp() {
     state.appStartRetryCount = 0;
     setAppStatus("");
   } catch (error) {
+    if (state.authEpoch !== authEpoch) return;
     setAppStatus(`${error.message} 연결되면 자동으로 다시 시도합니다.`, "error");
     const retryDelay = Math.min(30000, 1000 * (2 ** Math.min(state.appStartRetryCount, 5)));
     state.appStartRetryCount += 1;
     window.clearTimeout(state.appStartRetryTimer);
     state.appStartRetryTimer = window.setTimeout(() => {
-      if (state.session?.user) startApp();
+      if (state.authEpoch === authEpoch && state.session?.user) startApp();
     }, retryDelay);
   }
 }
@@ -328,6 +379,7 @@ async function startApp() {
 async function loadOlderChatMessages() {
   if (!state.selectedRoomId || !state.messagesNextCursor || state.messagesLoadingOlder) return;
   const roomId = state.selectedRoomId;
+  const authEpoch = state.authEpoch;
   const cursor = state.messagesNextCursor;
   state.messagesLoadingOlder = true;
   const controller = new AbortController();
@@ -339,8 +391,8 @@ async function loadOlderChatMessages() {
       `/messages?room_id=${encodeURIComponent(roomId)}&limit=${APP_CHAT_PAGE_SIZE}&before=${encodeURIComponent(cursor)}`,
       { signal: controller.signal },
     );
-    if (state.selectedRoomId !== roomId || state.messagesNextCursor !== cursor) return;
-    const olderMessages = payload.items || [];
+    if (state.authEpoch !== authEpoch || state.selectedRoomId !== roomId || state.messagesNextCursor !== cursor) return;
+    const olderMessages = state.messageEventJournal.resolveAll(roomId, payload.items || []);
     state.messagesNextCursor = payload.next_cursor || "";
     if (olderMessages.length) {
       const existingIds = new Set();
@@ -567,7 +619,7 @@ async function openDirectChat(userId) {
   }
 }
 
-registerCoreHooks({ renderMessenger });
+registerCoreHooks({ renderMessenger, resetApplicationUi });
 
 export {
   addFriend,

@@ -44,6 +44,42 @@ def validate_source() -> list[str]:
     require("colorless_create_account_session" in schema, "Account session RPC is missing.", failures)
     require("colorless_switch_session_identity" in schema, "Identity switch RPC is missing.", failures)
     require("colorless_account_identity_integrity" in schema, "Account identity integrity RPC is missing.", failures)
+    require("colorless_insert_message_v2" in schema, "Versioned message insert RPC is missing.", failures)
+    require(
+        "revoke execute on function public.colorless_insert_message_v2" in schema
+        and "grant execute on function public.colorless_insert_message_v2" in schema,
+        "Versioned message insert RPC permissions are incomplete.",
+        failures,
+    )
+    require("create table if not exists public.message_reactions" in schema, "Message reactions table is missing.", failures)
+    require("colorless_edit_message" in schema, "Message edit RPC is missing.", failures)
+    require("colorless_toggle_message_reaction" in schema, "Message reaction RPC is missing.", failures)
+    require("colorless_delete_message" in schema, "Message delete RPC is missing.", failures)
+    require("colorless_unread_counts" in schema, "Unread-count RPC is missing.", failures)
+    require(
+        "revoke execute on function public.colorless_edit_message" in schema
+        and "grant execute on function public.colorless_edit_message" in schema,
+        "Message edit RPC permissions are incomplete.",
+        failures,
+    )
+    require(
+        "revoke execute on function public.colorless_toggle_message_reaction" in schema
+        and "grant execute on function public.colorless_toggle_message_reaction" in schema,
+        "Message reaction RPC permissions are incomplete.",
+        failures,
+    )
+    require(
+        "revoke execute on function public.colorless_delete_message" in schema
+        and "grant execute on function public.colorless_delete_message" in schema,
+        "Message delete RPC permissions are incomplete.",
+        failures,
+    )
+    require(
+        "revoke execute on function public.colorless_unread_counts" in schema
+        and "grant execute on function public.colorless_unread_counts" in schema,
+        "Unread-count RPC permissions are incomplete.",
+        failures,
+    )
     require("users_account_idx" in schema, "Account identity index is missing.", failures)
     require("--environment --remote" in render, "Render build must validate the production Supabase schema.", failures)
     require(packaged_js.exists() and packaged_js.stat().st_size > 0, "Packaged frontend bundle is missing.", failures)
@@ -104,6 +140,65 @@ def validate_remote_supabase() -> list[str]:
         accounts = supabase_request("/rest/v1/accounts?select=id&limit=1")
         identities = supabase_request("/rest/v1/users?select=id,account_id&limit=1")
         sessions = supabase_request("/rest/v1/sessions?select=token_hash,account_id,active_user_id&limit=1")
+        message_reactions = supabase_request("/rest/v1/message_reactions?select=message_id,user_id,emoji&limit=1")
+        insert_probe = supabase_request(
+            "/rest/v1/rpc/colorless_insert_message_v2",
+            method="POST",
+            payload={
+                "message_data": {
+                    "id": "__colorless_preflight_missing_message__",
+                    "room_id": "__colorless_preflight_missing_room__",
+                    "username": "__colorless_preflight_missing_user__",
+                    "text": "",
+                    "timestamp": "1970-01-01T00:00:00+00:00",
+                },
+                "sender_user_id": "__colorless_preflight_missing_user__",
+                "room_data": {},
+                "keep_count": 1,
+            },
+        )
+        edit_probe = supabase_request(
+            "/rest/v1/rpc/colorless_edit_message",
+            method="POST",
+            payload={
+                "message_room_id": "__colorless_preflight_missing_room__",
+                "target_message_id": "__colorless_preflight_missing_message__",
+                "editor_user_id": "__colorless_preflight_missing_user__",
+                "edited_text": "",
+                "edited_timestamp": "1970-01-01T00:00:00+00:00",
+            },
+        )
+        reaction_probe = supabase_request(
+            "/rest/v1/rpc/colorless_toggle_message_reaction",
+            method="POST",
+            payload={
+                "reaction_room_id": "__colorless_preflight_missing_room__",
+                "reaction_message_id": "__colorless_preflight_missing_message__",
+                "reaction_user_id": "__colorless_preflight_missing_user__",
+                "reaction_emoji": "👍",
+                "reaction_created_at": "1970-01-01T00:00:00+00:00",
+                "desired_reacted": False,
+            },
+        )
+        delete_probe = supabase_request(
+            "/rest/v1/rpc/colorless_delete_message",
+            method="POST",
+            payload={
+                "message_room_id": "__colorless_preflight_missing_room__",
+                "target_message_id": "__colorless_preflight_missing_message__",
+                "deleting_user_id": "__colorless_preflight_missing_user__",
+            },
+        )
+        unread_probe = supabase_request(
+            "/rest/v1/rpc/colorless_unread_counts",
+            method="POST",
+            payload={
+                "room_viewers": [{
+                    "room_id": "__colorless_preflight_missing_room__",
+                    "viewer_user_id": "__colorless_preflight_missing_user__",
+                }],
+            },
+        )
         integrity = supabase_request(
             "/rest/v1/rpc/colorless_account_identity_integrity",
             method="POST",
@@ -112,6 +207,33 @@ def validate_remote_supabase() -> list[str]:
         require(isinstance(accounts, list), "Supabase accounts table is not queryable.", failures)
         require(isinstance(identities, list), "Supabase account identities are not queryable.", failures)
         require(isinstance(sessions, list), "Supabase account sessions are not queryable.", failures)
+        require(isinstance(message_reactions, list), "Supabase message reactions are not queryable.", failures)
+        require(
+            isinstance(insert_probe, dict) and insert_probe.get("error") == "not_found",
+            "Supabase message insert RPC is unavailable or returned an invalid probe response.",
+            failures,
+        )
+        require(
+            isinstance(edit_probe, dict) and edit_probe.get("error") == "not_found",
+            "Supabase message edit RPC is unavailable or returned an invalid probe response.",
+            failures,
+        )
+        require(
+            isinstance(reaction_probe, dict) and reaction_probe.get("error") == "not_found",
+            "Supabase message reaction RPC is unavailable or returned an invalid probe response.",
+            failures,
+        )
+        require(
+            isinstance(delete_probe, dict) and delete_probe.get("error") == "not_found",
+            "Supabase message delete RPC is unavailable or returned an invalid probe response.",
+            failures,
+        )
+        require(
+            isinstance(unread_probe, dict)
+            and int(unread_probe.get("__colorless_preflight_missing_room__", -1)) == 0,
+            "Supabase unread-count RPC is unavailable or returned an invalid probe response.",
+            failures,
+        )
         require(isinstance(integrity, dict), "Supabase identity integrity RPC returned an invalid response.", failures)
         if isinstance(integrity, dict):
             for key in (

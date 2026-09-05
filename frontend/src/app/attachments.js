@@ -114,7 +114,7 @@ function renderChatAttachmentPreview() {
 }
 
 function discardUploadedAttachment(attachment) {
-  if (!attachment?.url || !state.session?.user) return Promise.resolve();
+  if (!attachment?.url) return Promise.resolve();
   return api("/uploads/discard", {
     method: "POST",
     body: JSON.stringify({ url: attachment.url }),

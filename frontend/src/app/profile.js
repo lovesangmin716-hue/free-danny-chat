@@ -6,6 +6,27 @@ import { renderMessenger } from "./app.js";
 import { ColorlessImageProcessing } from "./platform/image-processing.js";
 
 // Profile palette, avatar editor, image crop, and upload behavior.
+function currentProfileIdentityKey() {
+  const user = state.messenger.user || state.session?.user;
+  return String(state.session?.active_identity_id || user?.id || user?.username || "");
+}
+
+function captureProfileContext() {
+  return Object.freeze({ authEpoch: state.authEpoch, identityKey: currentProfileIdentityKey() });
+}
+
+function isProfileContextCurrent(context) {
+  return state.authEpoch === context.authEpoch
+    && currentProfileIdentityKey() === context.identityKey;
+}
+
+function ensureProfileContext(context) {
+  if (isProfileContextCurrent(context)) return;
+  const error = new Error("Profile session changed");
+  error.name = "AbortError";
+  throw error;
+}
+
 function getActiveProfilePalette() {
   if (state.selectedProfilePalette === "default") return DEFAULT_PROFILE_PALETTE;
   if (state.selectedProfilePalette === "custom") return state.customPalette;
@@ -104,11 +125,13 @@ function renderPalettePicker() {
   togglePalettePickerButton.textContent = state.palettePickerOpen ? "닫기" : "색 조합";
 }
 
-async function saveCustomPalette() {
+async function saveCustomPalette(profileContext = captureProfileContext()) {
+  const colors = [...state.customPalette];
   const data = await requestAction("profile.save-palette", "/profile/custom-palette", {
     method: "POST",
-    body: JSON.stringify({ colors: state.customPalette }),
+    body: JSON.stringify({ colors }),
   });
+  ensureProfileContext(profileContext);
   state.messenger.user = data.user;
   if (state.session?.user) state.session.user = data.user;
   state.customPalette = data.user.custom_palette || [];
@@ -126,11 +149,14 @@ async function addCustomPaletteColor(color = state.selectedProfileColor) {
     setAppStatus("나만의 팔레트에는 색을 10개까지 추가할 수 있어요.", "error");
     return;
   }
+  const profileContext = captureProfileContext();
   state.customPalette.push(color);
   try {
-    await saveCustomPalette();
+    await saveCustomPalette(profileContext);
+    ensureProfileContext(profileContext);
     setAppStatus("나만의 팔레트에 색을 추가했어요.", "success");
   } catch (error) {
+    if (!isProfileContextCurrent(profileContext) || error?.name === "AbortError") return;
     state.customPalette = state.customPalette.filter((item) => item !== color);
     renderCustomPalette();
     setAppStatus(error.message, "error");
@@ -138,12 +164,15 @@ async function addCustomPaletteColor(color = state.selectedProfileColor) {
 }
 
 async function removeCustomPaletteColor(color) {
+  const profileContext = captureProfileContext();
   const previousPalette = [...state.customPalette];
   state.customPalette = state.customPalette.filter((item) => item !== color);
   try {
-    await saveCustomPalette();
+    await saveCustomPalette(profileContext);
+    ensureProfileContext(profileContext);
     setAppStatus("나만의 팔레트에서 색을 지웠어요.", "success");
   } catch (error) {
+    if (!isProfileContextCurrent(profileContext) || error?.name === "AbortError") return;
     state.customPalette = previousPalette;
     renderCustomPalette();
     setAppStatus(error.message, "error");
@@ -613,6 +642,7 @@ function clearProfilePixels() {
 
 async function openProfileEditor() {
   const user = state.messenger.user || state.session?.user;
+  const profileContext = captureProfileContext();
   const loadId = state.profileEditorLoadId + 1;
   state.profileEditorLoadId = loadId;
   state.profilePixels = blankProfilePixels();
@@ -638,15 +668,20 @@ async function openProfileEditor() {
   profileSheet.classList.remove("hidden");
   try {
     const profileArt = await requestAction("profile.load-pixels", "/profile/pixels", {}, {
-      key: "profile.pixels",
-      policy: "join",
+      key: `profile.pixels:${profileContext.identityKey}`,
+      policy: "replace",
     });
-    if (state.profileEditorLoadId !== loadId || state.profilePixelsDirty) return;
+    if (
+      !isProfileContextCurrent(profileContext)
+      || state.profileEditorLoadId !== loadId
+      || state.profilePixelsDirty
+    ) return;
     state.profilePixels = normalizeProfilePixels(profileArt.pixels);
     state.profilePixelsDirty = false;
     buildProfileEditor();
     renderProfileImagePreview();
   } catch (error) {
+    if (!isProfileContextCurrent(profileContext) || error?.name === "AbortError") return;
     setAppStatus(error.message, "error");
   }
 }
@@ -669,6 +704,7 @@ async function saveProfilePixels() {
   }
   saveProfileButton.disabled = true;
   const user = state.messenger.user || state.session?.user;
+  const profileContext = captureProfileContext();
   try {
     let data = await requestAction("profile.save", "/profile", {
       method: "POST",
@@ -679,8 +715,10 @@ async function saveProfilePixels() {
         pixels: state.profilePixels,
       }),
     });
+    ensureProfileContext(profileContext);
     if (state.profilePixelsDirty && data.user?.profile_image_url) {
       data = await requestAction("profile.remove-legacy-image", "/profile/image/remove", { method: "POST" });
+      ensureProfileContext(profileContext);
     }
     state.messenger.user = data.user;
     if (state.session?.user) state.session.user = data.user;
@@ -689,9 +727,10 @@ async function saveProfilePixels() {
     renderMessenger();
     setAppStatus("프로필을 저장했어요.", "success");
   } catch (error) {
+    if (!isProfileContextCurrent(profileContext) || error?.name === "AbortError") return;
     setAppStatus(error.message, "error");
   } finally {
-    saveProfileButton.disabled = false;
+    if (isProfileContextCurrent(profileContext)) saveProfileButton.disabled = false;
   }
 }
 

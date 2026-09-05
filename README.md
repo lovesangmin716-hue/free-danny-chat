@@ -7,7 +7,8 @@
 - 아이디와 비밀번호 기반 회원가입 및 로그인
 - Google, Kakao OAuth 로그인
 - 친구 ID 검색과 친구 추가
-- 1:1 채팅, 읽음 상태, 접속 상태, 실시간 이벤트
+- 1:1·그룹 채팅, 답장, 작성자 메시지 편집·삭제, 표준 이모티콘 반응, 숫자형 안 읽음 상태, 접속 상태와 실시간 이벤트
+- 키보드로 조작 가능한 메시지 작업 메뉴와 실패 메시지의 멱등 재전송
 - 이미지, PDF, 텍스트·CSV·Markdown·RTF·ZIP 및 Office 문서 첨부와 채팅 입력창 붙여넣기(이미지 원본은 최대 50MB까지 선택 가능하며 브라우저에서 WebP로 줄인 뒤 8MB 이하만 전송, 나머지 파일은 최대 8MB)
 - 픽셀 아바타 편집과 프로필 사진 업로드(픽셀 원본은 별도 3KB RGB 리소스로 저장·편집기를 열 때만 조회하고, 목록은 immutable 버전 썸네일만 지연 로딩)
 - 계정당 최대 3개 활동 ID와 전체 ID 채팅 모아보기
@@ -92,7 +93,7 @@ cp .env.example .env
 | `REQUIRE_SUPABASE` | `false` | `true`이면 Supabase 설정이 없을 때 서버 시작을 중단해 임시 파일 저장을 방지 |
 | `LOCAL_SIGNUP_ENABLED` | `true` | 신규 로컬 회원가입과 휴대폰 인증 API 노출 여부. SMS 발송 연동 전 운영에서는 `false` |
 
-`SUPABASE_URL`과 `SUPABASE_SERVICE_ROLE_KEY`를 모두 설정하면 Supabase와 private `chat-uploads` 버킷을 사용합니다. 브라우저는 객체 하나에 한정된 signed upload URL로 저장소에 직접 전송하고, 서버는 크기·MIME·magic bytes를 확인한 뒤에만 메시지 첨부를 허용합니다. 다운로드는 방 접근 권한을 확인한 뒤 기본 60초 signed URL로 redirect하므로 정상 파일 바이트는 앱 서버를 지나지 않습니다. Supabase signed upload token 자체의 유효기간은 플랫폼이 정한 2시간이며, 앱의 pending grant는 기본 10분 뒤 만료되어 첨부에 사용할 수 없습니다. 최신 [`src/colorless/database/supabase-schema.sql`](src/colorless/database/supabase-schema.sql)은 사용자·관계·방·멤버·메시지·읽음 위치·세션의 정규화 테이블과 필수 제약/인덱스를 생성하며, 전환 검증과 rollback 동안 기존 `app_state`도 보존합니다.
+`SUPABASE_URL`과 `SUPABASE_SERVICE_ROLE_KEY`를 모두 설정하면 Supabase와 private `chat-uploads` 버킷을 사용합니다. 브라우저는 객체 하나에 한정된 signed upload URL로 저장소에 직접 전송하고, 서버는 크기·MIME·magic bytes를 확인한 뒤에만 메시지 첨부를 허용합니다. 다운로드는 방 접근 권한을 확인한 뒤 기본 60초 signed URL로 redirect하므로 정상 파일 바이트는 앱 서버를 지나지 않습니다. Supabase signed upload token 자체의 유효기간은 플랫폼이 정한 2시간이며, 앱의 pending grant는 기본 10분 뒤 만료되어 첨부에 사용할 수 없습니다. 최신 [`src/colorless/database/supabase-schema.sql`](src/colorless/database/supabase-schema.sql)은 사용자·관계·방·멤버·메시지·답장·반응·읽음 위치·세션의 정규화 테이블과 필수 제약/인덱스·RPC를 생성하며, 전환 검증과 rollback 동안 기존 `app_state`도 보존합니다. 답장·편집·반응 코드를 배포하기 전에 이 파일을 운영 Supabase에 반드시 먼저 적용해야 합니다.
 
 서버는 문서, JSON, 정적 asset, 인증된 업로드를 포함한 모든 HTTP 응답에 CSP, MIME sniffing 차단, framing 차단, Referrer Policy, Permissions Policy를 공통 적용합니다. CSP는 자체 리소스와 Google Identity에 필요한 origin만 허용합니다. HTTPS로 전달된 운영 요청에는 HSTS도 추가되므로 Render 앞단에서 `X-Forwarded-Proto: https`가 유지되어야 합니다.
 
@@ -179,7 +180,7 @@ SOCIAL_DEMO_LOGIN_ENABLED=false
 
 루트의 [`render.yaml`](render.yaml)은 저장소 루트에서 `colorless` 패키지를 설치합니다.
 
-1. Supabase 백업과 `app_state` 내보내기를 만든 뒤 최신 [`src/colorless/database/supabase-schema.sql`](src/colorless/database/supabase-schema.sql)을 먼저 적용합니다. 이 단계가 기존 사용자에서 계정과 첫 번째 아이덴티티를 분리하고 세션을 보강합니다.
+1. Supabase 백업과 `app_state` 내보내기를 만든 뒤 최신 [`src/colorless/database/supabase-schema.sql`](src/colorless/database/supabase-schema.sql)을 먼저 적용합니다. 이 단계가 기존 사용자에서 계정과 첫 번째 아이덴티티를 분리하고 세션을 보강하며, 메시지 답장·편집·반응 저장소와 RPC를 준비합니다. 스키마 적용이 끝나기 전에는 새 애플리케이션을 배포하지 마세요.
 2. `python tests/deploy_preflight.py`로 소스·Blueprint·스키마 필수 항목을 확인한 뒤 이 저장소를 GitHub에 푸시합니다.
 3. Render에서 새 Blueprint를 만들고 저장소를 연결합니다.
 4. Blueprint 생성 화면에서 `PUBLIC_BASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`와 사용할 Google/Kakao 로그인 자격 증명을 등록합니다.
@@ -246,6 +247,14 @@ Render Blueprint는 `REQUIRE_SUPABASE=true`로 실행됩니다. Supabase 환경 
 
 서버의 핵심 변경 명령은 `run_json_command()`에서 `ApplicationServices`를 호출합니다. 서비스는 HTTP 응답을 직접 작성하지 않고 데이터, 상태 코드, 발행할 이벤트가 포함된 `CommandOutcome`을 반환합니다. 세부 원칙과 흐름은 [`ARCHITECTURE.md`](ARCHITECTURE.md)를 참고하세요.
 
+### 메시지 상호작용 API
+
+- `POST /messages`: 기존 `roomId`, `text`, `attachment`, `clientMessageId`에 같은 방의 메시지 ID인 `replyToMessageId`를 선택적으로 받습니다. 응답의 `reply_to`에는 답장 대상의 표시용 요약이 포함됩니다.
+- `POST /messages/edit`: `{roomId, messageId, text}`로 본인이 해당 활동 ID에서 보낸 메시지만 편집합니다. 메시지 ID·시각·첨부·`client_message_id`는 유지되고 `edited_at`이 추가됩니다. 첨부가 없는 메시지는 빈 본문으로 만들 수 없습니다.
+- `POST /messages/reactions`: `{roomId, messageId, emoji}`로 현재 활동 ID의 반응을 토글합니다. 허용 반응은 `👍`, `❤️`, `😂`, `😮`, `😢`, `🙏`이며 응답은 이모티콘별 수와 내 반응 여부로 정규화됩니다.
+
+각 메시지의 44px 작업 버튼은 하나의 ARIA modal 메뉴를 열며 답장·복사·반응·읽음 상세와 조건에 맞는 편집·삭제·재전송을 제공합니다. 최종 전송 실패 메시지는 원래 `clientMessageId`와 답장 문맥으로 다시 보내 중복 생성을 막습니다. 방 목록은 숫자형 안 읽음 배지와 접근 가능한 이름을 제공하고, 숨겨진 탭은 메시지를 자동으로 읽음 처리하지 않습니다. 이전 기록을 보는 동안 새 메시지가 와도 강제로 맨 아래로 이동하지 않고 새 메시지 이동 버튼을 표시합니다.
+
 ## 개발 확인
 
 서버 테스트는 Python 표준 라이브러리의 `unittest`로 실행하며 개발 전 `python -m pip install -e .`로 패키지를 설치합니다. 브라우저 빌드와 JavaScript 문법 검사는 Node.js 22 이상을 사용합니다.
@@ -263,7 +272,7 @@ python tests/bootstrap_scale.py --count 1000 --iterations 20
 python tests/operations_load.py --profile smoke
 ```
 
-테스트는 채팅방별 이벤트 권한, 읽음 상태 중복 알림 방지, 첨부 파일 접근 권한, 세션 만료와 재시작 복원, 요청 제한, 증분 상태 저장, 접속 상태 인덱스, 외부 API 요청 병합을 확인합니다. `static_budget.py`는 TTF/OTF 포함, stale fingerprint, JS/CSS/font/image/HTML 용량 초과를 CI에서 차단합니다. `multi_instance.py`는 임시 공유 DB에 실제 서버 두 개를 띄워 서버 간 메시지 전달, 동일 `client_message_id` 재시도, 한 서버 중단 중 발생한 메시지의 cursor replay를 검사합니다. `bootstrap_scale.py`는 친구와 방을 각각 1,000개 만든 뒤 최초 30개 응답의 p95·gzip 크기와 전체 cursor 순회의 중복·누락을 검사합니다. `operations_load.py`의 smoke profile은 로그인, 메시지, SSE, 업로드, DB 장애를 실제 HTTP로 실행하고 SLO 회귀를 CI에서 차단합니다. 운영 SLO와 load/soak/spike 절차는 [`OPERATIONS.md`](OPERATIONS.md)를 참고하세요. 문법 검사와 실행 중인 서버의 상태 확인은 다음 명령을 사용하세요.
+테스트는 채팅방별 이벤트 권한, 답장 대상 권한, 작성자 편집, 반응 정규화·토글, 동일 `client_message_id` 재전송, 읽음 상태 중복 알림 방지, 첨부 파일 접근 권한, 세션 만료와 재시작 복원, 요청 제한, 증분 상태 저장, 접속 상태 인덱스, 외부 API 요청 병합을 확인합니다. `static_budget.py`는 TTF/OTF 포함, stale fingerprint, JS/CSS/font/image/HTML 용량 초과를 CI에서 차단합니다. `multi_instance.py`는 임시 공유 DB에 실제 서버 두 개를 띄워 서버 간 메시지 전달, 동일 `client_message_id` 재시도, 한 서버 중단 중 발생한 메시지의 cursor replay를 검사합니다. `bootstrap_scale.py`는 친구와 방을 각각 1,000개 만든 뒤 최초 30개 응답의 p95·gzip 크기와 전체 cursor 순회의 중복·누락을 검사합니다. `operations_load.py`의 smoke profile은 로그인, 메시지, SSE, 업로드, DB 장애를 실제 HTTP로 실행하고 SLO 회귀를 CI에서 차단합니다. 운영 SLO와 load/soak/spike 절차는 [`OPERATIONS.md`](OPERATIONS.md)를 참고하세요. 문법 검사와 실행 중인 서버의 상태 확인은 다음 명령을 사용하세요.
 
 대용량 이미지 경로는 서버 실행 후 `/assets/image-worker-benchmark.html`에서 확인할 수 있습니다. 이 자동 fixture는 Worker에서 12MP JPEG 변환, 100ms 이상 Long Task, 재선택 취소, 과도한 픽셀 헤더 거부를 한 번에 검사합니다. Worker 기능이 없는 브라우저는 12MP의 더 낮은 fallback 상한을 적용합니다.
 
@@ -279,6 +288,7 @@ curl http://localhost:8765/metrics
 ## 알려진 제한 사항
 
 - 휴대폰 인증은 개발용 코드 미리보기만 구현되어 있습니다.
+- 브라우저가 열린 탭에서 동작하는 알림을 포함한 브라우저 알림, 채팅방 고정·음소거와 입력 중 표시는 아직 제공하지 않습니다.
 - 로컬 SQLite 모드는 단일 서버 프로세스용입니다. 여러 인스턴스를 운영하려면 Supabase 같은 공유 저장소가 필요합니다.
 - 세션 토큰 해시는 상태 저장소에 보관됩니다. 실시간 접속 상태만 서버 재시작 시 초기화됩니다.
 - `StateStore`는 독립 모듈이지만 여전히 큰 단위이며 `ChatHandler`도 여러 기능 라우트를 포함합니다. 다음 단계에서는 두 클래스를 기능별 서비스와 HTTP route mixin으로 더 세분화해야 합니다.

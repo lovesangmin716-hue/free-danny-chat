@@ -2,12 +2,17 @@
 
 import { ColorlessPlatform } from "./platform/index.js";
 import { ColorlessImageProcessing } from "./platform/image-processing.js";
+import { createMessageRevisionJournal } from "./platform/message-revisions.js";
+import { createTransientOutbox } from "./platform/outbox.js";
 
 // Shared state, DOM references, API client, and presentation primitives.
 const coreHooks = {
   clearChatAttachment: null,
   renderMessenger: null,
   resetProfileImageCrop: null,
+  resetMessageInteractions: null,
+  resetApplicationUi: null,
+  resetWorkMode: null,
   setAuthMode: null,
   syncWorkModeVisibility: null,
   updatePresence: null,
@@ -64,6 +69,8 @@ const initialState = {
   presencePatchUsernames: new Set(),
   presencePatchFrame: null,
   messageRevision: 0,
+  messageEventJournal: createMessageRevisionJournal(),
+  messageReconciliationTimers: new Map(),
   renderedMessageRevision: -1,
   renderedMessageRoomId: "",
   renderedMessageStart: -1,
@@ -78,6 +85,11 @@ const initialState = {
   messagesLoadController: null,
   messagesOlderLoadController: null,
   chatDrafts: {},
+  chatOutbox: createTransientOutbox(),
+  composerContext: null,
+  composerEditController: null,
+  chatNewMessageCount: 0,
+  chatHistoryMode: false,
   chatAttachment: null,
   chatAttachmentType: "",
   chatAttachmentKind: "",
@@ -110,6 +122,8 @@ const initialState = {
   roomsNextCursor: "",
   friendsLoading: false,
   roomsLoading: false,
+  roomsResetPending: false,
+  roomsResetRender: false,
   roomMemberCursors: new Map(),
   roomMembersLoading: new Set(),
   roomReadTimers: new Map(),
@@ -146,6 +160,56 @@ lastPixelTapIndex: -1,
 const appStore = ColorlessPlatform.createStore(initialState);
 const state = appStore.state;
 sessionStorage.removeItem("free-danny-session-token");
+
+function chatDraftIdentityId(roomId) {
+  const room = state.roomById.get(roomId)
+    || state.messenger.rooms.find((candidate) => candidate.id === roomId);
+  return room?.viewer_identity_id
+    || room?.viewer_identity?.id
+    || state.session?.active_identity_id
+    || state.messenger.user?.id
+    || state.session?.user?.id
+    || "anonymous";
+}
+
+function chatDraftKey(roomId, identityId = "") {
+  const owner = identityId || chatDraftIdentityId(roomId);
+  return `colorless-chat-draft:${encodeURIComponent(owner)}:${encodeURIComponent(roomId)}`;
+}
+
+function getChatDraft(roomId) {
+  if (!roomId) return "";
+  const key = chatDraftKey(roomId);
+  if (Object.hasOwn(state.chatDrafts, key)) return state.chatDrafts[key];
+  try {
+    state.chatDrafts[key] = sessionStorage.getItem(key) || "";
+  } catch (_) {
+    state.chatDrafts[key] = "";
+  }
+  return state.chatDrafts[key];
+}
+
+function setChatDraft(roomId, value) {
+  if (!roomId) return;
+  const key = chatDraftKey(roomId);
+  const draft = String(value || "").slice(0, 300);
+  state.chatDrafts[key] = draft;
+  try {
+    if (draft) sessionStorage.setItem(key, draft);
+    else sessionStorage.removeItem(key);
+  } catch (_) {
+  }
+}
+
+function clearChatDraft(roomId, identityId = "") {
+  if (!roomId) return;
+  const key = chatDraftKey(roomId, identityId);
+  delete state.chatDrafts[key];
+  try {
+    sessionStorage.removeItem(key);
+  } catch (_) {
+  }
+}
 
 const ATTACHMENT_UPLOAD_BYTES_MAX = 8 * 1024 * 1024;
 const IMAGE_SOURCE_BYTES_MAX = 50 * 1024 * 1024;
@@ -195,28 +259,6 @@ const PROFILE_PALETTES = [
   ["#1f2937", "#ffd60a", "#fff1b8", "#a7f432", "#ff6b6b"],
   ["#ff2d55", "#ff7a59", "#ffd9c2", "#25f4ff", "#0a0f1c"],
 ];
-/*
-const PROFILE_PALETTE_NAMES = [
-  "솜사탕 아케이드", "구미 웜 글로우", "소다 팝 선셋", "민트칩 던전",
-  "체리 콜라 나이트", "롤리팝 과수원", "태피 네온 골목", "캐러멜 라떼",
-  "버블티 보바", "프로스티 베리", "젤리빈 바자", "마시멜로 구름나라",
-  "하드캔디 대비", "피치 소다 해변", "사워 애플 가로등", "리코리스 라벤더",
-  "캔디콘 카니발", "레인보우 셔벗", "록캔디 동굴", "버블검 메카",
-  "허니 레몬 팝", "핑크 레모네이드",
-];
-const STATUS_EMOJI_OPTIONS = ["🥳", "😀", "😐", "😕", "😭"];
-*/
-/*
-const PROFILE_PALETTE_NAMES = [
-  "솜사탕 아케이드", "구미 웜 글로우", "소다 팝 선셋", "민트칩 던전",
-  "체리 콜라 나이트", "롤리팝 과수원", "태피 네온 골목", "캐러멜 라떼",
-  "버블티 보바", "프로스티 베리", "젤리빈 바자", "마시멜로 구름나라",
-  "하드캔디 대비", "피치 소다 해변", "사워 애플 가로등", "리코리스 라벤더",
-  "캔디콘 카니발", "레인보우 셔벗", "록캔디 동굴", "버블검 메카",
-  "허니 레몬 팝", "핑크 레모네이드",
-];
-const STATUS_EMOJI_OPTIONS = ["🥳", "😀", "😐", "😕", "😭"];
-*/
 const PROFILE_PALETTE_NAMES = [
   "\uc1a0\uc0ac\ud0d5 \uc544\ucf00\uc774\ub4dc", "\uad6c\ubbf8 \uc6dc \uae00\ub85c\uc6b0", "\uc18c\ub2e4 \ud31d \uc120\uc14b", "\ubbfc\ud2b8\uce69 \ub358\uc804",
   "\uccb4\ub9ac \ucf5c\ub77c \ub098\uc774\ud2b8", "\ub864\ub9ac\ud31d \uacfc\uc218\uc6d0", "\ud0dc\ud53c \ub124\uc628 \uace8\ubaa9", "\uce90\ub7ec\uba5c \ub77c\ub5bc",
@@ -270,6 +312,11 @@ const leaveRoomButton = document.getElementById("leave-room-button");
 const chatMessageList = document.getElementById("chat-message-list");
 const chatMessageForm = document.getElementById("chat-message-form");
 const chatMessageInput = document.getElementById("chat-message-input");
+const chatNewMessagesButton = document.getElementById("chat-new-messages-button");
+const chatComposerContext = document.getElementById("chat-composer-context");
+const chatComposerContextTitle = document.getElementById("chat-composer-context-title");
+const chatComposerContextCopy = document.getElementById("chat-composer-context-copy");
+const cancelChatComposerContextButton = document.getElementById("cancel-chat-composer-context");
 const chatAttachmentInput = document.getElementById("chat-attachment-input");
 const chatAttachmentButton = document.getElementById("chat-attachment-button");
 const chatAttachmentTray = document.getElementById("chat-attachment-tray");
@@ -283,6 +330,11 @@ const chatAttachmentRemove = document.getElementById("chat-attachment-remove");
 const messageReadMenu = document.getElementById("message-read-menu");
 const messageReadMenuTitle = document.getElementById("message-read-menu-title");
 const messageReadMenuCopy = document.getElementById("message-read-menu-copy");
+const messageActionDialog = document.getElementById("message-action-dialog");
+const closeMessageActionButton = document.getElementById("close-message-action-button");
+const messageActionSummary = document.getElementById("message-action-summary");
+const messageActionReactions = document.getElementById("message-action-reactions");
+const messageActionStatus = document.getElementById("message-action-status");
 const shortShareBar = document.getElementById("short-share-bar");
 const shortShareList = document.getElementById("short-share-list");
 const shortShareSend = document.getElementById("short-share-send");
@@ -561,10 +613,25 @@ function runAppAction(name, execute, options = {}) {
 }
 
 function requestAction(name, url, requestOptions = {}, actionOptions = {}) {
+  const authEpoch = state.authEpoch;
+  const key = actionOptions.key;
+  const authScoped = actionOptions.authIndependent !== true;
+  const guardResult = actionOptions.allowStaleResult !== true;
   return runAppAction(
     name,
-    () => httpClient.request(url, requestOptions),
-    actionOptions,
+    async ({ signal }) => {
+      const result = await httpClient.request(url, {
+        ...requestOptions,
+        signal: requestOptions.signal || signal,
+      });
+      if (authScoped && guardResult && state.authEpoch !== authEpoch) {
+        const error = new Error("Authentication session changed");
+        error.name = "AbortError";
+        throw error;
+      }
+      return result;
+    },
+    key ? { ...actionOptions, key: `${authScoped ? authEpoch : "public"}:${key}` } : actionOptions,
   );
 }
 
@@ -607,6 +674,19 @@ function beginAuthRequest(message) {
 function showAuth(mode = "login") {
   advanceAuthEpoch();
   httpClient.clearCache();
+  state.messagesLoadEpoch += 1;
+  state.messagesLoadController?.abort();
+  state.messagesOlderLoadController?.abort();
+  state.messagesLoadController = null;
+  state.messagesOlderLoadController = null;
+  for (const timer of state.roomReadTimers.values()) window.clearTimeout(timer);
+  state.roomReadTimers.clear();
+  for (const timer of state.messageReconciliationTimers.values()) window.clearTimeout(timer);
+  state.messageReconciliationTimers.clear();
+  state.messageEventJournal.clear();
+  coreHooks.resetMessageInteractions?.();
+  coreHooks.resetApplicationUi?.();
+  coreHooks.resetWorkMode?.();
   if (state.eventSource) {
     state.eventSource.close();
     state.eventSource = null;
@@ -628,10 +708,41 @@ function showAuth(mode = "login") {
   state.roomsNextCursor = "";
   state.friendsLoading = false;
   state.roomsLoading = false;
+  state.roomsResetPending = false;
+  state.roomsResetRender = false;
+  window.clearTimeout(state.chatSearchTimer);
+  state.chatSearchTimer = null;
+  state.chatSearchRequestId += 1;
+  state.chatSearchResults = [];
+  state.chatSearchLoading = false;
+  state.activeList = "chats";
+  state.selectedShareRoomIds = [];
+  state.newChatOriginTab = "";
+  state.actionBarByTab = {
+    chats: { mode: "idle", query: "", filter: "all", selection: [] },
+    friends: { mode: "idle", query: "", filter: "all", selection: [] },
+    my: { mode: "idle", query: "", filter: "all", selection: [] },
+  };
+  headerSearchInput.value = "";
+  headerSearchInput.blur();
+  headerSearch.classList.add("hidden");
+  appHeader.classList.remove("searching");
+  appTitle.classList.remove("hidden");
+  shortShareBar.classList.remove("replying");
+  shortShareList.replaceChildren();
+  shortShareFeedback.textContent = "";
+  shortShareSend.classList.add("hidden");
+  shortShareSend.disabled = false;
   state.roomMemberCursors.clear();
   state.roomMembersLoading.clear();
   state.lastSeenRoomMessageIds = {};
   state.selectedRoomId = "";
+  state.messenger = { friends: [], discoverableUsers: [], rooms: [] };
+  state.friendByUsername.clear();
+  state.roomById.clear();
+  state.roomIdsByPeerUsername.clear();
+  state.friendNodes.clear();
+  state.roomNodes.clear();
   state.messages = [];
   state.messageIndexes.clear();
   state.messageNodes.clear();
@@ -640,6 +751,18 @@ function showAuth(mode = "login") {
   state.renderedMessageRoomId = "";
   state.messagesNextCursor = "";
   state.messagesLoadingOlder = false;
+  state.messagesInitialLoading = false;
+  for (const message of state.chatOutbox.clear()) {
+    if (message.retry_data) message.retry_data.cancelled = true;
+    if (message.preview_url) URL.revokeObjectURL(message.preview_url);
+  }
+  state.chatHistoryMode = false;
+  state.composerContext = null;
+  state.chatNewMessageCount = 0;
+  state.chatDrafts = {};
+  chatMessageInput.value = "";
+  chatMessageInput.disabled = false;
+  chatMessageList.setAttribute("aria-busy", "false");
   if (coreHooks.clearChatAttachment) coreHooks.clearChatAttachment();
   else state.chatAttachmentUpload = null;
   state.profileImageSelectionId += 1;
@@ -658,6 +781,9 @@ function showAuth(mode = "login") {
   appScreen.classList.add("hidden");
   coreHooks.syncWorkModeVisibility?.();
   directorySheet.classList.add("hidden");
+  newChatSheet.classList.add("hidden");
+  profileSheet.classList.add("hidden");
+  roomSettingsSheet.classList.add("hidden");
   coreHooks.setAuthMode?.(mode);
 }
 
@@ -745,9 +871,8 @@ function createAvatar(value, pixels, presence = null, savedStatus = "", profileI
   if (activityEmoji) {
     const emoji = document.createElement("span");
     emoji.className = "presence-emoji";
-    emoji.textContent = activityEmoji; /*
-    emoji.setAttribute("aria-label", "활동 중");
-    */ emoji.setAttribute("aria-label", "active");
+    emoji.textContent = activityEmoji;
+    emoji.setAttribute("aria-label", "active");
     wrapper.appendChild(emoji);
   }
   return wrapper;
@@ -787,6 +912,7 @@ export {
   beginAuthRequest,
   blankProfilePixels,
   cancelProfilePhotoButton,
+  cancelChatComposerContextButton,
   chatAttachmentButton,
   chatAttachmentGuide,
   chatAttachmentGuideItems,
@@ -799,12 +925,17 @@ export {
   chatMessageForm,
   chatMessageInput,
   chatMessageList,
+  chatNewMessagesButton,
+  chatComposerContext,
+  chatComposerContextCopy,
+  chatComposerContextTitle,
   chatRoom,
   chatRoomAvatar,
   chatRoomName,
   chatRoomPresence,
   chatsTab,
   chooseStatusEmoji,
+  clearChatDraft,
   clearProfileButton,
   closeChatRoomButton,
   closeDirectoryButton,
@@ -827,6 +958,7 @@ export {
   friendList,
   friendsTab,
   getDisplayName,
+  getChatDraft,
   googleLoginButton,
   headerSearch,
   headerSearchInput,
@@ -839,6 +971,11 @@ export {
   messageReadMenu,
   messageReadMenuCopy,
   messageReadMenuTitle,
+  messageActionDialog,
+  messageActionReactions,
+  messageActionStatus,
+  messageActionSummary,
+  closeMessageActionButton,
   myDisplayName,
   myFriendCode,
   myProfileAvatar,
@@ -896,6 +1033,7 @@ export {
   setAppStatus,
   setAuthRequestBusy,
   setAuthStatus,
+  setChatDraft,
   setProviderStatus,
   shortShareBar,
   shortShareFeedback,

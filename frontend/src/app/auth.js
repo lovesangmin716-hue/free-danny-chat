@@ -15,6 +15,7 @@ function setAuthMode(mode) {
 async function loadProviders() {
   try {
     const data = await requestAction("auth.load-providers", "/auth/providers", {}, {
+      authIndependent: true,
       key: "auth.providers",
       policy: "join",
     });

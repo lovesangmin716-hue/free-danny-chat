@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import copy
+import hashlib
 import hmac
 import json
 import re
@@ -22,6 +23,7 @@ from .config import (
     MAX_IDENTITIES_PER_ACCOUNT,
     MAX_MESSAGES_PER_ROOM,
     MAX_SESSIONS,
+    MESSAGE_REACTIONS,
     MIN_GROUP_PARTICIPANTS,
     SESSION_CLEANUP_INTERVAL_SECONDS,
     SESSION_REFRESH_THRESHOLD_SECONDS,
@@ -33,7 +35,11 @@ from .config import (
     SUPABASE_URL,
 )
 from .integrations import fetch_json, supabase_headers
-from .persistence import NormalizedSqliteRepository, NormalizedSupabaseRepository
+from .persistence import (
+    NormalizedSqliteRepository,
+    NormalizedSupabaseRepository,
+    SupabaseRequestError,
+)
 from .profile_art import (
     is_blank_profile_pixels,
     pack_profile_pixels,
@@ -72,6 +78,49 @@ TICKET_REPORT_REASONS = {
     "fraud": "사기 및 허위 판매",
     "over_purchase_price": "구매가 이상 판매",
 }
+POST_COMMIT_AUXILIARY_ERRORS = (
+    TimeoutError,
+    ConnectionError,
+    SupabaseRequestError,
+    sqlite3.OperationalError,
+)
+
+
+def message_client_payload_fingerprint(
+    text: str,
+    attachment: dict | None,
+    reply_to_message_id: str,
+) -> str:
+    """Hash the immutable create payload used by a client message id."""
+    payload = json.dumps(
+        {
+            "attachment": attachment,
+            "reply_to_message_id": reply_to_message_id,
+            "text": text[:300],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def message_matches_original_client_payload(
+    message: dict,
+    fingerprint: str,
+    text: str,
+    attachment: dict | None,
+    reply_to_message_id: str,
+) -> bool:
+    stored_fingerprint = str(message.get("_client_payload_fingerprint", ""))
+    if stored_fingerprint:
+        return hmac.compare_digest(stored_fingerprint, fingerprint)
+    # Compatibility for messages created before immutable fingerprints existed.
+    return (
+        message.get("text", "") == text[:300]
+        and message.get("attachment") == attachment
+        and str(message.get("reply_to_message_id", "")) == reply_to_message_id
+    )
 BASEBALL_STADIUMS = (
     "잠실(LG)",
     "잠실(두산)",
@@ -2334,13 +2383,14 @@ class StateStore:
         return public
 
     def _presence_for_user(self, user: dict) -> dict:
-        presence = (
-            self.presence.for_user(user["username"])
-            if self.presence is not None
-            else self.repository.presence_for_users([user["username"]]).get(
+        if self.presence is not None:
+            presence = self.presence.for_user(user["username"])
+        elif self.repository is not None:
+            presence = self.repository.presence_for_users([user["username"]]).get(
                 user["username"], {"online": False, "active_room_ids": [], "emoji": ""}
             )
-        )
+        else:
+            presence = {"online": False, "active_room_ids": [], "emoji": ""}
         saved_emoji = saved_activity_emoji(user.get("status_message"))
         if presence["online"] and saved_emoji:
             presence["emoji"] = saved_emoji
@@ -2349,7 +2399,10 @@ class StateStore:
     def _presences_for_users(self, users: list[dict]) -> dict[str, dict]:
         if not users:
             return {}
-        presences = self.repository.presence_for_users([user["username"] for user in users])
+        presences = (
+            self.repository.presence_for_users([user["username"] for user in users])
+            if self.repository is not None else {}
+        )
         for user in users:
             presence = presences.setdefault(
                 user["username"], {"online": False, "active_room_ids": [], "emoji": ""}
@@ -2368,6 +2421,7 @@ class StateStore:
         latest_message: dict | None = None,
         latest_message_loaded: bool = False,
         peer_presences: dict[str, dict] | None = None,
+        unread_count: int | None = None,
     ) -> dict:
         messages = [latest_message] if latest_message_loaded and latest_message is not None else (
             [] if latest_message_loaded else self._room_messages_locked(room["id"], limit=1)
@@ -2381,7 +2435,14 @@ class StateStore:
             if room.get("created_by") and room["created_by"] != "system":
                 participants.add(room["created_by"])
             participant_count = len(participants)
-        last_message = messages[-1] if messages else None
+        last_message = (
+            {
+                key: value
+                for key, value in messages[-1].items()
+                if not str(key).startswith("_")
+            }
+            if messages else None
+        )
         summary = {
             "id": room["id"],
             "name": room["name"],
@@ -2396,12 +2457,14 @@ class StateStore:
             "message_count": len(messages),
             "last_message": last_message,
             "revision": int(room.get("_revision", 0)),
-            "unread_count": 1 if (
-                viewer is not None
-                and last_message is not None
-                and last_message.get("username") != viewer.get("username")
-                and room.get("last_read_by", {}).get(viewer.get("id")) != last_message.get("id")
-            ) else 0,
+            "unread_count": max(0, int(unread_count)) if unread_count is not None else (
+                1 if (
+                    viewer is not None
+                    and last_message is not None
+                    and last_message.get("username") != viewer.get("username")
+                    and room.get("last_read_by", {}).get(viewer.get("id")) != last_message.get("id")
+                ) else 0
+            ),
         }
         if room.get("kind") == "direct" and viewer is not None:
             direct_participant_ids = room.get("direct_participant_ids", room.get("participant_ids", []))
@@ -2647,6 +2710,49 @@ class StateStore:
         }
         return summary
 
+    def _unread_counts_for_rooms(self, room_viewer_ids: dict[str, str]) -> dict[str, int]:
+        if not room_viewer_ids:
+            return {}
+        if self.repository is not None:
+            return self.repository.unread_counts_for_rooms(room_viewer_ids)
+        with self.lock:
+            counts: dict[str, int] = {}
+            for room_id, viewer_user_id in room_viewer_ids.items():
+                room = self._rooms_by_id.get(room_id)
+                viewer = self._users_by_id.get(viewer_user_id)
+                if room is None or viewer is None:
+                    counts[room_id] = 0
+                    continue
+                messages = self.state["messages"].get(room_id, [])
+                last_read_message_id = str(
+                    room.get("last_read_by", {}).get(viewer_user_id, "")
+                )
+                last_read_index = next(
+                    (
+                        index
+                        for index, message in enumerate(messages)
+                        if str(message.get("id", "")) == last_read_message_id
+                    ),
+                    -1,
+                )
+                counts[room_id] = sum(
+                    message.get("username") != viewer["username"]
+                    for message in messages[last_read_index + 1:]
+                )
+            return counts
+
+    def _latest_messages_for_rooms(self, room_ids: list[str]) -> dict[str, dict]:
+        if not room_ids:
+            return {}
+        if self.repository is not None:
+            return self.repository.latest_messages_for_rooms(room_ids)
+        with self.lock:
+            return {
+                room_id: messages[-1]
+                for room_id in room_ids
+                if (messages := self.state["messages"].get(room_id, []))
+            }
+
     def _can_access_room_locked(self, room: dict, user: dict) -> bool:
         kind = room.get("kind")
         acting_identity = self._room_identity_locked(room, user)
@@ -2709,6 +2815,10 @@ class StateStore:
                 and room.get("kind") in MESSENGER_ROOM_KINDS
                 and self._can_access_room_locked(room, user)
             ]
+            room_viewer_ids = {
+                room["id"]: (self._room_identity_locked(room, user) or user)["id"]
+                for room in raw_rooms
+            }
             presence_users = {friend["username"]: friend for friend in raw_friends}
             for room in raw_rooms:
                 if room.get("kind") != "direct":
@@ -2721,7 +2831,8 @@ class StateStore:
                     if peer is not None:
                         presence_users.setdefault(peer["username"], copy.deepcopy(peer))
         presences = self._presences_for_users(list(presence_users.values()))
-        latest_messages = self.repository.latest_messages_for_rooms([room["id"] for room in raw_rooms])
+        latest_messages = self._latest_messages_for_rooms([room["id"] for room in raw_rooms])
+        unread_counts = self._unread_counts_for_rooms(room_viewer_ids)
         with self.lock:
             friends = [self._user_public(friend) for friend in raw_friends]
             for friend, raw_friend in zip(friends, raw_friends):
@@ -2733,6 +2844,7 @@ class StateStore:
                     latest_message=latest_messages.get(room["id"]),
                     latest_message_loaded=True,
                     peer_presences=presences,
+                    unread_count=unread_counts.get(room["id"], 0),
                 )
                 for room in raw_rooms
             ]
@@ -2820,6 +2932,10 @@ class StateStore:
             page = rooms[:limit + 1]
             has_more = len(page) > limit
             page = [copy.deepcopy(room) for room in page[:limit]]
+            room_viewer_ids = {
+                room["id"]: (self._room_identity_locked(room, user) or user)["id"]
+                for room in page
+            }
             peers = {
                 peer["id"]: copy.deepcopy(peer)
                 for room in page
@@ -2832,7 +2948,8 @@ class StateStore:
                 encode_page_cursor(str(page[-1].get("updated_at", "")), page[-1]["id"])
                 if has_more and page else ""
             )
-        latest_messages = self.repository.latest_messages_for_rooms([room["id"] for room in page])
+        latest_messages = self._latest_messages_for_rooms([room["id"] for room in page])
+        unread_counts = self._unread_counts_for_rooms(room_viewer_ids)
         peer_presences = self._presences_for_users(list(peers.values()))
         with self.lock:
             items = [
@@ -2843,6 +2960,7 @@ class StateStore:
                     latest_message=latest_messages.get(room["id"]),
                     latest_message_loaded=True,
                     peer_presences=peer_presences,
+                    unread_count=unread_counts.get(room["id"], 0),
                 )
                 for room in page
             ]
@@ -2943,6 +3061,306 @@ class StateStore:
             "reset_required": False,
         }
 
+    def _message_interaction_sources(
+        self,
+        messages: list[dict],
+    ) -> tuple[dict[str, dict], dict[str, list[dict]]]:
+        reply_ids = [
+            str(message.get("reply_to_message_id", ""))
+            for message in messages
+            if message.get("reply_to_message_id")
+        ]
+        message_ids = [str(message.get("id", "")) for message in messages if message.get("id")]
+        if self.repository is not None:
+            reply_messages = self.repository.messages_by_ids(reply_ids)
+            reaction_message_ids = [
+                str(message.get("id", ""))
+                for message in messages
+                if message.get("id") and not isinstance(message.get("_event_reaction_rows"), list)
+            ]
+            reactions = self.repository.reactions_for_messages(reaction_message_ids)
+        else:
+            reply_id_set = set(reply_ids)
+            message_id_set = set(message_ids)
+            reply_messages = {
+                str(candidate.get("id", "")): candidate
+                for room_messages in self.state.get("messages", {}).values()
+                for candidate in room_messages
+                if str(candidate.get("id", "")) in reply_id_set
+            }
+            reactions: dict[str, list[dict]] = {}
+            for room_messages in self.state.get("messages", {}).values():
+                for candidate in room_messages:
+                    message_id = str(candidate.get("id", ""))
+                    if message_id not in message_id_set:
+                        continue
+                    stored_reactions = candidate.get("_reaction_user_ids")
+                    if not isinstance(stored_reactions, dict):
+                        continue
+                    for emoji, user_ids in stored_reactions.items():
+                        if emoji not in MESSAGE_REACTIONS or not isinstance(user_ids, list):
+                            continue
+                        for user_id in user_ids:
+                            if isinstance(user_id, str) and user_id:
+                                reactions.setdefault(message_id, []).append(
+                                    {"message_id": message_id, "user_id": user_id, "emoji": emoji}
+                                )
+        for message in messages:
+            reaction_snapshot = message.get("_event_reaction_rows")
+            message_id = str(message.get("id", ""))
+            if message_id and isinstance(reaction_snapshot, list):
+                reactions[message_id] = [
+                    dict(row) for row in reaction_snapshot if isinstance(row, dict)
+                ]
+        return reply_messages, reactions
+
+    def _message_with_interactions_locked(
+        self,
+        message: dict,
+        viewer: dict | None,
+        reply_messages: dict[str, dict],
+        reactions_by_message: dict[str, list[dict]],
+        *,
+        include_reacted_by_me: bool = True,
+    ) -> dict:
+        response = {
+            key: value
+            for key, value in message.items()
+            if not str(key).startswith("_")
+        }
+        reply_id = str(message.get("reply_to_message_id", ""))
+        if reply_id:
+            target = reply_messages.get(reply_id)
+            if target is None or str(target.get("room_id", "")) != str(message.get("room_id", "")):
+                response["reply_to"] = {"id": reply_id, "deleted": True}
+            else:
+                sender_username = str(target.get("username", ""))
+                sender = self._users_by_username.get(sender_username)
+                attachment = target.get("attachment") if isinstance(target.get("attachment"), dict) else {}
+                response["reply_to"] = {
+                    "id": reply_id,
+                    "username": sender_username,
+                    "display_name": (
+                        sender.get("display_name") or sender_username
+                        if sender is not None else sender_username
+                    ),
+                    "text": str(target.get("text", "")),
+                    "attachment_kind": str(attachment.get("kind", "")),
+                    "deleted": False,
+                }
+
+        grouped: dict[str, set[str]] = {emoji: set() for emoji in MESSAGE_REACTIONS}
+        for reaction in reactions_by_message.get(str(message.get("id", "")), []):
+            emoji = str(reaction.get("emoji", ""))
+            user_id = str(reaction.get("user_id", ""))
+            if emoji in grouped and user_id:
+                grouped[emoji].add(user_id)
+        reactions = []
+        for emoji in MESSAGE_REACTIONS:
+            user_ids = grouped[emoji]
+            if not user_ids:
+                continue
+            reaction = {"emoji": emoji, "count": len(user_ids)}
+            if include_reacted_by_me:
+                reaction["reacted_by_me"] = bool(viewer is not None and viewer.get("id") in user_ids)
+            else:
+                reaction["usernames"] = sorted(
+                    {
+                        str(reactor.get("username", ""))
+                        for user_id in user_ids
+                        if (reactor := self._users_by_id.get(user_id)) is not None
+                        and reactor.get("username")
+                    }
+                )
+            reactions.append(reaction)
+        response["reactions"] = reactions
+        return response
+
+    def _cached_message_interaction_sources_locked(
+        self,
+        message: dict,
+    ) -> tuple[dict[str, dict], dict[str, list[dict]]]:
+        reply_messages: dict[str, dict] = {}
+        reply_id = str(message.get("reply_to_message_id", ""))
+        if reply_id:
+            reply_snapshot = message.get("_event_reply_to")
+            if isinstance(reply_snapshot, dict):
+                reply_messages[reply_id] = dict(reply_snapshot)
+            elif "_event_reply_to" not in message:
+                local_target = next(
+                    (
+                        candidate
+                        for candidate in self.state.get("messages", {}).get(
+                            str(message.get("room_id", "")),
+                            [],
+                        )
+                        if str(candidate.get("id", "")) == reply_id
+                    ),
+                    None,
+                )
+                if local_target is not None:
+                    reply_messages[reply_id] = local_target
+
+        reaction_rows = message.get("_event_reaction_rows")
+        reactions: dict[str, list[dict]] = {}
+        message_id = str(message.get("id", ""))
+        if message_id and isinstance(reaction_rows, list):
+            reactions[message_id] = [
+                dict(row) for row in reaction_rows if isinstance(row, dict)
+            ]
+        elif message_id and isinstance(message.get("_reaction_user_ids"), dict):
+            reactions[message_id] = [
+                {"message_id": message_id, "user_id": user_id, "emoji": emoji}
+                for emoji, user_ids in message["_reaction_user_ids"].items()
+                if emoji in MESSAGE_REACTIONS and isinstance(user_ids, list)
+                for user_id in user_ids
+                if isinstance(user_id, str) and user_id
+            ]
+        return reply_messages, reactions
+
+    def _message_with_cached_read_state_locked(
+        self,
+        room: dict,
+        viewer: dict,
+        message: dict,
+    ) -> dict:
+        reply_messages, reactions = self._cached_message_interaction_sources_locked(message)
+        sender = self._users_by_username.get(str(message.get("username", "")))
+        sender_id = str(sender.get("id", "")) if sender is not None else ""
+        message_id = str(message.get("id", ""))
+        eligible_reader_ids = [
+            reader_id
+            for reader_id in room.get("participant_ids", [])
+            if reader_id != sender_id
+        ]
+        read_by = [
+            {
+                "id": reader["id"],
+                "username": reader["username"],
+                "display_name": reader.get("display_name") or reader["username"],
+            }
+            for reader_id in eligible_reader_ids
+            if str(room.get("last_read_by", {}).get(reader_id, "")) == message_id
+            if (reader := self._users_by_id.get(reader_id)) is not None
+        ]
+        read_user_ids = {reader["id"] for reader in read_by}
+        unread_by = [
+            {
+                "id": reader["id"],
+                "username": reader["username"],
+                "display_name": reader.get("display_name") or reader["username"],
+            }
+            for reader_id in eligible_reader_ids
+            if reader_id not in read_user_ids
+            if (reader := self._users_by_id.get(reader_id)) is not None
+        ]
+        return {
+            **self._message_with_interactions_locked(
+                message,
+                viewer,
+                reply_messages,
+                reactions,
+            ),
+            "read": message.get("username") == viewer.get("username") and not unread_by,
+            "read_by": read_by,
+            "unread_by": unread_by,
+        }
+
+    def message_for_event(self, message: dict) -> dict:
+        if (
+            "_event_recipient_usernames" in message
+            or message.get("_post_commit_auxiliary_failed")
+        ):
+            with self.lock:
+                reply_messages, reactions = self._cached_message_interaction_sources_locked(message)
+                return self._message_with_interactions_locked(
+                    message,
+                    None,
+                    reply_messages,
+                    reactions,
+                    include_reacted_by_me=False,
+                )
+        try:
+            reply_messages, reactions = self._message_interaction_sources([message])
+        except POST_COMMIT_AUXILIARY_ERRORS:
+            message["_post_commit_auxiliary_failed"] = True
+            with self.lock:
+                reply_messages, reactions = self._cached_message_interaction_sources_locked(message)
+        with self.lock:
+            return self._message_with_interactions_locked(
+                message,
+                None,
+                reply_messages,
+                reactions,
+                include_reacted_by_me=False,
+            )
+
+    def message_for_user(self, room_id: str, username: str, message: dict) -> dict | None:
+        with self.lock:
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
+            if user is None or room is None or not self._can_access_room_locked(room, user):
+                return None
+            user = self._room_identity_locked(room, user) or user
+            room_snapshot = copy.deepcopy(room)
+        try:
+            reply_messages, reactions = self._message_interaction_sources([message])
+            cursor_ids = [str(value) for value in room_snapshot.get("last_read_by", {}).values()]
+            sequences = self.repository.message_sequences(
+                room_id,
+                [str(message.get("id", "")), *cursor_ids],
+            ) if self.repository is not None else {}
+        except POST_COMMIT_AUXILIARY_ERRORS:
+            message["_post_commit_auxiliary_failed"] = True
+            with self.lock:
+                current_user = self._users_by_username.get(username)
+                current_room = self._rooms_by_id.get(room_id)
+                if (
+                    current_user is None
+                    or current_room is None
+                    or not self._can_access_room_locked(current_room, current_user)
+                ):
+                    return None
+                current_user = self._room_identity_locked(current_room, current_user) or current_user
+                return self._message_with_cached_read_state_locked(
+                    current_room,
+                    current_user,
+                    message,
+                )
+        message_with_sequence = {
+            **message,
+            "_sequence": sequences.get(str(message.get("id", "")), -1),
+        }
+        with self.lock:
+            current_user = self._users_by_username.get(username)
+            current_room = self._rooms_by_id.get(room_id)
+            if current_user is None or current_room is None or not self._can_access_room_locked(current_room, current_user):
+                return None
+            current_user = self._room_identity_locked(current_room, current_user) or current_user
+            return self._messages_with_read_state_locked(
+                current_room,
+                current_user,
+                [message_with_sequence],
+                cursor_sequences=sequences,
+                reply_messages=reply_messages,
+                reactions_by_message=reactions,
+            )[0]
+
+    def message_for_user_after_commit(
+        self,
+        room_id: str,
+        username: str,
+        message: dict,
+    ) -> dict | None:
+        """Build a mutation response exclusively from its committed snapshot."""
+        with self.lock:
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
+            if user is None or room is None or not self._can_access_room_locked(room, user):
+                return None
+            user = self._room_identity_locked(room, user) or user
+            return self._message_with_cached_read_state_locked(room, user, message)
+
     def _messages_with_read_state_locked(
         self,
         room: dict,
@@ -2951,7 +3369,11 @@ class StateStore:
         *,
         all_messages: list[dict] | None = None,
         cursor_sequences: dict[str, int] | None = None,
+        reply_messages: dict[str, dict] | None = None,
+        reactions_by_message: dict[str, list[dict]] | None = None,
     ) -> list[dict]:
+        reply_messages = reply_messages or {}
+        reactions_by_message = reactions_by_message or {}
         participant_ids = list(room.get("participant_ids", []))
         last_read_by = room.get("last_read_by", {})
         if all_messages is not None or self.repository is None:
@@ -3019,7 +3441,12 @@ class StateStore:
                 if (reader := self._users_by_id.get(reader_id)) is not None
             ]
             response_message = {
-                **{key: value for key, value in message.items() if key != "_sequence"},
+                **self._message_with_interactions_locked(
+                    message,
+                    user,
+                    reply_messages,
+                    reactions_by_message,
+                ),
                 "read": mine and not unread_by,
                 "read_by": read_by,
                 "unread_by": unread_by,
@@ -3036,16 +3463,20 @@ class StateStore:
             user = self._room_identity_locked(room, user) or user
             if self.repository is None:
                 messages = list(self.state["messages"].get(room_id, []))[-MAX_MESSAGES_PER_ROOM:]
+                reply_messages, reactions = self._message_interaction_sources(messages)
                 return self._messages_with_read_state_locked(
                     room,
                     user,
                     messages,
                     all_messages=messages,
+                    reply_messages=reply_messages,
+                    reactions_by_message=reactions,
                 )
             room_snapshot = copy.deepcopy(room)
         messages = self.repository.list_messages_with_sequences(room_id, limit=MAX_MESSAGES_PER_ROOM)
         cursor_ids = [str(value) for value in room_snapshot.get("last_read_by", {}).values()]
         cursor_sequences = self.repository.message_sequences(room_id, cursor_ids)
+        reply_messages, reactions = self._message_interaction_sources(messages)
         with self.lock:
             user = self._users_by_username.get(username)
             room = self._rooms_by_id.get(room_id)
@@ -3057,6 +3488,8 @@ class StateStore:
                 user,
                 messages,
                 cursor_sequences=cursor_sequences,
+                reply_messages=reply_messages,
+                reactions_by_message=reactions,
             )
 
     def sent_message_with_read_state(
@@ -3069,20 +3502,63 @@ class StateStore:
     ) -> dict:
         """Build the sender response without reloading the room after a new insert."""
         if not created:
-            messages = self.get_messages(room_id, username) or []
-            return next(
-                (candidate for candidate in reversed(messages) if candidate.get("id") == message.get("id")),
-                message,
+            try:
+                messages = self.get_messages(room_id, username) or []
+            except POST_COMMIT_AUXILIARY_ERRORS:
+                message["_post_commit_auxiliary_failed"] = True
+                messages = []
+            matched = next(
+                (
+                    candidate
+                    for candidate in reversed(messages)
+                    if candidate.get("id") == message.get("id")
+                ),
+                None,
             )
+            if matched is not None:
+                return matched
+            with self.lock:
+                user = self._users_by_username.get(username)
+                room = self._rooms_by_id.get(room_id)
+                if user is None or room is None or not self._can_access_room_locked(room, user):
+                    return {
+                        key: value
+                        for key, value in message.items()
+                        if not str(key).startswith("_")
+                    }
+                user = self._room_identity_locked(room, user) or user
+                return self._message_with_cached_read_state_locked(room, user, message)
 
+        if "_event_recipient_usernames" in message:
+            with self.lock:
+                reply_messages, reactions = self._cached_message_interaction_sources_locked(message)
+        else:
+            try:
+                reply_messages, reactions = self._message_interaction_sources([message])
+            except POST_COMMIT_AUXILIARY_ERRORS:
+                message["_post_commit_auxiliary_failed"] = True
+                with self.lock:
+                    reply_messages, reactions = self._cached_message_interaction_sources_locked(message)
         with self.lock:
             user = self._users_by_username.get(username)
             room = self._rooms_by_id.get(room_id)
             if user is None or room is None or not self._can_access_room_locked(room, user):
-                return message
+                return {
+                    key: value
+                    for key, value in message.items()
+                    if not str(key).startswith("_")
+                }
             user = self._room_identity_locked(room, user) or user
 
-            response_message = {**message, "read": False}
+            response_message = {
+                **self._message_with_interactions_locked(
+                    message,
+                    user,
+                    reply_messages,
+                    reactions,
+                ),
+                "read": False,
+            }
             if room.get("kind") == "group":
                 unread_by = [
                     {
@@ -3115,6 +3591,10 @@ class StateStore:
             user = self._room_identity_locked(room, user) or user
             if self.repository is None:
                 all_messages = list(self.state["messages"].get(room_id, []))
+                all_messages_by_id = {
+                    str(message.get("id", "")): message for message in all_messages
+                }
+                _, all_reactions = self._message_interaction_sources(all_messages)
                 if around:
                     target_index = next(
                         (index for index, message in enumerate(all_messages) if message.get("id") == around),
@@ -3130,6 +3610,8 @@ class StateStore:
                             user,
                             messages,
                             all_messages=all_messages,
+                            reply_messages=all_messages_by_id,
+                            reactions_by_message=all_reactions,
                         )
                         return {
                             "items": page_messages,
@@ -3145,6 +3627,8 @@ class StateStore:
                     user,
                     messages,
                     all_messages=all_messages,
+                    reply_messages=all_messages_by_id,
+                    reactions_by_message=all_reactions,
                 )
                 return {
                     "items": page_messages,
@@ -3163,6 +3647,7 @@ class StateStore:
                 page_end = min(len(all_messages), page_start + limit)
                 page_start = max(0, page_end - limit)
                 messages = all_messages[page_start:page_end]
+                reply_messages, reactions = self._message_interaction_sources(messages)
                 with self.lock:
                     user = self._users_by_username.get(username)
                     room = self._rooms_by_id.get(room_id)
@@ -3174,6 +3659,8 @@ class StateStore:
                         user,
                         messages,
                         all_messages=all_messages,
+                        reply_messages=reply_messages,
+                        reactions_by_message=reactions,
                     )
                 return {
                     "items": page_messages,
@@ -3187,6 +3674,7 @@ class StateStore:
             messages = messages[-limit:]
         cursor_ids = [str(value) for value in room_snapshot.get("last_read_by", {}).values()]
         cursor_sequences = self.repository.message_sequences(room_id, cursor_ids)
+        reply_messages, reactions = self._message_interaction_sources(messages)
         with self.lock:
             user = self._users_by_username.get(username)
             room = self._rooms_by_id.get(room_id)
@@ -3198,6 +3686,8 @@ class StateStore:
                 user,
                 messages,
                 cursor_sequences=cursor_sequences,
+                reply_messages=reply_messages,
+                reactions_by_message=reactions,
             )
             return {
                 "items": page_messages,
@@ -3250,6 +3740,7 @@ class StateStore:
             query.strip(),
             limit=message_limit,
         ) if message_limit else []
+        reply_messages, reactions = self._message_interaction_sources(matching_messages)
         result_room_ids = list(dict.fromkeys(
             matching_room_ids + [str(message.get("room_id", "")) for message in matching_messages]
         ))
@@ -3274,6 +3765,21 @@ class StateStore:
                 for room_id in result_room_ids
                 if room_id in rooms_by_id
             }
+            hydrated_messages = []
+            for message in matching_messages:
+                room_id = str(message.get("room_id", ""))
+                room = rooms_by_id.get(room_id)
+                if room is None:
+                    continue
+                viewer = self._room_identity_locked(room, user) or user
+                hydrated_messages.append(
+                    self._message_with_interactions_locked(
+                        message,
+                        viewer,
+                        reply_messages,
+                        reactions,
+                    )
+                )
         items = [
             {"kind": "room", "room": room_summaries[room_id]}
             for room_id in matching_room_ids
@@ -3281,7 +3787,7 @@ class StateStore:
         ]
         items.extend(
             {"kind": "message", "room": room_summaries[room_id], "message": message}
-            for message in matching_messages
+            for message in hydrated_messages
             if (room_id := str(message.get("room_id", ""))) in room_summaries
         )
         return {"items": items[:limit]}
@@ -3351,19 +3857,45 @@ class StateStore:
             room = self._rooms_by_id.get(room_id)
             if room is None:
                 return set()
-            if room.get("kind") == "ticket_listing":
+            if room.get("is_public"):
+                return set(self._users_by_username)
+            if self.repository is None:
                 return {
                     user["username"]
                     for user_id in room.get("participant_ids", [])
                     if (user := self._users_by_id.get(user_id)) is not None
                 }
-            if room.get("is_public"):
-                return set(self._users_by_username)
+            repository = self.repository
+        return repository.room_member_usernames(room_id)
+
+    def committed_room_event_recipients(
+        self,
+        room_id: str,
+        mutation_snapshot: dict | None = None,
+    ) -> set[str]:
+        """Resolve event recipients without turning a committed write into an error."""
+        snapshot_recipients = (
+            mutation_snapshot.get("_event_recipient_usernames")
+            if isinstance(mutation_snapshot, dict)
+            else None
+        )
+        if isinstance(snapshot_recipients, list):
             return {
-                user["username"]
-                for user_id in room.get("participant_ids", [])
-                if (user := self._users_by_id.get(user_id)) is not None
+                str(username)
+                for username in snapshot_recipients
+                if isinstance(username, str) and username
             }
+        if (
+            isinstance(mutation_snapshot, dict)
+            and mutation_snapshot.get("_post_commit_auxiliary_failed")
+        ):
+            return set()
+        try:
+            return self.room_event_recipients(room_id)
+        except POST_COMMIT_AUXILIARY_ERRORS:
+            # Fail closed: missing a realtime hint is recoverable through sync,
+            # while sending it to stale cached members could disclose room data.
+            return set()
 
     def room_event_summary(
         self,
@@ -3939,6 +4471,7 @@ class StateStore:
         text: str,
         attachment: dict | None = None,
         client_message_id: str = "",
+        reply_to_message_id: str = "",
     ) -> tuple[dict, dict, bool] | None:
         with self.lock:
             room = self._rooms_by_id.get(room_id)
@@ -3949,13 +4482,22 @@ class StateStore:
             username = user["username"]
 
             idempotency_key = (room_id, username, client_message_id)
-            existing_message = self._messages_by_client_id.get(idempotency_key) if client_message_id else None
-            if existing_message is None and client_message_id and self.repository is not None:
-                existing_message = self.repository.message_by_client_id(room_id, user["id"], client_message_id)
+            client_payload_fingerprint = message_client_payload_fingerprint(
+                text,
+                attachment,
+                reply_to_message_id,
+            )
+            existing_message = (
+                self._messages_by_client_id.get(idempotency_key)
+                if client_message_id and self.repository is None else None
+            )
             if existing_message is not None:
-                if (
-                    existing_message.get("text", "") != text[:300]
-                    or existing_message.get("attachment") != attachment
+                if not message_matches_original_client_payload(
+                    existing_message,
+                    client_payload_fingerprint,
+                    text,
+                    attachment,
+                    reply_to_message_id,
                 ):
                     raise ValueError("client message id was reused with different content")
                 return existing_message, self._room_summary_for_account_locked(
@@ -3965,15 +4507,34 @@ class StateStore:
                     latest_message_loaded=True,
                 ), False
 
+            if reply_to_message_id:
+                reply_target = (
+                    self.repository.message_by_id(room_id, reply_to_message_id)
+                    if self.repository is not None else next(
+                        (
+                            candidate
+                            for candidate in self.state["messages"].get(room_id, [])
+                            if candidate.get("id") == reply_to_message_id
+                        ),
+                        None,
+                    )
+                )
+                if reply_target is None:
+                    raise LookupError("reply target does not exist in the room")
+
             message = {
                 "id": new_id("msg"),
                 "room_id": room_id,
                 "username": username[:24],
                 "text": text[:300],
                 "timestamp": utc_now_iso(),
+                "mutation_revision": 0,
             }
             if client_message_id:
                 message["client_message_id"] = client_message_id
+                message["_client_payload_fingerprint"] = client_payload_fingerprint
+            if reply_to_message_id:
+                message["reply_to_message_id"] = reply_to_message_id
             if attachment is not None:
                 message["attachment"] = attachment
                 filename = Path(str(attachment.get("url", ""))).name
@@ -4009,16 +4570,43 @@ class StateStore:
                         rooms.discard(room_id)
                         if not rooms:
                             self._attachment_rooms.pop(removed_filename, None)
+            previous_room_updated_at = room.get("updated_at", "")
             room["updated_at"] = message["timestamp"]
             if self.repository is not None:
                 # Normalized storage keeps the complete durable history. The
                 # in-process list above is only a bounded compatibility cache.
-                if not self.repository.insert_message(
+                inserted, persistence_error = self.repository.insert_message(
                     message, user["id"], room, DURABLE_MESSAGE_KEEP_COUNT
-                ):
+                )
+                if not inserted:
                     room_messages.pop()
-                    existing_message = self.repository.message_by_client_id(room_id, user["id"], client_message_id) if client_message_id else None
+                    room["updated_at"] = previous_room_updated_at
+                    if client_message_id:
+                        self._messages_by_client_id.pop(idempotency_key, None)
+                    if persistence_error == "forbidden":
+                        raise PermissionError("current room membership is required")
+                    if persistence_error == "not_found":
+                        return None
+                    if persistence_error == "reply_not_found":
+                        raise LookupError("reply target does not exist in the room")
+                    existing_message = (
+                        self.repository.message_by_client_id(
+                            room_id,
+                            user["id"],
+                            client_message_id,
+                        )
+                        if client_message_id and persistence_error == "conflict" else None
+                    )
                     if existing_message is not None:
+                        if not message_matches_original_client_payload(
+                            existing_message,
+                            client_payload_fingerprint,
+                            text,
+                            attachment,
+                            reply_to_message_id,
+                        ):
+                            raise ValueError("client message id was reused with different content")
+                        self._messages_by_client_id[idempotency_key] = existing_message
                         return existing_message, self._room_summary_for_account_locked(
                             room,
                             user,
@@ -4038,6 +4626,167 @@ class StateStore:
                 latest_message_loaded=True,
             ), True
 
+    def edit_message(
+        self,
+        room_id: str,
+        username: str,
+        message_id: str,
+        text: str,
+    ) -> tuple[dict | None, dict | None, str | None]:
+        with self.lock:
+            room = self._rooms_by_id.get(room_id)
+            user = self._users_by_username.get(username)
+            if room is None or user is None or not self._can_access_room_locked(room, user):
+                return None, None, "not_found"
+            user = self._room_identity_locked(room, user) or user
+            acting_username = user["username"]
+            edited_at = utc_now_iso()
+            if self.repository is not None:
+                edited, persistence_error = self.repository.update_message_text(
+                    room_id,
+                    message_id,
+                    user["id"],
+                    text[:300],
+                    edited_at,
+                )
+                if persistence_error or edited is None:
+                    return None, None, persistence_error or "not_found"
+            else:
+                message = next(
+                    (
+                        candidate
+                        for candidate in self.state["messages"].get(room_id, [])
+                        if candidate.get("id") == message_id
+                    ),
+                    None,
+                )
+                if message is None:
+                    return None, None, "not_found"
+                if message.get("username") != acting_username:
+                    return None, None, "forbidden"
+                if not text and not isinstance(message.get("attachment"), dict):
+                    return None, None, "empty"
+                message["text"] = text[:300]
+                message["edited_at"] = edited_at
+                message["mutation_revision"] = max(
+                    0,
+                    int(message.get("mutation_revision", 0)),
+                ) + 1
+                self._save_locked(f"messages:{room_id}")
+                edited = dict(message)
+                edited["_event_reaction_rows"] = [
+                    {"message_id": message_id, "user_id": reactor_id, "emoji": reaction_emoji}
+                    for reaction_emoji, reactor_ids in message.get("_reaction_user_ids", {}).items()
+                    if reaction_emoji in MESSAGE_REACTIONS and isinstance(reactor_ids, list)
+                    for reactor_id in reactor_ids
+                    if isinstance(reactor_id, str) and reactor_id
+                ]
+
+            client_message_id = str(edited.get("client_message_id", ""))
+            if client_message_id:
+                self._messages_by_client_id[(room_id, acting_username, client_message_id)] = edited
+            return edited, self._room_summary_for_account_locked(room, user), None
+
+    def toggle_message_reaction(
+        self,
+        room_id: str,
+        username: str,
+        message_id: str,
+        emoji: str,
+        desired_reacted: bool | None = None,
+    ) -> tuple[dict | None, bool, int, str, str | None]:
+        with self.lock:
+            room = self._rooms_by_id.get(room_id)
+            user = self._users_by_username.get(username)
+            if room is None or user is None or not self._can_access_room_locked(room, user):
+                return None, False, 0, "", "not_found"
+            user = self._room_identity_locked(room, user) or user
+            if self.repository is not None:
+                result, persistence_error = self.repository.toggle_message_reaction(
+                    room_id,
+                    message_id,
+                    user["id"],
+                    emoji,
+                    utc_now_iso(),
+                    desired_reacted,
+                )
+                if persistence_error or result is None:
+                    return (
+                        None,
+                        False,
+                        0,
+                        user["username"],
+                        persistence_error or "not_found",
+                    )
+                stored_message = result.get("message")
+                if isinstance(stored_message, dict):
+                    message = dict(stored_message)
+                else:
+                    message = self.repository.message_by_id(room_id, message_id)
+                    if message is None:
+                        return None, False, 0, user["username"], "not_found"
+                    message["mutation_revision"] = max(
+                        0,
+                        int(result.get("mutation_revision", 0)),
+                    )
+                reaction_snapshot = result.get("reactions")
+                if isinstance(reaction_snapshot, list):
+                    message["_event_reaction_rows"] = [
+                        dict(row) for row in reaction_snapshot if isinstance(row, dict)
+                    ]
+            else:
+                message = next(
+                    (
+                        candidate
+                        for candidate in self.state["messages"].get(room_id, [])
+                        if candidate.get("id") == message_id
+                    ),
+                    None,
+                )
+                if message is None:
+                    return None, False, 0, user["username"], "not_found"
+                stored_reactions = message.setdefault("_reaction_user_ids", {})
+                user_ids = stored_reactions.setdefault(emoji, [])
+                was_reacted = user["id"] in user_ids
+                reacted = not was_reacted if desired_reacted is None else desired_reacted
+                changed = reacted != was_reacted
+                message["mutation_revision"] = max(
+                    0,
+                    int(message.get("mutation_revision", 0)),
+                )
+                if was_reacted and not reacted:
+                    user_ids.remove(user["id"])
+                    if not user_ids:
+                        stored_reactions.pop(emoji, None)
+                elif reacted and not was_reacted:
+                    user_ids.append(user["id"])
+                if changed:
+                    message["mutation_revision"] += 1
+                result = {
+                    "reacted": reacted,
+                    "count": len(user_ids),
+                    "mutation_revision": message["mutation_revision"],
+                    "changed": changed,
+                }
+                if changed:
+                    self._save_locked(f"messages:{room_id}")
+                event_message = dict(message)
+                event_message["_event_reaction_rows"] = [
+                    {"message_id": message_id, "user_id": reactor_id, "emoji": reaction_emoji}
+                    for reaction_emoji, reactor_ids in stored_reactions.items()
+                    if reaction_emoji in MESSAGE_REACTIONS and isinstance(reactor_ids, list)
+                    for reactor_id in reactor_ids
+                    if isinstance(reactor_id, str) and reactor_id
+                ]
+                message = event_message
+            return (
+                message,
+                bool(result.get("reacted")),
+                max(0, int(result.get("count", 0))),
+                user["username"],
+                None,
+            )
+
     def delete_message(
         self,
         room_id: str,
@@ -4052,35 +4801,66 @@ class StateStore:
             user = self._room_identity_locked(room, user) or user
             username = user["username"]
 
-            messages = self._room_messages_locked(room_id)
-            message_index = next(
-                (index for index, message in enumerate(messages) if message.get("id") == message_id),
-                -1,
-            )
-            if message_index < 0:
+            latest_message = None
+            attachment_still_used_after_delete = True
+            if self.repository is not None:
+                delete_outcome, persistence_error = self.repository.delete_message(
+                    room_id,
+                    message_id,
+                    user["id"],
+                )
+                if persistence_error or delete_outcome is None:
+                    return None, None, persistence_error or "not_found"
+                message = delete_outcome.get("message")
+                persisted_room = delete_outcome.get("room")
+                if not isinstance(message, dict) or not isinstance(persisted_room, dict):
+                    return None, None, "not_found"
+                room["updated_at"] = str(
+                    persisted_room.get("updated_at", room.get("updated_at", ""))
+                )
+                room["last_read_by"] = {
+                    str(reader_id): str(read_message_id)
+                    for reader_id, read_message_id in persisted_room.get(
+                        "last_read_by", {}
+                    ).items()
+                    if reader_id and read_message_id
+                }
+                room["_revision"] = int(
+                    persisted_room.get(
+                        "_revision",
+                        delete_outcome.get("revision", room.get("_revision", 0)),
+                    )
+                )
+                returned_latest = delete_outcome.get("latest_message")
+                latest_message = returned_latest if isinstance(returned_latest, dict) else None
+                attachment_still_used_after_delete = bool(
+                    delete_outcome.get("attachment_still_used", True)
+                )
+            else:
+                messages = self.state["messages"].get(room_id, [])
+                message_index = next(
+                    (index for index, candidate in enumerate(messages) if candidate.get("id") == message_id),
+                    -1,
+                )
+                message = messages[message_index] if message_index >= 0 else None
+                previous_message_id = (
+                    str(messages[message_index - 1].get("id", ""))
+                    if message_index > 0 else ""
+                )
+            if message is None:
                 return None, None, "not_found"
-            message = messages[message_index]
-            if message.get("username") != username:
+            if self.repository is None and message.get("username") != username:
                 return None, None, "forbidden"
 
-            remaining_messages = messages[:message_index] + messages[message_index + 1:]
-            previous_message_id = (
-                str(remaining_messages[message_index - 1].get("id", ""))
-                if message_index > 0 else ""
-            )
-            last_read_by = room.setdefault("last_read_by", {})
-            for reader_id, last_read_message_id in list(last_read_by.items()):
-                if str(last_read_message_id) != message_id:
-                    continue
-                if previous_message_id:
-                    last_read_by[reader_id] = previous_message_id
-                else:
-                    last_read_by.pop(reader_id, None)
-
-            if self.repository is not None:
-                if not self.repository.delete_message(room_id, message_id, user["id"]):
-                    return None, None, "not_found"
-            else:
+            if self.repository is None:
+                last_read_by = room.setdefault("last_read_by", {})
+                for reader_id, last_read_message_id in list(last_read_by.items()):
+                    if str(last_read_message_id) != message_id:
+                        continue
+                    if previous_message_id:
+                        last_read_by[reader_id] = previous_message_id
+                    else:
+                        last_read_by.pop(reader_id, None)
                 stored_messages = self.state["messages"].setdefault(room_id, [])
                 stored_messages[:] = [candidate for candidate in stored_messages if candidate.get("id") != message_id]
 
@@ -4091,25 +4871,39 @@ class StateStore:
             attachment = message.get("attachment")
             if isinstance(attachment, dict):
                 filename = Path(str(attachment.get("url", ""))).name
-                if filename and not any(
-                    Path(str(candidate.get("attachment", {}).get("url", ""))).name == filename
-                    for candidate in remaining_messages
-                    if isinstance(candidate.get("attachment"), dict)
-                ):
+                if self.repository is not None:
+                    attachment_still_used = attachment_still_used_after_delete
+                else:
+                    attachment_still_used = bool(
+                        filename
+                        and any(
+                            Path(str(candidate.get("attachment", {}).get("url", ""))).name == filename
+                            for candidate in self.state["messages"].get(room_id, [])
+                            if isinstance(candidate.get("attachment"), dict)
+                        )
+                    )
+                if filename and not attachment_still_used:
                     rooms = self._attachment_rooms.get(filename)
                     if rooms is not None:
                         rooms.discard(room_id)
                         if not rooms:
                             self._attachment_rooms.pop(filename, None)
 
-            latest_message = remaining_messages[-1] if remaining_messages else None
-            room["updated_at"] = (
-                str(latest_message.get("timestamp", ""))
-                if latest_message is not None else str(room.get("created_at", ""))
-            )
+            if self.repository is None:
+                latest_message = (
+                    self.state["messages"].get(room_id, [])[-1]
+                    if self.state["messages"].get(room_id, []) else None
+                )
+                room["updated_at"] = (
+                    str(latest_message.get("timestamp", ""))
+                    if latest_message is not None else str(room.get("created_at", ""))
+                )
             if self.repository is not None:
-                self.repository.sync_room(room)
                 self._save_locked("rooms")
             else:
                 self._save_locked("rooms", f"messages:{room_id}")
-            return message, self._room_summary(room), None
+            return message, self._room_summary(
+                room,
+                latest_message=latest_message,
+                latest_message_loaded=True,
+            ), None
