@@ -113,10 +113,13 @@ function renderChatAttachmentPreview() {
   }
 }
 
+const attachmentOwners = new WeakMap();
+
 function discardUploadedAttachment(attachment) {
   if (!attachment?.url) return Promise.resolve();
   return api("/uploads/discard", {
     method: "POST",
+    headers: attachmentOwners.has(attachment) ? { "X-Acting-Identity": attachmentOwners.get(attachment) } : {},
     body: JSON.stringify({ url: attachment.url }),
   }).catch(() => {});
 }
@@ -404,8 +407,12 @@ function handlePastedChatAttachment(event) {
 }
 
 async function uploadChatAttachment(file, contentType, options = {}) {
+  const identityId = state.roomById.get(options.roomId || state.selectedRoomId)?.viewer_identity_id
+    || state.session?.active_identity_id;
+  const headers = identityId ? { "X-Acting-Identity": identityId } : {};
   const grantResult = await requestAction("attachments.grant", "/uploads/grant", {
     method: "POST",
+    headers,
     body: JSON.stringify({
       name: file.name,
       type: contentType,
@@ -423,12 +430,15 @@ async function uploadChatAttachment(file, contentType, options = {}) {
     });
     const completed = await requestAction("attachments.complete", "/uploads/complete", {
       method: "POST",
+      headers,
       body: JSON.stringify({ id: upload.id }),
     });
+    if (identityId) attachmentOwners.set(completed.attachment, identityId);
     return completed.attachment;
   } catch (error) {
     void api("/uploads/discard", {
       method: "POST",
+      headers,
       body: JSON.stringify({ url: `/uploads/${upload.id}` }),
     }).catch(() => {});
     throw error;

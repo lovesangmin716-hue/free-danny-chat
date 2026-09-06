@@ -43,6 +43,7 @@ def validate_source() -> list[str]:
     require("pg_advisory_xact_lock" in schema, "Supabase identity creation must be concurrency-safe.", failures)
     require("colorless_create_account_session" in schema, "Account session RPC is missing.", failures)
     require("colorless_switch_session_identity" in schema, "Identity switch RPC is missing.", failures)
+    require("colorless_disable_identity" in schema, "Identity deactivation RPC is missing.", failures)
     require("colorless_account_identity_integrity" in schema, "Account identity integrity RPC is missing.", failures)
     require("colorless_insert_message_v2" in schema, "Versioned message insert RPC is missing.", failures)
     require(
@@ -204,6 +205,14 @@ def validate_remote_supabase() -> list[str]:
             method="POST",
             payload={},
         )
+        disable_probe = supabase_request(
+            "/rest/v1/rpc/colorless_disable_identity", method="POST",
+            payload={"owner_user_id": "__colorless_preflight_missing_user__",
+                     "target_user_id": "__colorless_preflight_missing_user__",
+                     "disabled_timestamp": "1970-01-01T00:00:00+00:00"},
+        )
+        require(isinstance(disable_probe, dict) and disable_probe.get("error") == "forbidden",
+                "Supabase identity deactivation RPC is unavailable or accepted an invalid actor.", failures)
         require(isinstance(accounts, list), "Supabase accounts table is not queryable.", failures)
         require(isinstance(identities, list), "Supabase account identities are not queryable.", failures)
         require(isinstance(sessions, list), "Supabase account sessions are not queryable.", failures)

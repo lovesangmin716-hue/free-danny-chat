@@ -1181,7 +1181,12 @@ class StateStore:
             if repository is not None:
                 cached = self._session_validation_cache.get(token_hash)
                 if cached is not None and cached[1] > now:
-                    return cached[0]
+                    cached_user = self._users_by_username.get(cached[0])
+                    if cached_user is not None and not cached_user.get("disabled_at"):
+                        account = self._accounts_by_id.get(cached_user["account_id"], {})
+                        if account.get("status", "active") == "active":
+                            return cached[0]
+                    self._session_validation_cache.pop(token_hash, None)
                 validation_version = self._session_validation_versions.get(token_hash, 0)
             else:
                 validation_version = 0
@@ -1220,7 +1225,9 @@ class StateStore:
                     self._save_locked("sessions")
                 return None
             username = str(session.get("username", ""))
-            if username not in self._users_by_username:
+            session_user = self._users_by_username.get(username)
+            if session_user is None or session_user.get("disabled_at") or self._accounts_by_id.get(
+                session_user["account_id"], {}).get("status", "active") != "active":
                 self.state["sessions"].pop(token_hash, None)
                 self._save_locked("sessions")
                 return None
@@ -1242,8 +1249,6 @@ class StateStore:
                 self._save_locked("sessions")
 
     def _user_public(self, user: dict) -> dict:
-        account = self._accounts_by_id.get(user.get("account_id", ""), {})
-        provider = account.get("auth_provider", user.get("auth_provider", "local"))
         profile_image_url = normalize_profile_image_url(user.get("profile_image_url"))
         profile_thumbnail_url = normalize_profile_image_url(user.get("profile_thumbnail_url"))
         profile_image_version = user.get("profile_image_version", 0)
@@ -1259,14 +1264,6 @@ class StateStore:
             "friend_code": user["friend_code"],
             "display_name": user.get("display_name") or user["username"],
             "status_message": user.get("status_message", ""),
-            "phone_masked": mask_phone(account.get("phone", "")),
-            "auth_provider": provider,
-            "auth_provider_label": {
-                "local": "비밀번호 계정",
-                "kakao": "카카오",
-                "google": "구글",
-                "demo": "개발용 SNS",
-            }.get(provider, provider),
             "identity_kind": user.get("identity_kind", "general"),
             "ticket_verified": bool(user.get("ticket_verified", False)),
             "created_at": user["created_at"],
@@ -1299,6 +1296,8 @@ class StateStore:
             return {
                 "account": {
                     "created_at": account.get("created_at", ""),
+                    "auth_provider": account.get("auth_provider", "local"),
+                    "phone_masked": mask_phone(account.get("phone", "")),
                     "identity_limit": MAX_IDENTITIES_PER_ACCOUNT,
                     "is_ticket_admin": self._is_ticket_admin_user(active_user),
                 },
@@ -1350,7 +1349,7 @@ class StateStore:
                 "username": normalized_username,
                 "friend_code": normalized_friend_code,
                 "display_name": normalized_display_name,
-                "status_message": status_message.strip()[:40] or build_status_message(account.get("auth_provider", "local")),
+                "status_message": status_message.strip()[:40],
                 "identity_kind": "general",
                 "created_at": utc_now_iso(),
                 "profile_pixels_blank": True,
@@ -2682,6 +2681,8 @@ class StateStore:
         ]
 
     def _room_identity_locked(self, room: dict, user: dict) -> dict | None:
+        if user.get("disabled_at"):
+            return None
         participant_ids = set(room.get("participant_ids", []))
         if user.get("id") in participant_ids:
             return user
@@ -3049,7 +3050,8 @@ class StateStore:
         events = sorted(events_by_revision.values(), key=lambda event: int(event.get("revision", 0)))
         has_more = len(events) > limit
         events = events[:limit]
-        compact_events = [self._compact_sync_event(event) for event in events]
+        from .identity import event_for_viewer
+        compact_events = [event_for_viewer(self, username, self._compact_sync_event(event)) for event in events]
         last_event_revision = (
             int(compact_events[-1].get("revision", after_revision)) if compact_events else after_revision
         )
@@ -3128,6 +3130,8 @@ class StateStore:
             for key, value in message.items()
             if not str(key).startswith("_")
         }
+        sender = self._users_by_username.get(str(message.get("username", "")))
+        response["sender_identity_id"] = sender["id"] if sender else ""
         reply_id = str(message.get("reply_to_message_id", ""))
         if reply_id:
             target = reply_messages.get(reply_id)
@@ -4348,6 +4352,10 @@ class StateStore:
                 self.repository.sync_user(user)
             if created:
                 self._save_locked("accounts", "users")
+            if user.get("disabled_at"):
+                user = next(iter(self._account_identities_locked(user)), None)
+                if user is None:
+                    raise ValueError("account has no active identity")
             return self._user_public(user)
 
     def authenticate_user(self, username: str, password: str) -> dict | None:
@@ -4367,6 +4375,10 @@ class StateStore:
             account = self._accounts_by_id.get(user["account_id"]) if user is not None else None
             if account is None or not hmac.compare_digest(str(account.get("password_hash", "")), password_hash):
                 return None
+            if user.get("disabled_at"):
+                user = next(iter(self._account_identities_locked(user)), None)
+                if user is None:
+                    return None
             return self._user_public(user)
 
     def seed_demo_network(self, username: str) -> None:

@@ -91,10 +91,12 @@ class StaticAppStructureTestCase(unittest.TestCase):
         ):
             with self.subTest(method_name=method_name):
                 handler = mock.Mock()
-                handler.allow_request.return_value = False
+                handler.allow_actor_request.return_value = False
                 getattr(server.ChatHandler, method_name)(handler, {"username": "alice"})
-                handler.allow_request.assert_called_once_with(f"{scope}:alice", limit, 60)
-                handler.run_json_command.assert_not_called()
+                args, kwargs = handler.run_json_command.call_args
+                server.ChatHandler.run_json_command(handler, *args, **kwargs)
+                handler.allow_actor_request.assert_called_once_with({"username": "alice"}, scope, limit, 60)
+                handler.complete_command.assert_not_called()
 
     def test_json_commands_map_only_dependency_failures_to_retryable_503(self) -> None:
         for dependency_error in (
@@ -557,7 +559,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("authEpoch: 0", core_script)
         self.assertIn("function advanceAuthEpoch()", core_script)
         self.assertIn(
-            "advanceAuthEpoch();\n  httpClient.clearCache();\n  state.session = session;",
+            "advanceAuthEpoch();\n  httpClient.clearCache();\n  state.session = sessionForWindow(session);",
             core_script,
         )
         self.assertIn("advanceAuthEpoch();\n  setAuthRequestBusy(true, message);", core_script)

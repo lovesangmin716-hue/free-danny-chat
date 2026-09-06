@@ -32,6 +32,7 @@ jobs:
       - run: node tests/room_snapshots.mjs
       - run: node tests/action_pipeline.mjs
       - run: node tests/submit_guard.mjs
+      - run: node tests/identity_context.mjs
       - run: python tests/static_budget.py
       - run: python tests/deploy_preflight.py
       - run: python -m unittest discover -s tests -p 'test_*.py'

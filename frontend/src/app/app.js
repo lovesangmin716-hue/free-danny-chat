@@ -7,6 +7,7 @@ import { captureChatVirtualAnchor, chatVirtualScrollTopForAnchor } from "./chat-
 import { renderWorkModeControl, syncWorkModeVisibility } from "./work-mode.js";
 import { activeActionBarState, renderContextActionBar, renderFriendActionBar, renderHeaderSearch } from "./action-bar.js";
 import { mergeAuthoritativeRoomSnapshot, mergeRealtimeRoomSnapshot } from "./platform/room-snapshots.js";
+import { openInitialIdentityRoom, renderIdentityControls } from "./identity-ui.js";
 
 const accountIdentifier = document.getElementById("account-identifier");
 const identitySwitcher = document.getElementById("identity-switcher");
@@ -50,6 +51,8 @@ function renderMessenger() {
 }
 
 function resetApplicationUi() {
+  state.identityUnread = null;
+  document.getElementById("identity-management")?.remove();
   identityCreateModal.classList.add("hidden");
   identityCreateForm.reset();
   identityFormStatus.textContent = "";
@@ -57,6 +60,7 @@ function resetApplicationUi() {
 }
 
 function renderMy() {
+  renderIdentityControls();
   const user = state.messenger.user || state.session?.user;
   if (!user) return;
   myProfileAvatar.replaceChildren(createAvatar(
@@ -96,7 +100,10 @@ async function switchIdentity() {
       method: "POST",
       body: JSON.stringify({ identityId }),
     });
-    window.location.reload();
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.delete("identity");
+    nextUrl.searchParams.delete("chatRoom");
+    window.location.replace(nextUrl.href);
   } catch (error) {
     identityFormStatus.textContent = error.message;
     identitySwitcher.value = state.session?.active_identity_id || "";
@@ -364,6 +371,7 @@ async function startApp() {
     state.appStartRetryTimer = null;
     state.appStartRetryCount = 0;
     setAppStatus("");
+    await openInitialIdentityRoom(loadRoomsPage);
   } catch (error) {
     if (state.authEpoch !== authEpoch) return;
     setAppStatus(`${error.message} 연결되면 자동으로 다시 시도합니다.`, "error");

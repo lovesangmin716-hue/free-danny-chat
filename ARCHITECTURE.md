@@ -76,6 +76,8 @@ Lower-level modules do not import `server.py`. Route mixins receive a live `Hand
 
 ## Account and activity identity boundary
 
+The request actor, identity lifecycle, recipient routing and future social actor contract are specified in [IDENTITIES.md](IDENTITIES.md).
+
 Authentication and social activity use different identifiers. `accounts.id` is the private, immutable login and enforcement key. `users.id` is an activity identity key; one account owns at most three user rows, each with its own globally unique `username`, display name, profile, friendships, rooms, messages, reads, and presence.
 
 Sessions persist both `account_id` and `active_user_id`. Creating or switching an identity always verifies that the target `users.account_id` matches the session account. Browser responses expose activity identities but never their owning `account_id`; the owner-only session response includes only the owned identity list required by the MY switcher and all-ID chat. Password hashes, phone numbers, age group, and gender live only in the account record.

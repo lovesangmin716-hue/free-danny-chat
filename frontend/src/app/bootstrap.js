@@ -372,6 +372,12 @@ profileSheet.addEventListener("click", (event) => {
 
 initializeMessageInteractions();
 
+// A combined inbox can display a different ID from the SSE connection's ID.
+// Keep that visible conversation's independent presence lease alive as well.
+window.setInterval(() => {
+  if (state.session?.user && !document.hidden) void updatePresence();
+}, 20000);
+
 if (window.location.protocol === "file:") {
   showAuth();
   setAuthStatus("이 파일을 직접 열면 로그인할 수 없어요. http://127.0.0.1:8765/ 주소로 열어 주세요.", "error");

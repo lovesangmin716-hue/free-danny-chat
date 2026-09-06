@@ -74,6 +74,7 @@ declare over_limit_account text;
 begin
   select account_id into over_limit_account
   from public.users
+  where coalesce(data->>'disabled_at', '')=''
   group by account_id
   having count(*) > 3
   limit 1;
@@ -86,11 +87,15 @@ $$;
 create or replace function public.colorless_enforce_identity_limit()
 returns trigger language plpgsql set search_path = public as $$
 begin
-  if tg_op = 'UPDATE' and new.account_id = old.account_id then
+  if coalesce(new.data->>'disabled_at', '')<>'' then
+    return new;
+  end if;
+  if tg_op = 'UPDATE' and new.account_id = old.account_id and coalesce(old.data->>'disabled_at', '')='' then
     return new;
   end if;
   perform pg_advisory_xact_lock(hashtextextended(new.account_id, 0));
-  if (select count(*) from users where account_id=new.account_id and id <> new.id) >= 3 then
+  if (select count(*) from users where account_id=new.account_id and id <> new.id
+      and coalesce(data->>'disabled_at', '')='') >= 3 then
     raise exception 'account identity limit exceeded';
   end if;
   return new;
@@ -98,7 +103,7 @@ end;
 $$;
 drop trigger if exists users_account_identity_limit on public.users;
 create trigger users_account_identity_limit
-before insert or update of account_id on public.users
+before insert or update of account_id, data on public.users
 for each row execute function public.colorless_enforce_identity_limit();
 create index if not exists users_account_idx on public.users(account_id, id);
 
@@ -398,6 +403,18 @@ end;
 $$;
 
 drop function if exists public.colorless_insert_message_v2(jsonb, text, jsonb, integer);
+create or replace function public.colorless_lock_active_identity(actor_user_id text)
+returns boolean language plpgsql security definer set search_path=public as $$
+begin
+  perform 1 from users u join accounts a on a.id=u.account_id
+    where u.id=actor_user_id and a.status='active' and coalesce(u.data->>'disabled_at','')=''
+    for share of u,a;
+  return found;
+end;
+$$;
+revoke all on function public.colorless_lock_active_identity(text) from public,anon,authenticated;
+grant execute on function public.colorless_lock_active_identity(text) to service_role;
+
 create or replace function public.colorless_insert_message_v2(
   message_data jsonb, sender_user_id text, room_data jsonb, keep_count integer
 ) returns jsonb language plpgsql security definer set search_path = public as $$
@@ -415,6 +432,9 @@ begin
   for update;
   if not found then
     return jsonb_build_object('error', 'not_found');
+  end if;
+  if not colorless_lock_active_identity(sender_user_id) then
+    return jsonb_build_object('error', 'forbidden');
   end if;
   if target_room_kind <> 'public' then
     perform 1 from room_members
@@ -580,6 +600,9 @@ begin
   if target_sender_id <> editor_user_id then
     return jsonb_build_object('error', 'forbidden');
   end if;
+  if not colorless_lock_active_identity(editor_user_id) then
+    return jsonb_build_object('error', 'forbidden');
+  end if;
   if target_room_kind <> 'public' then
     perform 1 from room_members
     where room_id=message_room_id and user_id=editor_user_id
@@ -665,6 +688,9 @@ begin
   for update of target;
   if not found then
     return jsonb_build_object('error', 'not_found');
+  end if;
+  if not colorless_lock_active_identity(reaction_user_id) then
+    return jsonb_build_object('error', 'forbidden');
   end if;
   if target_room_kind <> 'public' then
     perform 1 from room_members
@@ -793,6 +819,9 @@ begin
     return jsonb_build_object('error', 'not_found');
   end if;
   if target_sender_id <> deleting_user_id then
+    return jsonb_build_object('error', 'forbidden');
+  end if;
+  if not colorless_lock_active_identity(deleting_user_id) then
     return jsonb_build_object('error', 'forbidden');
   end if;
 
@@ -944,6 +973,8 @@ declare changed_count integer;
 begin
   update sessions set user_id=target_user_id, active_user_id=target_user_id
   where token_hash=session_token_hash and account_id=session_account_id
+    and expires_at>extract(epoch from now())
+    and exists(select 1 from accounts where id=session_account_id and status='active')
     and exists(
       select 1 from users
       where id=target_user_id and account_id=session_account_id
@@ -953,6 +984,33 @@ begin
   return changed_count = 1;
 end;
 $$;
+
+create or replace function public.colorless_disable_identity(
+  owner_user_id text, target_user_id text, disabled_timestamp text
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare owner_account text; target users%rowtype;
+begin
+  select u.account_id into owner_account from users u join accounts a on a.id=u.account_id
+    where u.id=owner_user_id and a.status='active' and coalesce(u.data->>'disabled_at', '')='';
+  if owner_account is null then return jsonb_build_object('error','forbidden'); end if;
+  perform pg_advisory_xact_lock(hashtextextended(owner_account, 0));
+  -- Recheck under the account lock so concurrent deactivations cannot remove every ID.
+  if not exists(select 1 from users where id=owner_user_id and coalesce(data->>'disabled_at','')='') then
+    return jsonb_build_object('error','forbidden');
+  end if;
+  select * into target from users where id=target_user_id for update;
+  if not found or target.account_id<>owner_account then return jsonb_build_object('error','forbidden'); end if;
+  if owner_user_id=target_user_id then return jsonb_build_object('error','switch_first'); end if;
+  update users set data=jsonb_set(data,'{disabled_at}',to_jsonb(disabled_timestamp)), revision=revision+1
+    where id=target_user_id;
+  update sessions set user_id=owner_user_id,active_user_id=owner_user_id
+    where account_id=owner_account and active_user_id=target_user_id;
+  delete from presence_leases where username=target.username;
+  return jsonb_build_object('disabled',true);
+end;
+$$;
+revoke all on function public.colorless_disable_identity(text,text,text) from public, anon, authenticated;
+grant execute on function public.colorless_disable_identity(text,text,text) to service_role;
 
 create or replace function public.colorless_save_shorts_feed(feed_user_id text, seen_video_ids text[], cursor_value text)
 returns void language plpgsql security definer set search_path = public as $$
@@ -1153,7 +1211,8 @@ returns jsonb language sql security definer set search_path = public as $$
     'users_without_account', (select count(*) from users where account_id is null),
     'accounts_over_identity_limit', (
       select count(*) from (
-        select account_id from users group by account_id having count(*) > 3
+        select account_id from users where coalesce(data->>'disabled_at','')=''
+        group by account_id having count(*) > 3
       ) over_limit
     ),
     'sessions_without_account_identity', (
