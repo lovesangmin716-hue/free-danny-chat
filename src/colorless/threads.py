@@ -8,7 +8,7 @@ from .utils import utc_now_iso
 
 ID = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 MENTION = re.compile(r"(?<![\w@])@([A-Za-z0-9_]{3,32})")
-WRITE_ACTIONS = {"create", "edit", "delete", "like", "follow", "block", "report", "read"}
+WRITE_ACTIONS = {"create", "edit", "delete", "like", "follow", "block", "report", "read", "read_many"}
 READ_ACTIONS = {"feed", "detail", "notifications", "people", "relationships"}
 
 
@@ -115,7 +115,10 @@ class Threads:
         context = self.store.get_account_context(actor["username"])
         if not context:
             raise ThreadError("활동 ID를 확인할 수 없습니다.", 403)
-        return [item["id"] for item in context["identities"] if resolve_actor(self.store, actor["username"], item["id"])]
+        identities = [item["id"] for item in context["identities"] if resolve_actor(self.store, actor["username"], item["id"])]
+        if not identities:
+            raise ThreadError("사용할 수 있는 활동 ID가 없습니다.", 403)
+        return identities
 
     def present(self, post, viewers):
         eligible = [viewer for viewer in viewers if self.visible(post, viewer)]
@@ -126,11 +129,17 @@ class Threads:
         if liked is None:
             liked = bool(self.db.rows("thread_likes", {"post_id": f"eq.{post['id']}", "actor_identity_id": f"eq.{viewer}"},
                                      order="created_at.desc", limit=1))
+        parent = self.post(post["parent_id"]) if post.get("parent_id") else None
+        reply_to = None
+        if parent and self.visible(parent, viewer):
+            reply_to = {"id": parent["id"], "author": self.user(parent["author_identity_id"]),
+                        "body": "" if parent["deleted"] else parent["body"][:120], "deleted": parent["deleted"]}
         return {key: post[key] for key in ("id", "parent_id", "root_id", "visibility", "created_at", "edited_at", "deleted")} | {
             "body": "" if post["deleted"] else post["body"], "author_identity_id": post["author_identity_id"],
             "author": self.user(post["author_identity_id"]), "like_count": post["like_count"],
             "reply_count": post["reply_count"], "liked": liked, "viewer_identity_id": viewer,
             "viewer_identity_ids": eligible, "following": self.edge(viewer, post["author_identity_id"], "follow"),
+            "reply_to": reply_to,
         }
 
     def read(self, action, payload):
@@ -138,6 +147,7 @@ class Threads:
         viewers = self.owned_ids(payload.get("scope") == "all")
         if action == "detail":
             root = self.require_post(payload.get("id"))
+            selected = root
             root = self.require_post(root["root_id"]) if root.get("root_id") else root
             filters = {"root_id": f"eq.{root['id']}"}
             if cursor:
@@ -146,6 +156,8 @@ class Threads:
             self.prime([root, *rows[:40]], [self.actor])
             items = [self.present(row, [self.actor]) for row in rows[:40]]
             return {"post": self.present(root, [self.actor]), "items": [item for item in items if item],
+                    "focused_reply": self.present(selected, [self.actor]) if not cursor and selected["id"] != root["id"]
+                    and selected["id"] not in {row["id"] for row in rows[:40]} else None,
                     "next_cursor": rows[39]["id"] if len(rows) > 40 else ""}
         if action in ("people", "relationships"):
             if action == "relationships":
@@ -165,6 +177,8 @@ class Threads:
             return {"items": [self.user(row["id"]) for row in users if not self.blocked(self.actor, row["id"])]}
         if action == "notifications":
             filters = {"recipient_identity_id": "in.(" + ",".join(viewers) + ")"}
+            if payload.get("unread") == "1":
+                filters["read_at"] = "eq."
             if cursor:
                 filters["id"] = f"lt.{cursor}"
             rows = self.db.rows("thread_notifications", filters, limit=41)
@@ -298,12 +312,18 @@ class Threads:
             if action == "follow" and enabled:
                 notify(target, "follow")
             return changes, {"ok": True}
-        if action == "read":
-            notification_id = checked_id(payload.get("id"))
-            rows = self.db.rows("thread_notifications", {"id": f"eq.{notification_id}", "recipient_identity_id": f"eq.{self.actor}"}, limit=1)
-            if not rows:
+        if action in ("read", "read_many"):
+            ids = [payload.get("id")] if action == "read" else payload.get("ids")
+            if not isinstance(ids, list) or not 1 <= len(ids) <= 40:
+                raise ThreadError("읽음 처리는 한 번에 1~40개의 알림만 가능합니다.")
+            ids = {checked_id(identity) for identity in ids}
+            rows = self.db.rows("thread_notifications", {"id": "in.(" + ",".join(sorted(ids)) + ")",
+                                                          "recipient_identity_id": f"eq.{self.actor}"}, limit=len(ids))
+            if len(rows) != len(ids):
                 raise ThreadError("이 ID의 알림이 아닙니다.", 404)
-            change("thread_notifications", {**rows[0], "read_at": now})
+            for row in rows:
+                if not row["read_at"]:
+                    change("thread_notifications", {**row, "read_at": now})
             return changes, {"ok": True}
         post = self.require_post(payload.get("id"))
         if action in ("edit", "delete"):
@@ -311,6 +331,8 @@ class Threads:
                 raise ThreadError("작성 ID만 수정하거나 삭제할 수 있습니다.", 403)
             if post["deleted"]:
                 raise ThreadError("이미 삭제된 내용입니다.", 409)
+            if action == "edit" and "originalBody" in payload and payload["originalBody"] != post["body"]:
+                raise ThreadError("다른 창에서 내용이 수정되었습니다. 새로고침한 뒤 다시 수정해 주세요.", 409)
             record = {key: value for key, value in post.items() if key not in ("like_count", "reply_count")}
             change("thread_posts", {**record, "body": body if action == "edit" else "",
                                    "edited_at": now, "deleted": int(action == "delete")})

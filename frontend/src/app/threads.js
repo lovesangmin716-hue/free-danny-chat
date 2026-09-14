@@ -7,6 +7,8 @@ const option = (value, text) => { const node = el("option", text); node.value = 
 let panel, actor, mode = "feed", generation = 0, parent = "", root = "", cursor = "", draft, busy = false;
 let actorSelect, scopeSelect, modeSelect, search, editor, status, list, more, composer, visibility, writer;
 let pendingRefresh = false;
+let unreadSelect, readVisible, counter;
+const visibleUnread = new Map();
 const identities = () => state.session?.identities || [];
 const actorName = (id) => identities().find((identity) => identity.id === id)?.username || id;
 const isCurrent = (version) => version === generation && panel?.open && state.session?.user;
@@ -26,6 +28,7 @@ function restore() {
   visibility.value = draft.visibility === "followers" ? "followers" : "public";
   writer.textContent = `@${actorName(actor)}로 ${parent ? "답글" : "게시물"} 작성 중`;
   visibility.hidden = Boolean(parent);
+  counter.textContent = `${editor.value.length}/2,000자${parent ? " · 선택한 글에 답글" : ""}`;
 }
 function chooseReply(id, identity) {
   persist(); actor = identity; actorSelect.value = identity; parent = id; restore(); editor.focus();
@@ -41,9 +44,12 @@ async function mutate(action, payload, identity = actor) {
 function card(post) {
   const node = el("article");
   node.className = "thread-card";
+  node.id = `thread-${post.id}`;
   const identity = post.viewer_identity_id;
   node.append(el("strong", `@${post.author.username}`), el("small", `${post.visibility === "followers" ? "팔로워 공개" : "전체 공개"} · ${new Date(post.created_at).toLocaleString()}${post.edited_at ? " · 수정됨" : ""}`));
-  if (post.parent_id) node.append(el("small", `답글 · ${post.parent_id === root ? "원문에 답글" : "댓글에 답글"}`));
+  if (post.parent_id) node.append(el("small", post.reply_to
+    ? `@${post.reply_to.author.username}에게 답글: ${post.reply_to.deleted ? "삭제된 내용" : post.reply_to.body}`
+    : "열람할 수 없는 글에 대한 답글"));
   node.append(el("p", post.deleted ? "삭제된 내용입니다." : post.body));
   node.append(el("small", `이 카드의 활동 ID: @${actorName(identity)}`));
   const actions = el("div"); actions.className = "thread-actions";
@@ -54,7 +60,7 @@ function card(post) {
       else chooseReply(post.id, identity);
     }));
     if (post.author_identity_id === identity) {
-      actions.append(button("수정", () => { const body = window.prompt(`@${actorName(identity)}의 내용 수정`, post.body); if (body !== null) void mutate("edit", { id: post.id, body }, identity); }));
+      actions.append(button("수정", () => { const body = window.prompt(`@${actorName(identity)}의 내용 수정`, post.body); if (body !== null) void mutate("edit", { id: post.id, body, originalBody: post.body }, identity); }));
       actions.append(button("삭제", () => { if (window.confirm(`@${actorName(identity)}로 작성한 이 내용을 삭제할까요? 내용은 비워지고 답글 연결은 유지됩니다.`)) void mutate("delete", { id: post.id }, identity); }));
     } else {
       actions.append(button(post.following ? "팔로우 취소" : "팔로우", () => mutate("follow", { identityId: post.author_identity_id, enabled: !post.following }, identity)));
@@ -67,24 +73,42 @@ function card(post) {
 function notification(item) {
   const node = el("article"); node.className = "thread-card";
   const names = { mention: "멘션", reply: "답글", like: "좋아요", follow: "팔로우" };
+  if (!item.read_at) visibleUnread.set(item.id, item.recipient_identity_id);
   node.append(el("strong", `@${item.actor.username} · ${names[item.kind]}`), el("small", `받은 ID: @${item.recipient.username} · ${item.read_at ? "읽음" : "안 읽음"}`), el("p", item.post_body));
   if (!item.read_at) node.append(button("이 ID에서 읽음 처리", () => mutate("read", { id: item.id }, item.recipient_identity_id)));
   if (item.post_id) node.append(button("대화 보기", async () => { persist(); actor = item.recipient_identity_id; actorSelect.value = actor; root = item.post_id; parent = root; mode = "detail"; restore(); await load(); }));
   return node;
+}
+async function readShown() {
+  if (busy || !visibleUnread.size) return;
+  busy = true; readVisible.disabled = true;
+  const version = generation, groups = new Map();
+  for (const [id, recipient] of visibleUnread) groups.set(recipient, [...(groups.get(recipient) || []), id]);
+  try {
+    for (const [recipient, ids] of groups) for (let i = 0; i < ids.length; i += 40) {
+      if (!isCurrent(version)) return;
+      await api("read_many", { ids: ids.slice(i, i + 40) }, true, recipient);
+    }
+    if (isCurrent(version)) await load();
+  } catch (error) { if (isCurrent(version)) status.textContent = error.message; }
+  finally { busy = false; readVisible.disabled = !visibleUnread.size; }
 }
 async function load(append = false) {
   if (pendingRefresh && append) return;
   const version = ++generation;
   pendingRefresh = true;
   more.disabled = true;
-  if (!append) { cursor = ""; list.replaceChildren(); }
+  if (!append) { cursor = ""; list.replaceChildren(); visibleUnread.clear(); }
+  readVisible.hidden = unreadSelect.hidden = mode !== "notifications";
+  readVisible.disabled = true;
   status.textContent = "불러오는 중…";
   composer.hidden = !["feed", "detail"].includes(mode);
   try {
     const action = mode === "blocked" || mode === "following-list" ? "relationships" : mode;
-    const data = await api(action, { scope: scopeSelect.value, mode: modeSelect.value, q: search.value, id: root, cursor, kind: mode === "blocked" ? "block" : "follow" });
+    const data = await api(action, { scope: scopeSelect.value, mode: modeSelect.value, q: search.value, id: root, cursor, unread: unreadSelect.value, kind: mode === "blocked" ? "block" : "follow" });
     if (!isCurrent(version)) return;
     if (data.post && !append) { root = data.post.id; list.append(card(data.post)); }
+    if (data.focused_reply && !append) { list.append(el("strong", "선택한 답글"), card(data.focused_reply)); }
     for (const item of data.items) {
       if (mode === "notifications") list.append(notification(item));
       else if (["people", "blocked", "following-list"].includes(mode)) {
@@ -93,13 +117,13 @@ async function load(append = false) {
         node.append(el("strong", `@${item.username} · ${item.display_name}`));
         if (item.id !== identity) node.append(button(mode === "blocked" ? "이 ID의 차단 해제" : mode === "following-list" ? "팔로우 취소" : "팔로우", () => mutate(mode === "blocked" ? "block" : "follow", { identityId: item.id, enabled: mode === "people" }, identity)));
         list.append(node);
-      } else list.append(card(item));
+      } else if (!document.getElementById(`thread-${item.id}`)) list.append(card(item));
     }
     cursor = data.next_cursor;
     more.hidden = !cursor;
     status.textContent = list.childElementCount ? "" : cursor ? "이 구간에 표시할 내용이 없습니다. 더 보기를 눌러 주세요." : "표시할 내용이 없습니다.";
   } catch (error) { if (isCurrent(version)) status.textContent = error.message; }
-  finally { if (version === generation) { more.disabled = false; pendingRefresh = false; } }
+  finally { if (version === generation) { more.disabled = false; pendingRefresh = false; readVisible.disabled = !visibleUnread.size; } }
 }
 async function publish(event) {
   event.preventDefault(); if (busy) return;
@@ -130,14 +154,18 @@ function openThreads() {
     const nav = el("div"); nav.className = "thread-toolbar";
     for (const [value, name] of [["feed", "피드"], ["notifications", "알림함"], ["following-list", "팔로잉 관리"], ["blocked", "차단 관리"]]) nav.append(button(name, () => selectMode(value)));
     nav.append(button("새로고침", () => void load()));
+    unreadSelect = el("select"); unreadSelect.setAttribute("aria-label", "알림 읽음 필터");
+    unreadSelect.append(option("0", "모든 알림"), option("1", "안 읽은 알림만")); unreadSelect.addEventListener("change", () => void load());
+    readVisible = button("표시된 알림 읽음", readShown); nav.append(unreadSelect, readVisible);
     search = el("input"); search.placeholder = "게시물 검색 / 정확한 @사용자명"; search.maxLength = 100; search.setAttribute("aria-label", "스레드 검색");
     nav.append(search, button("게시물 검색", () => selectMode("feed")), button("사용자 찾기", () => selectMode("people")));
     composer = el("form"); composer.addEventListener("submit", publish);
     writer = el("strong"); editor = el("textarea"); editor.maxLength = 2000; editor.setAttribute("aria-label", "스레드 내용"); editor.placeholder = "무슨 생각을 하고 있나요? @사용자명으로 멘션할 수 있어요."; editor.addEventListener("input", persist);
+    counter = el("small"); editor.addEventListener("input", () => { counter.textContent = `${editor.value.length}/2,000자`; });
     visibility = el("select"); visibility.setAttribute("aria-label", "게시물 공개 범위"); visibility.append(option("public", "전체 공개"), option("followers", "팔로워 공개"));
     visibility.addEventListener("change", persist);
     const submit = el("button", "게시하기"); submit.type = "submit";
-    composer.append(writer, editor, visibility, submit, button("새 게시물 작성", () => { persist(); parent = ""; restore(); }));
+    composer.append(writer, editor, counter, visibility, submit, button("새 게시물 작성", () => selectMode("feed")));
     status = el("p"); status.setAttribute("role", "status"); list = el("section"); list.setAttribute("aria-label", "스레드 목록"); more = button("더 보기", () => void load(true));
     panel.append(heading, filters, nav, composer, status, list, more); document.body.append(panel);
     panel.addEventListener("close", () => { persist(); generation++; list.replaceChildren(); editor.value = ""; draft = null; });

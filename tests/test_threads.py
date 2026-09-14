@@ -212,6 +212,51 @@ class ThreadsTest(unittest.TestCase):
         self.assertEqual(error.exception.status, 404)
         self.assertEqual(self.service().post(post)["like_count"], 0)
 
+    def test_reply_preview_respects_block_and_soft_delete(self):
+        root = self.post("Root")
+        parent = self.post("Private context", self.peer, parentId=root)
+        reply = self.post("My response", parentId=parent)
+        item = self.service().read("detail", {"id": root})["items"][-1]
+        self.assertEqual(item["reply_to"]["body"], "Private context")
+        self.service().write("block", {"identityId": self.peer["id"], "enabled": True})
+        item = self.service().read("detail", {"id": root})["items"][-1]
+        self.assertEqual(item["id"], reply)
+        self.assertIsNone(item["reply_to"])
+        self.service().write("block", {"identityId": self.peer["id"], "enabled": False})
+        self.service(self.peer).write("delete", {"id": parent})
+        item = self.service().read("detail", {"id": root})["items"][-1]
+        self.assertEqual(item["reply_to"]["body"], "")
+        self.assertEqual(item["reply_to"]["deleted"], 1)
+
+    def test_late_notification_target_is_included_without_paging_older_replies(self):
+        root = self.post("Root")
+        replies = [self.post(f"Reply {i}", parentId=root) for i in range(42)]
+        detail = self.service().read("detail", {"id": replies[-1]})
+        self.assertEqual(len(detail["items"]), 40)
+        self.assertEqual(detail["focused_reply"]["id"], replies[-1])
+        page = self.service().read("detail", {"id": root, "cursor": detail["next_cursor"]})
+        self.assertEqual([row["id"] for row in page["items"]], replies[-2:])
+        self.assertIsNone(page["focused_reply"])
+
+    def test_bulk_read_is_atomic_and_cannot_touch_another_owned_identity(self):
+        alternate = self.alternate()
+        self.post(f"@{self.username} @{alternate['username']}", self.peer)
+        mine = self.service().read("notifications", {})["items"][0]
+        other = self.service(alternate).read("notifications", {})["items"][0]
+        self.assertEqual(self.send("read_many", {"ids": [mine["id"], other["id"]]})[0], 404)
+        self.assertEqual(len(self.service().read("notifications", {"unread": "1"})["items"]), 1)
+        self.assertEqual(self.send("read_many", {"ids": [mine["id"], mine["id"]]})[0], 200)
+        self.assertEqual(self.service().read("notifications", {"unread": "1"})["items"], [])
+        self.assertEqual(len(self.service(alternate).read("notifications", {"unread": "1"})["items"]), 1)
+        for ids in ([], "id", ["id"] * 41, ["invalid,filter"]):
+            self.assertEqual(self.send("read_many", {"ids": ids})[0], 400)
+
+    def test_stale_editor_cannot_overwrite_a_newer_edit(self):
+        post = self.post("Original")
+        self.assertEqual(self.send("edit", {"id": post, "originalBody": "Original", "body": "New version"})[0], 200)
+        self.assertEqual(self.send("edit", {"id": post, "originalBody": "Original", "body": "Stale version"})[0], 409)
+        self.assertEqual(self.service().post(post)["body"], "New version")
+
 
 if __name__ == "__main__":
     unittest.main()

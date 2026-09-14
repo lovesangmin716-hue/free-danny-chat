@@ -1,17 +1,23 @@
 export function draftKey(identity, parent = "") { return `colorless:thread:${identity}:${parent}`; }
+const fallback = new Map();
 export function loadDraft(storage, identity, parent = "") {
+  const key = draftKey(identity, parent);
   try {
-    const value = JSON.parse(storage.getItem(draftKey(identity, parent)) || "null");
+    const value = fallback.has(key) ? fallback.get(key) : JSON.parse(storage.getItem(key) || "null");
     return value && typeof value.body === "string" && typeof value.clientId === "string" && /^[\w-]{1,100}$/.test(value.clientId)
       ? value : { body: "", clientId: crypto.randomUUID() };
   }
   catch (_) { return { body: "", clientId: crypto.randomUUID() }; }
 }
 export function saveDraft(storage, identity, parent, draft) {
-  try { storage.setItem(draftKey(identity, parent), JSON.stringify(draft)); } catch (_) { /* The editor remains usable without storage. */ }
+  const key = draftKey(identity, parent);
+  try { storage.setItem(key, JSON.stringify(draft)); fallback.delete(key); }
+  catch (_) { fallback.set(key, { ...draft }); }
 }
 export function clearDraft(storage, identity, parent) {
-  try { storage.removeItem(draftKey(identity, parent)); } catch (_) { /* Storage may be disabled. */ }
+  const key = draftKey(identity, parent);
+  try { storage.removeItem(key); fallback.delete(key); }
+  catch (_) { fallback.set(key, null); }
 }
 
 export function finishDraft(storage, identity, parent, sent) {
