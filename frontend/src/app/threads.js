@@ -143,6 +143,7 @@ function openThreads() {
   if (!state.session?.user) return;
   if (!panel) {
     const style = el("style"); style.textContent = ".thread-panel{width:min(850px,92vw);height:88vh;box-sizing:border-box;overflow:auto;padding:18px}.thread-panel::backdrop{background:#0008}.thread-panel small{display:block;color:#555}.thread-panel select,.thread-panel input{min-width:0;max-width:100%;padding:8px}.thread-toolbar,.thread-actions{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.thread-panel button{width:auto;min-height:32px;padding:6px 10px;font-size:13px}.thread-card{border:1px solid #aaa;padding:14px;margin:12px 0;overflow-wrap:anywhere}.thread-card p{white-space:pre-wrap}.thread-panel textarea{width:100%;box-sizing:border-box;min-height:100px;padding:10px}.thread-panel form{border-bottom:1px solid #bbb;padding-bottom:12px}";
+    style.textContent += ".thread-panel [hidden]{display:none!important}";
     document.head.append(style);
     panel = el("dialog"); panel.id = "threads-panel"; panel.className = "thread-panel"; panel.setAttribute("aria-label", "스레드");
     const heading = el("div"); heading.className = "thread-toolbar"; heading.append(el("h2", "스레드"), button("닫기", () => panel.close()));
