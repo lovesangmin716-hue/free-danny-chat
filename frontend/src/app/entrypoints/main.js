@@ -12,3 +12,4 @@ import "../app.js";
 import "../auth.js";
 import "../ticket-transfer.js";
 import "../bootstrap.js";
+import "../threads.js";

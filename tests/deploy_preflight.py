@@ -84,6 +84,13 @@ def validate_source() -> list[str]:
     require("users_account_idx" in schema, "Account identity index is missing.", failures)
     require("--environment --remote" in render, "Render build must validate the production Supabase schema.", failures)
     require(packaged_js.exists() and packaged_js.stat().st_size > 0, "Packaged frontend bundle is missing.", failures)
+    threads = (ROOT / "src/colorless/database/threads-schema.sql").read_text(encoding="utf-8")
+    require("colorless_threads_commit" in threads and "colorless_lock_active_identity(actor_id)" in threads,
+            "Threads migration must include an active-actor transaction RPC.", failures)
+    for table in ("thread_meta", "thread_posts", "thread_edges", "thread_likes", "thread_notifications", "thread_reports"):
+        require(f"alter table public.{table} enable row level security" in threads
+                and f"revoke all on public.{table} from public,anon,authenticated" in threads,
+                f"Threads table permissions missing: {table}.", failures)
     return failures
 
 
@@ -257,6 +264,33 @@ def validate_remote_supabase() -> list[str]:
     return failures
 
 
+def validate_remote_threads() -> list[str]:
+    failures: list[str] = []
+    try:
+        for table, columns in (
+            ("thread_posts", "id,author_identity_id,parent_id,root_id,body,visibility,client_id,created_at,edited_at,deleted"),
+            ("thread_edges", "actor_identity_id,target_identity_id,kind,created_at"),
+            ("thread_likes", "post_id,actor_identity_id,created_at"),
+            ("thread_notifications", "id,recipient_identity_id,actor_identity_id,post_id,kind,created_at,read_at"),
+            ("thread_reports", "id,actor_identity_id,post_id,reason,created_at"),
+            ("thread_post_summary", "id,like_count,reply_count"),
+        ):
+            rows = supabase_request(f"/rest/v1/{table}?select={columns}&limit=1")
+            require(isinstance(rows, list), f"Threads table is not queryable: {table}.", failures)
+        rows = supabase_request("/rest/v1/thread_meta?id=eq.1&select=revision&limit=1")
+        revision = int(rows[0]["revision"])
+        # Missing actor + empty mutations cannot create activity. A racing writer
+        # may produce conflict; both prove this RPC exists without changing data.
+        probe = supabase_request("/rest/v1/rpc/colorless_threads_commit", method="POST",
+                                 payload={"actor_id": "__colorless_preflight_missing_user__",
+                                          "expected_revision": revision, "mutations": []})
+        require(isinstance(probe, dict) and probe.get("error") in ("forbidden", "conflict"),
+                "Threads RPC accepted an invalid actor.", failures)
+    except (IndexError, KeyError, RuntimeError, TypeError, ValueError) as error:
+        failures.append(f"Threads schema validation failed; apply src/colorless/database/threads-schema.sql: {error}")
+    return failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate source and production deployment prerequisites.")
     parser.add_argument("--environment", action="store_true", help="Also validate production environment variables.")
@@ -273,6 +307,7 @@ def main() -> int:
         failures.extend(environment_failures)
         if args.remote and not environment_failures:
             failures.extend(validate_remote_supabase())
+            failures.extend(validate_remote_threads())
 
     for warning in warnings:
         print(f"WARNING: {warning}")

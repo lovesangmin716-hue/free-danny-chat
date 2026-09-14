@@ -14,6 +14,17 @@ SPEC.loader.exec_module(deploy_preflight)
 
 
 class DeploymentPreflightTestCase(unittest.TestCase):
+    def test_threads_preflight_probes_without_mutations(self):
+        responses = [[] for _ in range(6)] + [[{"revision": 42}], {"error": "forbidden"}]
+        with mock.patch.object(deploy_preflight, "supabase_request", side_effect=responses) as request:
+            self.assertEqual(deploy_preflight.validate_remote_threads(), [])
+        self.assertEqual(request.call_args.kwargs["payload"]["mutations"], [])
+        self.assertEqual(request.call_args.kwargs["payload"]["expected_revision"], 42)
+
+    def test_threads_preflight_blocks_missing_schema(self):
+        with mock.patch.object(deploy_preflight, "supabase_request", side_effect=RuntimeError("HTTP 404")):
+            self.assertIn("threads-schema.sql", deploy_preflight.validate_remote_threads()[0])
+
     def test_environment_warns_when_kakao_login_would_be_disabled(self) -> None:
         environment = {
             "REQUIRE_SUPABASE": "true",

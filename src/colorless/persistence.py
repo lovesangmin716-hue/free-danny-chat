@@ -990,6 +990,8 @@ class NormalizedSqliteRepository:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
+        from .threads_repository import initialize_threads
+        initialize_threads(self)
 
     def connect(self) -> sqlite3.Connection:
         database = sqlite3.connect(self.path, timeout=15)
