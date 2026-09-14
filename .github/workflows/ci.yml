@@ -33,6 +33,11 @@ jobs:
       - run: node tests/action_pipeline.mjs
       - run: node tests/submit_guard.mjs
       - run: node tests/identity_context.mjs
+      - run: node tests/thread_drafts.mjs
+      - name: Verify Threads PostgreSQL migration
+        run: |
+          npm install --prefix "$RUNNER_TEMP/threads-sql" --no-save @electric-sql/pglite@0.5.8
+          PGLITE_MODULE="file://$RUNNER_TEMP/threads-sql/node_modules/@electric-sql/pglite/dist/index.js" node tests/threads_postgres.mjs
       - run: python tests/static_budget.py
       - run: python tests/deploy_preflight.py
       - run: python -m unittest discover -s tests -p 'test_*.py'

@@ -30,14 +30,14 @@ Account suspension uses `accounts.status` and blocks every identity. Existing ti
 
 Message creation, edit, reaction, delete and identity lifecycle limits have independent identity keys and a shared account ceiling, without IP in either key. Defaults per minute are create 120/360, edit 60/180, reaction 180/540, delete 60/180 (identity/account). Identity create/disable each allow 10/30 per hour. Existing preauthentication IP controls remain. Counters are process-local; a multi-instance deployment needs a shared limiter for an exact fleet-wide ceiling.
 
-## Future Threads contract and remaining work
+## Threads integration and remaining work
 
-New posts use `author_identity_id`, comments/replies use `author_identity_id`, follows use `follower_identity_id`/`followed_identity_id`, reactions use `actor_identity_id`, and notifications use `recipient_identity_id`/`actor_identity_id`, all referencing `users.id`. Account IDs must not be copied into these social rows, search documents, URLs or public events. These APIs must use the same ownership resolver and transaction-level active-actor validation, and drafts must be keyed by identity. Identity blocks must affect only that identity's interactions; account sanctions are a separate operator policy.
+Posts and replies use `author_identity_id`, follows/blocks use `actor_identity_id`/`target_identity_id`, likes use `actor_identity_id`, and notifications use `recipient_identity_id`/`actor_identity_id`, all referencing `users.id`. The implemented APIs use the ownership resolver, transaction-level active-actor validation, identity-keyed drafts, and identity-local blocks. See [THREADS.md](THREADS.md) for the UI, API and database migration.
 
-This change supplies the account/identity foundation and chat integration. A Threads feed, posts/comments/follows, dedicated notification inboxes, general-user block/report UI and an account erasure workflow are not implemented here. Issue #25 therefore remains open until those later feature steps and their actor/privacy tests are complete.
+The Threads text feed, posts/comments/replies, likes/follows/mentions, notification inboxes, block/report UI and actor/privacy tests are implemented. Account erasure/anonymization remains a separate retention workflow; issue #25 is not automatically closed by this feature. Media posts and an operator report-review screen are not part of this first Threads version.
 
 ## Deployment and verification
 
-Back up the database, apply `src/colorless/database/supabase-schema.sql`, run remote preflight, then deploy the application. The SQL is rerunnable, keeps the existing message RPC compatibility wrapper, adds active-only identity limits and a service-role-only deactivation RPC. Existing identity IDs and social references do not change. Roll back application code without deleting identity rows; older applications must not be used to bypass inactive status.
+Back up the database, apply `src/colorless/database/supabase-schema.sql` and then `src/colorless/database/threads-schema.sql`, run remote preflight, then deploy the application. The SQL is rerunnable and preserves existing identity IDs and social references. Roll back application code without deleting identity or Threads rows; older applications must not be used to bypass inactive status.
 
 `tests/test_identity.py` exercises real HTTP ownership, fixed senders, private profiles, disable/replacement, retained messages and suspended-account caches. `tests/identity_context.mjs` covers request capture and per-identity client behavior. Existing migration, message transaction, multi-instance and frontend tests remain in CI.

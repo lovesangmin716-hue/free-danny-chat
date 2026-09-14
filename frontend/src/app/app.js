@@ -51,6 +51,7 @@ function renderMessenger() {
 }
 
 function resetApplicationUi() {
+  document.getElementById("threads-panel")?.close();
   state.identityUnread = null;
   document.getElementById("identity-management")?.remove();
   identityCreateModal.classList.add("hidden");

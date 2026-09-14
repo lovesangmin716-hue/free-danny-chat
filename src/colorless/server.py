@@ -473,7 +473,11 @@ RATE_LIMITER = SlidingWindowRateLimiter()
 APPLICATION = ApplicationServices(STORE, PRESENCE, lambda: UPLOAD_GRANTS)
 
 
+from .http.threads import ThreadRoutesMixin
+
+
 class ChatHandler(
+    ThreadRoutesMixin,
     AuthRoutesMixin,
     MessagingRoutesMixin,
     TicketRoutesMixin,
@@ -713,6 +717,10 @@ class ChatHandler(
         parsed_url = urlparse(self.path)
         path = parsed_url.path
         query = parse_qs(parsed_url.query)
+
+        if path.startswith("/threads/api/"):
+            self.serve_threads(path.removeprefix("/threads/api/"), query)
+            return
 
         if path == "/":
             self.serve_index()
@@ -999,6 +1007,10 @@ class ChatHandler(
 
     def dispatch_post(self) -> None:
         path = urlparse(self.path).path
+
+        if path.startswith("/threads/api/"):
+            self.serve_threads(path.removeprefix("/threads/api/"))
+            return
 
         if path == "/signup":
             self.signup()
