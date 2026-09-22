@@ -207,12 +207,14 @@ from .persistence import (
     SupabaseRequestError,
 )
 from .state import StateStore
+from .places import PlaceService
 from .realtime import DurableEventBroker
 from .application import ApplicationServices, CommandFailure, CommandOutcome
 from .http import (
     AuthRoutesMixin,
     HandlerContext,
     MessagingRoutesMixin,
+    PlaceRoutesMixin,
     TicketRoutesMixin,
     UploadRoutesMixin,
 )
@@ -453,6 +455,7 @@ def social_provider_config(google_redirect_uri: str, kakao_redirect_uri: str) ->
 
 
 STORE = StateStore(STATE_FILE)
+PLACE_SERVICE = PlaceService()
 SESSIONS = SessionStore(state_store=STORE)
 PRESENCE = PresenceStore(STORE.repository, INSTANCE_ID)
 STORE.bind_presence(PRESENCE)
@@ -470,7 +473,7 @@ OAUTH_STATES = OAuthStateStore()
 RATE_LIMITER = SlidingWindowRateLimiter()
 
 
-APPLICATION = ApplicationServices(STORE, PRESENCE, lambda: UPLOAD_GRANTS)
+APPLICATION = ApplicationServices(STORE, PRESENCE, lambda: UPLOAD_GRANTS, PLACE_SERVICE)
 
 
 from .http.threads import ThreadRoutesMixin
@@ -480,6 +483,7 @@ class ChatHandler(
     ThreadRoutesMixin,
     AuthRoutesMixin,
     MessagingRoutesMixin,
+    PlaceRoutesMixin,
     TicketRoutesMixin,
     UploadRoutesMixin,
     BaseHTTPRequestHandler,
@@ -825,6 +829,24 @@ class ChatHandler(
             if user is None:
                 return
             self.send_json(STORE.get_bootstrap(user), HTTPStatus.OK)
+            return
+        if path == "/places/config":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.serve_place_config(user)
+            return
+        if path == "/places/search":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.serve_place_search(query, user)
+            return
+        if path == "/places/verification":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.serve_place_verification(query, user)
             return
         if path == "/messenger":
             user = self.require_auth_record()
@@ -1172,6 +1194,18 @@ class ChatHandler(
             if user is None:
                 return
             self.create_direct_room(user)
+            return
+        if path == "/place-rooms":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.open_place_room(user)
+            return
+        if path == "/places/verify":
+            user = self.require_auth_record()
+            if user is None:
+                return
+            self.verify_place(user)
             return
         if path == "/rooms/read":
             user = self.require_auth()

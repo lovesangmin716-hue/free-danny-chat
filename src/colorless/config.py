@@ -72,11 +72,11 @@ CONTENT_SECURITY_POLICY = "; ".join(
         "base-uri 'self'",
         "object-src 'none'",
         "frame-ancestors 'none'",
-        "script-src 'self' https://accounts.google.com",
+        "script-src 'self' https://accounts.google.com https://oapi.map.naver.com",
         "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style",
-        f"img-src 'self' data: blob: {SUPABASE_STORAGE_ORIGIN}".rstrip(),
+        f"img-src 'self' data: blob: https://map.pstatic.net {SUPABASE_STORAGE_ORIGIN}".rstrip(),
         "font-src 'self'",
-        f"connect-src 'self' https://accounts.google.com {SUPABASE_STORAGE_ORIGIN}".rstrip(),
+        f"connect-src 'self' https://accounts.google.com https://oapi.map.naver.com https://map.pstatic.net {SUPABASE_STORAGE_ORIGIN}".rstrip(),
         "frame-src https://accounts.google.com",
         "form-action 'self' https://accounts.google.com https://kauth.kakao.com",
         f"media-src 'self' blob: {SUPABASE_STORAGE_ORIGIN}".rstrip(),
@@ -90,7 +90,7 @@ COMMON_SECURITY_HEADERS = (
     ("Referrer-Policy", "strict-origin-when-cross-origin"),
     (
         "Permissions-Policy",
-        'accelerometer=(), camera=(), geolocation=(), gyroscope=(), microphone=(self), payment=(), usb=(), '
+        'accelerometer=(), camera=(), geolocation=(self), gyroscope=(), microphone=(self), payment=(), usb=(), '
         "autoplay=(), fullscreen=(self)",
     ),
     ("Cross-Origin-Opener-Policy", "same-origin-allow-popups"),
@@ -170,9 +170,21 @@ KAKAO_REDIRECT_URI = os.getenv("KAKAO_REDIRECT_URI", "").strip()
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "").strip()
+NAVER_MAP_CLIENT_ID = os.getenv("NAVER_MAP_CLIENT_ID", "").strip()
+NAVER_SEARCH_CLIENT_ID = os.getenv("NAVER_SEARCH_CLIENT_ID", "").strip()
+NAVER_SEARCH_CLIENT_SECRET = os.getenv("NAVER_SEARCH_CLIENT_SECRET", "").strip()
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+PLACE_TOKEN_SECRET = (
+    os.getenv("PLACE_TOKEN_SECRET", "").strip()
+    or NAVER_SEARCH_CLIENT_SECRET
+    or SUPABASE_SERVICE_ROLE_KEY
+    or secrets.token_urlsafe(32)
+)
+PLACE_VERIFICATION_TTL_SECONDS = 3 * 60 * 60
+PLACE_LOCATION_MAX_ACCURACY_METERS = 100.0
+PLACE_LOCATION_MAX_AGE_SECONDS = 120
 SOCIAL_DEMO_LOGIN_ENABLED = os.getenv("SOCIAL_DEMO_LOGIN_ENABLED", "true").lower() != "false"
 SOCIAL_DEMO_ADMIN_PASSWORD = os.getenv("SOCIAL_DEMO_ADMIN_PASSWORD", "").strip()
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 SUPABASE_STATE_TABLE = "app_state"
 SUPABASE_STATE_ID = "primary"
 SUPABASE_UPLOAD_BUCKET = "chat-uploads"

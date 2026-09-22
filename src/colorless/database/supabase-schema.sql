@@ -167,12 +167,16 @@ create table if not exists public.rooms (
   updated_at timestamptz not null,
   revision bigint not null default 1,
   direct_key text,
+  place_key text,
   data jsonb not null
 );
 alter table public.rooms add column if not exists revision bigint not null default 1;
 alter table public.rooms add column if not exists direct_key text;
+alter table public.rooms add column if not exists place_key text;
 create unique index if not exists rooms_direct_key_unique_idx
   on public.rooms(direct_key) where direct_key is not null;
+create unique index if not exists rooms_place_key_unique_idx
+  on public.rooms(place_key) where place_key is not null;
 with direct_keys as (
   select rooms.id, string_agg(member.value, ':' order by member.value) as direct_key
   from public.rooms
@@ -234,6 +238,19 @@ create table if not exists public.sessions (
   created_at double precision not null,
   expires_at double precision not null
 );
+
+create table if not exists public.place_verifications (
+  user_id text not null references public.users(id) on delete cascade,
+  place_key text not null,
+  room_id text not null references public.rooms(id) on delete cascade,
+  verified_at double precision not null,
+  expires_at double precision not null,
+  accuracy_m double precision not null,
+  distance_m double precision not null,
+  primary key (user_id, place_key)
+);
+create index if not exists place_verifications_place_expiry_idx
+  on public.place_verifications(place_key, expires_at);
 alter table public.sessions add column if not exists account_id text references public.accounts(id) on delete cascade;
 alter table public.sessions add column if not exists active_user_id text references public.users(id) on delete cascade;
 update public.sessions set account_id=users.account_id, active_user_id=users.id
@@ -319,6 +336,7 @@ alter table public.messages enable row level security;
 alter table public.message_reactions enable row level security;
 alter table public.read_positions enable row level security;
 alter table public.sessions enable row level security;
+alter table public.place_verifications enable row level security;
 alter table public.shorts_feeds enable row level security;
 alter table public.shorts_seen enable row level security;
 alter table public.shorts_catalog enable row level security;
@@ -362,26 +380,29 @@ returns bigint language plpgsql security definer set search_path = public as $$
 declare
   member_id text; read_entry record;
   expected_revision bigint := coalesce((room_data->>'_revision')::bigint, 0);
-  new_revision bigint; direct_room_key text;
+  new_revision bigint; direct_room_key text; place_room_key text;
 begin
   if room_data->>'kind' = 'direct' and jsonb_array_length(coalesce(room_data->'participant_ids', '[]'::jsonb)) = 2 then
     select string_agg(value, ':' order by value) into direct_room_key
     from jsonb_array_elements_text(room_data->'participant_ids');
   end if;
+  if room_data->>'kind' = 'place' then
+    place_room_key := nullif(room_data->'place'->>'key', '');
+  end if;
   if expected_revision = 0 then
-    insert into rooms(id, kind, created_by, updated_at, revision, direct_key, data)
+    insert into rooms(id, kind, created_by, updated_at, revision, direct_key, place_key, data)
     values (
       room_data->>'id', coalesce(room_data->>'kind', 'group'),
       coalesce(room_data->>'created_by', ''),
       coalesce(room_data->>'updated_at', timezone('utc', now())::text)::timestamptz,
-      1, direct_room_key, room_data || jsonb_build_object('_revision', 1)
+      1, direct_room_key, place_room_key, room_data || jsonb_build_object('_revision', 1)
     ) on conflict(id) do nothing returning revision into new_revision;
   else
     update rooms set
       kind=coalesce(room_data->>'kind', 'group'),
       created_by=coalesce(room_data->>'created_by', ''),
       updated_at=coalesce(room_data->>'updated_at', timezone('utc', now())::text)::timestamptz,
-      revision=revision+1, direct_key=direct_room_key,
+      revision=revision+1, direct_key=direct_room_key, place_key=place_room_key,
       data=room_data || jsonb_build_object('_revision', revision+1)
     where id=room_data->>'id' and revision=expected_revision
     returning revision into new_revision;
@@ -1197,6 +1218,7 @@ returns jsonb language sql security definer set search_path = public as $$
     'message_reactions', (select count(*) from message_reactions),
     'read_positions', (select count(*) from read_positions),
     'sessions', (select count(*) from sessions),
+    'place_verifications', (select count(*) from place_verifications),
     'shorts_catalog', (select count(*) from shorts_catalog),
     'shorts_collection_state', (select count(*) from shorts_collection_state),
     'realtime_events', (select count(*) from realtime_events),
@@ -1230,14 +1252,14 @@ $$;
 revoke all on table
   public.app_migrations, public.accounts, public.users, public.profile_art, public.social_accounts, public.friendships,
   public.rooms, public.room_members, public.messages, public.message_reactions, public.read_positions,
-  public.sessions, public.shorts_feeds, public.shorts_seen, public.shorts_catalog,
+  public.sessions, public.place_verifications, public.shorts_feeds, public.shorts_seen, public.shorts_catalog,
   public.shorts_collection_state,
   public.realtime_events, public.presence_leases
 from anon, authenticated;
 grant select, insert, update, delete on table
   public.app_migrations, public.accounts, public.users, public.profile_art, public.social_accounts, public.friendships,
   public.rooms, public.room_members, public.messages, public.message_reactions, public.read_positions,
-  public.sessions, public.shorts_feeds, public.shorts_seen, public.shorts_catalog,
+  public.sessions, public.place_verifications, public.shorts_feeds, public.shorts_seen, public.shorts_catalog,
   public.shorts_collection_state,
   public.realtime_events, public.presence_leases
 to service_role;

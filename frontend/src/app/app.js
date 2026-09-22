@@ -1,6 +1,6 @@
 "use strict";
 
-import { CHAT_MESSAGE_PAGE_SIZE, appScreen, appTitle, chatList, chatsTab, createAvatar, createNewChatButton, directorySheet, friendCodeInput, friendList, friendsTab, getDisplayName, myDisplayName, myFriendCode, myProfileAvatar, myTab, myView, newChatGroupName, newChatGroupNameField, newChatMemberList, newChatSearch, newChatSheet, openDirectoryButton, openLoginButton, openNewChatButton, realtimeEvents, registerCoreHooks, renderStatusEmojiControl, requestAction, setAppStatus, shortShareBar, showApp, state, syncAppStatusForActiveTab } from "./core.js";
+import { CHAT_MESSAGE_PAGE_SIZE, appScreen, appTitle, chatList, chatsTab, createAvatar, createNewChatButton, directorySheet, friendCodeInput, friendList, friendsTab, getDisplayName, myDisplayName, myFriendCode, myProfileAvatar, myTab, myView, newChatGroupName, newChatGroupNameField, newChatMemberList, newChatSearch, newChatSheet, openDirectoryButton, openLoginButton, openNewChatButton, placeView, placesTab, realtimeEvents, registerCoreHooks, renderStatusEmojiControl, requestAction, setAppStatus, shortShareBar, showApp, state, syncAppStatusForActiveTab } from "./core.js";
 import { connectEvents, rebuildPresenceIndexes, registerRealtimeHandlers, renderChats, renderDirectory, renderFriends, upsertMessengerRoom } from "./messenger.js";
 import { openChatRoom, rebuildMessageIndexes, renderChatRoom } from "./chat.js";
 import { captureChatVirtualAnchor, chatVirtualScrollTopForAnchor } from "./chat-virtual.js";
@@ -8,6 +8,7 @@ import { renderWorkModeControl, syncWorkModeVisibility } from "./work-mode.js";
 import { activeActionBarState, renderContextActionBar, renderFriendActionBar, renderHeaderSearch } from "./action-bar.js";
 import { mergeAuthoritativeRoomSnapshot, mergeRealtimeRoomSnapshot } from "./platform/room-snapshots.js";
 import { openInitialIdentityRoom, renderIdentityControls } from "./identity-ui.js";
+import { initializePlaces, renderPlaces } from "./places.js";
 
 const accountIdentifier = document.getElementById("account-identifier");
 const identitySwitcher = document.getElementById("identity-switcher");
@@ -28,25 +29,31 @@ const APP_CHAT_PAGE_SIZE = typeof CHAT_MESSAGE_PAGE_SIZE === "number" ? CHAT_MES
 function renderMessenger() {
   const user = state.messenger.user || state.session?.user;
   appScreen.classList.remove("guest-mode");
-  appTitle.textContent = ({ chats: "채팅", friends: "친구", my: "MY" })[state.activeList] || "채팅";
+  appTitle.textContent = ({ places: "지도", chats: "채팅", friends: "친구", my: "MY" })[state.activeList] || "지도";
   openLoginButton.classList.add("hidden");
   renderStatusEmojiControl();
   syncAppStatusForActiveTab();
   renderHeaderSearch();
   openDirectoryButton.classList.toggle("hidden", state.activeList !== "friends");
   openNewChatButton.classList.toggle("hidden", state.activeList !== "chats");
+  placesTab.classList.toggle("active", state.activeList === "places");
   chatsTab.classList.toggle("active", state.activeList === "chats");
   friendsTab.classList.toggle("active", state.activeList === "friends");
   myTab.classList.toggle("active", state.activeList === "my");
+  placeView.classList.toggle("hidden", state.activeList !== "places");
   chatList.classList.toggle("hidden", state.activeList !== "chats");
   friendList.classList.toggle("hidden", state.activeList !== "friends");
   myView.classList.toggle("hidden", state.activeList !== "my");
+  if (state.activeList === "places") {
+    renderPlaces();
+    void initializePlaces();
+  }
   if (state.activeList === "chats") renderChats();
   if (state.activeList === "friends") renderFriends();
   if (state.activeList === "my") renderMy();
   syncWorkModeVisibility();
   renderContextActionBar();
-  shortShareBar.classList.toggle("hidden", state.activeList === "my");
+  shortShareBar.classList.toggle("hidden", state.activeList === "my" || state.activeList === "places");
   if (!directorySheet.classList.contains("hidden")) renderDirectory();
 }
 

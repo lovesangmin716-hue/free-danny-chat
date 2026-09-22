@@ -9,6 +9,7 @@ import { addFriend, loadFriendsPage, loadMessenger, loadRoomsPage, openNewChat, 
 import { ColorlessPlatform } from "./platform/index.js";
 import { mergeAuthoritativeRoomSnapshot, mergeRealtimeRoomSnapshot, unreadAfterMessageCreated } from "./platform/room-snapshots.js";
 import { applyReactionEvent, canMarkSelectedRoomRead, noteIncomingMessage, updateReplyReferences } from "./message-interactions.js";
+import { syncPlaceVerificationButton } from "./places.js";
 
 // Room, friend, presence, directory, and realtime synchronization behavior.
 function ownedIdentityUsernames() {
@@ -21,7 +22,7 @@ function roomViewerUsername(room) {
 
 function recentChatRooms() {
   return state.messenger.rooms.filter((room) => (
-    ["direct", "group", "ticket_listing", "ticket_deal"].includes(room.kind || "group")
+    ["direct", "group", "place", "ticket_listing", "ticket_deal"].includes(room.kind || "group")
     && state.chatIdentityVisibility[room.viewer_identity_id] !== false
   )).sort((first, second) => {
     const firstHasMessage = Boolean(first.last_message);
@@ -698,6 +699,15 @@ function registerRealtimeHandlers() {
     renderRealtimeLists();
     if (room?.id === state.selectedRoomId) renderChatRoom();
     recordSyncRevision(payload.revision);
+  });
+  realtimeEvents.register("place_verification_updated", (payload) => {
+    recordSyncRevision(payload.revision);
+    if (!ownedIdentityUsernames().has(payload.username)) return;
+    const room = state.roomById.get(payload.roomId);
+    if (!room) return;
+    room.viewer_verification = { expires_at: Number(payload.expiresAt || 0) };
+    room._verificationLoaded = true;
+    if (room.id === state.selectedRoomId) syncPlaceVerificationButton(room);
   });
   realtimeEvents.register("friends_updated", async (payload) => {
     const authEpoch = state.authEpoch;

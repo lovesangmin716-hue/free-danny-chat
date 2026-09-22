@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#ffffff" />
     <title>Colorless</title>
     <link rel="preload" href="assets/fonts/The%20Jamsil%203%20Regular.woff2?v=4e887c501a6c" as="font" type="font/woff2" crossorigin />
-    <script defer src="assets/js/main.js?v=be576263394b"></script>
+    <script defer src="assets/js/main.js?v=f639b6409433"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -251,7 +251,7 @@
         border-top: 1px solid var(--black);
         display: grid;
         flex: 0 0 auto;
-        grid-template-columns: repeat(3, 1fr);
+        grid-template-columns: repeat(4, 1fr);
       }
 
       .list-tabs button {
@@ -277,6 +277,37 @@
         overflow-y: auto;
         position: relative;
       }
+
+      .place-view { height: 100%; min-height: 0; overflow: hidden; }
+      .place-layout { display: grid; grid-template-rows: auto minmax(220px, 1fr) minmax(132px, auto); height: 100%; min-height: 0; }
+      .place-search-form { background: var(--white); border-bottom: 1px solid var(--black); display: grid; gap: 7px; grid-template-columns: minmax(0, 1fr) auto; margin: 0; padding: 10px; }
+      .place-search-form input { min-height: 44px; }
+      .place-search-form button { min-height: 44px; padding-inline: 14px; }
+      .place-map { background: #ededed; min-height: 220px; overflow: hidden; position: relative; }
+      .place-map::before, .place-map::after { background: rgba(255,255,255,.78); content: ""; height: 18px; left: -10%; position: absolute; top: 38%; transform: rotate(-18deg); width: 120%; }
+      .place-map::after { left: 38%; top: -10%; transform: rotate(72deg); }
+      .place-map.map-ready::before, .place-map.map-ready::after { display: none; }
+      .place-map-fallback { color: var(--gray); display: grid; font-size: 12px; inset: 0; padding: 16px; place-items: start; position: absolute; z-index: 1; }
+      .place-map.map-ready .place-map-fallback { display: none; }
+      .place-location-button { background: var(--white); bottom: 12px; color: var(--black); min-height: 44px; min-width: 44px; padding: 0; position: absolute; right: 12px; z-index: 4; }
+      .place-status { background: var(--white); border: 1px solid var(--black); color: var(--gray); font-size: 12px; left: 10px; margin: 0; max-width: calc(100% - 76px); padding: 7px 9px; position: absolute; top: 10px; z-index: 4; }
+      .place-status:empty { display: none; }
+      .place-results { background: var(--white); border-top: 1px solid var(--black); display: grid; max-height: 220px; overflow-y: auto; }
+      .place-result { background: var(--white); border-bottom: 1px solid var(--light-gray); color: var(--black); display: grid; gap: 7px; padding: 9px 10px; }
+      .place-result:last-child { border-bottom: 0; }
+      .place-result-main { align-items: center; background: var(--white); border: 0; color: var(--black); display: grid; gap: 9px; grid-template-columns: minmax(0, 1fr) auto; min-height: 44px; padding: 0 2px; text-align: left; }
+      .place-result-main:hover, .place-result-main:focus-visible { background: #f5f5f5; }
+      .place-result-copy { display: grid; gap: 4px; min-width: 0; }
+      .place-result-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .place-result-copy span { color: var(--gray); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .place-result-meta { color: var(--gray); display: grid; font-size: 11px; gap: 4px; justify-items: end; white-space: nowrap; }
+      .place-result-actions { display: grid; gap: 6px; grid-template-columns: auto minmax(0, 1fr); }
+      .place-result-actions a { align-items: center; border: 1px solid var(--black); color: var(--black); display: inline-flex; font-size: 12px; justify-content: center; min-height: 38px; padding: 0 10px; text-decoration: none; }
+      .place-result-actions button { min-height: 38px; }
+      .place-empty { color: var(--gray); font-size: 13px; margin: 0; padding: 24px 16px; text-align: center; }
+      .place-room-verify { background: var(--white); color: var(--black); font-size: 11px; min-height: 38px; padding-inline: 9px; white-space: nowrap; }
+      .place-room-verify.verified { background: var(--black); color: var(--white); }
+      .message-verification-badge { border: 1px solid var(--black); color: var(--black); display: inline-flex; font-size: 9px; font-weight: 400; margin-right: 5px; padding: 1px 4px; }
 
       .chat-list, .friend-list { padding: 0; }
       .empty-list-action { display: block; margin: 12px auto 0; }
@@ -809,7 +840,22 @@
       </header>
 
       <section class="list-content">
-        <div class="chat-list" id="chat-list"></div>
+        <section class="place-view" id="place-view" aria-label="장소 지도">
+          <div class="place-layout">
+            <form class="place-search-form" id="place-search-form">
+              <label class="sr-only" for="place-search-input">장소 검색</label>
+              <input id="place-search-input" type="search" maxlength="80" autocomplete="off" placeholder="장소를 검색하세요" />
+              <button type="submit">검색</button>
+            </form>
+            <div class="place-map" id="place-map" aria-label="장소 지도">
+              <div class="place-map-fallback">네이버 지도 키를 연결하면 여기에 실제 지도가 표시됩니다.</div>
+              <p class="place-status" id="place-status" role="status" aria-live="polite"></p>
+              <button type="button" class="place-location-button" id="place-location-button" data-icon="locate-fixed" data-icon-only aria-label="내 위치로 이동">내 위치</button>
+            </div>
+            <div class="place-results" id="place-results" aria-live="polite"></div>
+          </div>
+        </section>
+        <div class="chat-list hidden" id="chat-list"></div>
         <div class="friend-list hidden" id="friend-list"></div>
         <section class="my-view hidden" id="my-view" aria-label="MY">
           <div class="my-card">
@@ -1011,6 +1057,7 @@
             <strong id="chat-room-name"></strong>
             <span class="chat-presence" id="chat-room-presence"></span>
           </div>
+          <button type="button" class="place-room-verify hidden" id="place-room-verify">현장 인증</button>
           <button type="button" class="chat-room-settings-button hidden" id="open-room-settings-button" data-icon="settings" data-icon-only aria-label="채팅방 설정">설정</button>
         </header>
         <div class="chat-message-list" id="chat-message-list" role="log" aria-live="polite" aria-relevant="additions" aria-busy="false"></div>
@@ -1099,7 +1146,8 @@
         </div>
       </section>
       <nav class="list-tabs" aria-label="메신저 탭">
-        <button type="button" class="active" id="chats-tab" data-icon="message-circle" aria-label="채팅">채팅</button>
+        <button type="button" class="active" id="places-tab" data-icon="map" aria-label="지도">지도</button>
+        <button type="button" id="chats-tab" data-icon="message-circle" aria-label="채팅">채팅</button>
         <button type="button" id="friends-tab" data-icon="users" aria-label="친구">친구</button>
         <button type="button" id="my-tab" data-icon="user" aria-label="MY">MY</button>
       </nav>

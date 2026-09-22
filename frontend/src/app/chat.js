@@ -3,6 +3,7 @@
 import { CHAT_MESSAGE_MEMORY_LIMIT, CHAT_MESSAGE_PAGE_SIZE, appStore, chatMessageInput, chatMessageList, chatRoom, chatRoomAvatar, chatRoomName, chatRoomPresence, clearChatDraft, formatTime, getChatDraft, normalizeStatusEmoji, openRoomSettingsButton, registerCoreHooks, requestAction, roomSettingsSheet, setAppStatus, state, syncAppStatusForActiveTab } from "./core.js";
 import { renderRoomIdentity } from "./identity-ui.js";
 import { createRoomAvatar, currentRoom, renderChats, roomParticipantDisplayName, upsertMessengerRoom, upsertRoomAfterMessageDeletion } from "./messenger.js";
+import { syncPlaceVerificationButton } from "./places.js";
 import { clearChatAttachment, discardUploadedAttachment, renderChatAttachmentPreview, renderChatAttachmentTray, uploadChatAttachment } from "./attachments.js";
 import { formatVoiceDuration } from "./voice.js";
 import { chatVirtualRange, createChatVirtualSpacer, measureRenderedChatMessages } from "./chat-virtual.js";
@@ -228,6 +229,12 @@ if (attachment.kind === "voice" && attachment.type?.startsWith("audio/")) {
     meta.appendChild(read);
   }
   if (!mine) {
+    if (Number(message.place_verification_expires_at || 0) * 1000 > Date.now()) {
+      const verified = document.createElement("span");
+      verified.className = "message-verification-badge";
+      verified.textContent = "현장 인증";
+      meta.appendChild(verified);
+    }
     const sender = document.createElement("strong");
     sender.className = "message-sender";
     sender.textContent = messageSenderDisplayName(room, message);
@@ -527,6 +534,7 @@ function renderChatRoom({ scrollToBottom = false, preserveScrollHeight = 0, rest
     chatRoom.classList.add("hidden");
     syncAppStatusForActiveTab();
     openRoomSettingsButton.classList.add("hidden");
+    syncPlaceVerificationButton(null);
     roomSettingsSheet.classList.add("hidden");
     return;
   }
@@ -537,6 +545,7 @@ function renderChatRoom({ scrollToBottom = false, preserveScrollHeight = 0, rest
   chatRoom.classList.remove("hidden");
   syncAppStatusForActiveTab();
   openRoomSettingsButton.classList.toggle("hidden", !hasRoomSettings);
+  syncPlaceVerificationButton(room);
   renderChatAttachmentTray();
   renderChatAttachmentPreview();
   const draft = getChatDraft(room.id);
@@ -548,7 +557,9 @@ function renderChatRoom({ scrollToBottom = false, preserveScrollHeight = 0, rest
   renderRoomIdentity();
   chatRoomPresence.textContent = room.kind === "ticket_listing" || room.kind === "ticket_deal"
     ? [room.ticket?.matchup, room.ticket?.seat].filter(Boolean).join(" · ")
-    : isGroupRoom
+    : room.kind === "place"
+      ? `${room.participant_count || 0}명 · 공개 장소방`
+      : isGroupRoom
       ? `${room.participant_count || room.participants?.length || 0}명`
       : (isInThisRoom ? "in chat" : (presence?.online ? "online" : ""));
   if (

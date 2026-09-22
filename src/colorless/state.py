@@ -6,6 +6,7 @@ import copy
 import hashlib
 import hmac
 import json
+import math
 import re
 import sqlite3
 import threading
@@ -25,6 +26,9 @@ from .config import (
     MAX_SESSIONS,
     MESSAGE_REACTIONS,
     MIN_GROUP_PARTICIPANTS,
+    PLACE_LOCATION_MAX_ACCURACY_METERS,
+    PLACE_LOCATION_MAX_AGE_SECONDS,
+    PLACE_VERIFICATION_TTL_SECONDS,
     SESSION_CLEANUP_INTERVAL_SECONDS,
     SESSION_REFRESH_THRESHOLD_SECONDS,
     SESSION_VALIDATION_CACHE_SECONDS,
@@ -414,7 +418,7 @@ BASEBALL_SEAT_GRADES = {
 }
 TICKET_DELIVERY_METHODS = ("모바일 티켓", "현장 전달", "택배", "기타")
 TICKET_ROOM_KINDS = {"ticket_listing", "ticket_deal"}
-MESSENGER_ROOM_KINDS = {"direct", "group", *TICKET_ROOM_KINDS}
+MESSENGER_ROOM_KINDS = {"direct", "group", "place", *TICKET_ROOM_KINDS}
 KOREA_TIMEZONE = timezone(timedelta(hours=9))
 # Older deployed versions of colorless_insert_message interpret keep_count=0
 # as "keep one". This effectively-unbounded positive sentinel preserves full
@@ -611,6 +615,8 @@ class StateStore:
             self._room_ids_by_user.setdefault(user_id, set()).add(room["id"])
         if room.get("kind") == "direct" and len(participant_ids) == 2:
             self._direct_rooms_by_pair[tuple(sorted(participant_ids))] = room
+        if room.get("kind") == "place" and room.get("place", {}).get("key"):
+            self._place_rooms_by_key[str(room["place"]["key"])] = room
 
     def _rebuild_indexes_locked(self) -> None:
         self._accounts_by_id = {account["id"]: account for account in self.state["accounts"]}
@@ -646,12 +652,15 @@ class StateStore:
 
         self._room_ids_by_user: dict[str, set[str]] = {}
         self._direct_rooms_by_pair: dict[tuple[str, str], dict] = {}
+        self._place_rooms_by_key: dict[str, dict] = {}
         for room in self.state["rooms"]:
             participant_ids = room.get("participant_ids", [])
             for user_id in participant_ids:
                 self._room_ids_by_user.setdefault(user_id, set()).add(room["id"])
             if room.get("kind") == "direct" and len(participant_ids) == 2:
                 self._direct_rooms_by_pair[tuple(sorted(participant_ids))] = room
+            if room.get("kind") == "place" and room.get("place", {}).get("key"):
+                self._place_rooms_by_key[str(room["place"]["key"])] = room
         self._profile_images = {
             Path(image_url).name
             for user in self.state["users"]
@@ -2497,6 +2506,8 @@ class StateStore:
             public_ticket.pop("reports", None)
             public_ticket.pop("interests", None)
             summary["ticket"] = public_ticket
+        if room.get("kind") == "place" and isinstance(room.get("place"), dict):
+            summary["place"] = copy.deepcopy(room["place"])
         return summary
 
     def get_user_record(self, username: str) -> dict | None:
@@ -4032,6 +4043,142 @@ class StateStore:
             self._save_locked("rooms")
             return self._room_summary(room, user), True, None
 
+    def open_place_room(
+        self,
+        username: str,
+        place: dict,
+    ) -> tuple[dict | None, bool, bool, str | None]:
+        place_key = str(place.get("key", "")).strip()
+        if not place_key:
+            return None, False, False, "장소 식별자가 없습니다."
+        with self.lock:
+            user = self._users_by_username.get(username)
+            if user is None:
+                return None, False, False, "사용자를 찾을 수 없습니다."
+            room = self._place_rooms_by_key.get(place_key)
+            created = room is None
+            joined = False
+            if room is None:
+                room = self._new_room(
+                    new_id("room"),
+                    str(place.get("name", "장소"))[:80],
+                    str(place.get("road_address") or place.get("address") or "")[:160],
+                    user["username"],
+                )
+                room["kind"] = "place"
+                room["place"] = copy.deepcopy(place)
+                room["participant_ids"] = [user["id"]]
+                self.state["rooms"].append(room)
+                self._register_room_locked(room)
+                self.state["messages"][room["id"]] = []
+                joined = True
+            elif user["id"] not in room.get("participant_ids", []):
+                room.setdefault("participant_ids", []).append(user["id"])
+                self._room_ids_by_user.setdefault(user["id"], set()).add(room["id"])
+                room.pop("archived_at", None)
+                room["updated_at"] = utc_now_iso()
+                joined = True
+            if created or joined:
+                if self.repository is not None:
+                    self.repository.sync_room(room)
+                self._save_locked("rooms")
+            summary = self._room_summary_for_account_locked(room, user)
+        verification = self.repository.place_verification(user["id"], place_key, time.time())
+        summary["viewer_verification"] = verification
+        return summary, created, joined, None
+
+    def enrich_place_results(self, items: list[dict]) -> list[dict]:
+        now = time.time()
+        with self.lock:
+            snapshots = {
+                str(item.get("key", "")): (
+                    room["id"], len(room.get("participant_ids", []))
+                )
+                for item in items
+                if (room := self._place_rooms_by_key.get(str(item.get("key", "")))) is not None
+            }
+        enriched = []
+        for item in items:
+            place_key = str(item.get("key", ""))
+            room_id, participant_count = snapshots.get(place_key, ("", 0))
+            enriched.append({
+                **item,
+                "room_id": room_id,
+                "participant_count": participant_count,
+                "verified_count": self.repository.active_place_verification_count(place_key, now),
+            })
+        return enriched
+
+    def place_verification_status(self, username: str, room_id: str) -> dict | None:
+        with self.lock:
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
+            acting_user = self._room_identity_locked(room, user) if room is not None and user is not None else None
+            if acting_user is None or room is None or room.get("kind") != "place":
+                return None
+            place_key = str(room.get("place", {}).get("key", ""))
+            user_id = str(acting_user["id"])
+        verification = self.repository.place_verification(user_id, place_key, time.time())
+        return {"active": bool(verification), "verification": verification}
+
+    def verify_place_location(
+        self,
+        username: str,
+        room_id: str,
+        latitude: float,
+        longitude: float,
+        accuracy_m: float,
+        captured_at: float,
+    ) -> tuple[dict | None, str | None]:
+        now = time.time()
+        if not all(math.isfinite(value) for value in (latitude, longitude, accuracy_m, captured_at)):
+            return None, "올바른 위치 정보를 전송해 주세요."
+        if accuracy_m <= 0 or accuracy_m > PLACE_LOCATION_MAX_ACCURACY_METERS:
+            return None, "GPS 정확도가 부족합니다. 실외에서 다시 시도해 주세요."
+        captured_seconds = captured_at / 1000 if captured_at > 10_000_000_000 else captured_at
+        if abs(now - captured_seconds) > PLACE_LOCATION_MAX_AGE_SECONDS:
+            return None, "위치 정보가 오래되었습니다. 다시 인증해 주세요."
+        if not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
+            return None, "올바른 위치 좌표가 아닙니다."
+
+        with self.lock:
+            user = self._users_by_username.get(username)
+            room = self._rooms_by_id.get(room_id)
+            acting_user = self._room_identity_locked(room, user) if room is not None and user is not None else None
+            if acting_user is None or room is None or room.get("kind") != "place":
+                return None, "장소 채팅방을 찾을 수 없습니다."
+            place = room.get("place", {})
+            place_latitude = float(place.get("latitude", 0))
+            place_longitude = float(place.get("longitude", 0))
+            radius_m = float(place.get("verification_radius_m", 200))
+            place_key = str(place.get("key", ""))
+            user_id = str(acting_user["id"])
+
+        earth_radius_m = 6_371_000.0
+        lat_delta = math.radians(place_latitude - latitude)
+        lon_delta = math.radians(place_longitude - longitude)
+        first_latitude = math.radians(latitude)
+        second_latitude = math.radians(place_latitude)
+        haversine = (
+            math.sin(lat_delta / 2) ** 2
+            + math.cos(first_latitude) * math.cos(second_latitude) * math.sin(lon_delta / 2) ** 2
+        )
+        distance_m = earth_radius_m * 2 * math.atan2(math.sqrt(haversine), math.sqrt(max(0.0, 1 - haversine)))
+        if distance_m > radius_m + accuracy_m:
+            return None, f"장소에서 약 {round(distance_m):,}m 떨어져 있어 현장 인증을 할 수 없습니다."
+
+        verification = {
+            "user_id": user_id,
+            "place_key": place_key,
+            "room_id": room_id,
+            "verified_at": now,
+            "expires_at": now + PLACE_VERIFICATION_TTL_SECONDS,
+            "accuracy_m": round(accuracy_m, 1),
+            "distance_m": round(distance_m, 1),
+        }
+        self.repository.save_place_verification(verification)
+        return verification, None
+
     def create_group_room(
         self,
         username: str,
@@ -4170,7 +4317,7 @@ class StateStore:
             if (
                 acting_user is None
                 or room is None
-                or room.get("kind") not in {"direct", "group"}
+                or room.get("kind") not in {"direct", "group", "place"}
             ):
                 return None, set(), "", "not_found"
 
@@ -4201,8 +4348,11 @@ class StateStore:
                 room["created_by"] = next_creator["username"] if next_creator else ""
             room["updated_at"] = utc_now_iso()
 
-            if not remaining_ids:
+            if not remaining_ids and room_kind != "place":
                 room["archived_at"] = room["updated_at"]
+                summary = None
+            elif not remaining_ids:
+                room.pop("archived_at", None)
                 summary = None
             else:
                 room.pop("archived_at", None)
@@ -4542,6 +4692,11 @@ class StateStore:
                 "timestamp": utc_now_iso(),
                 "mutation_revision": 0,
             }
+            if room.get("kind") == "place":
+                place_key = str(room.get("place", {}).get("key", ""))
+                verification = self.repository.place_verification(user["id"], place_key, time.time())
+                if verification is not None:
+                    message["place_verification_expires_at"] = float(verification["expires_at"])
             if client_message_id:
                 message["client_message_id"] = client_message_id
                 message["_client_payload_fingerprint"] = client_payload_fingerprint

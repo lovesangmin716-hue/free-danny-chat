@@ -32,6 +32,14 @@ services:
         sync: false
       - key: KAKAO_CLIENT_SECRET
         sync: false
+      - key: NAVER_MAP_CLIENT_ID
+        sync: false
+      - key: NAVER_SEARCH_CLIENT_ID
+        sync: false
+      - key: NAVER_SEARCH_CLIENT_SECRET
+        sync: false
+      - key: PLACE_TOKEN_SECRET
+        sync: false
       - key: MAX_REQUEST_THREADS
         value: "64"
       - key: MAX_BODY_READERS

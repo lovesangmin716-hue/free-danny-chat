@@ -280,6 +280,33 @@ class NormalizedSupabaseRepository:
         low, high = sorted((first_user_id, second_user_id))
         self.upsert("friendships", [{"user_low_id": low, "user_high_id": high, "created_at": created_at}], "user_low_id,user_high_id")
 
+    def save_place_verification(self, verification: dict) -> None:
+        self.upsert("place_verifications", [verification], "user_id,place_key")
+
+    def place_verification(self, user_id: str, place_key: str, now: float) -> dict | None:
+        rows = self.rows(
+            "place_verifications",
+            {
+                "select": "user_id,place_key,room_id,verified_at,expires_at,accuracy_m,distance_m",
+                "user_id": f"eq.{quote(user_id)}",
+                "place_key": f"eq.{quote(place_key)}",
+                "expires_at": f"gt.{now}",
+                "limit": "1",
+            },
+        )
+        return dict(rows[0]) if rows else None
+
+    def active_place_verification_count(self, place_key: str, now: float) -> int:
+        rows = self.rows(
+            "place_verifications",
+            {
+                "select": "user_id",
+                "place_key": f"eq.{quote(place_key)}",
+                "expires_at": f"gt.{now}",
+            },
+        )
+        return len(rows)
+
     def sync_room(self, room: dict) -> None:
         revision = self.rpc("colorless_sync_room", {"room_data": room})
         if not revision:
@@ -1057,6 +1084,7 @@ class NormalizedSqliteRepository:
                     updated_at TEXT NOT NULL,
                     revision INTEGER NOT NULL DEFAULT 1,
                     direct_key TEXT,
+                    place_key TEXT,
                     data_json TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS room_members (
@@ -1102,6 +1130,18 @@ class NormalizedSqliteRepository:
                     expires_at REAL NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions(expires_at);
+                CREATE TABLE IF NOT EXISTS place_verifications (
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    place_key TEXT NOT NULL,
+                    room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+                    verified_at REAL NOT NULL,
+                    expires_at REAL NOT NULL,
+                    accuracy_m REAL NOT NULL,
+                    distance_m REAL NOT NULL,
+                    PRIMARY KEY(user_id, place_key)
+                );
+                CREATE INDEX IF NOT EXISTS place_verifications_place_expiry_idx
+                    ON place_verifications(place_key, expires_at);
                 CREATE TABLE IF NOT EXISTS shorts_feeds (
                     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
                     next_cursor TEXT NOT NULL DEFAULT ''
@@ -1186,6 +1226,13 @@ class NormalizedSqliteRepository:
                 database.execute("ALTER TABLE sessions ADD COLUMN account_id TEXT")
             if "active_user_id" not in session_columns:
                 database.execute("ALTER TABLE sessions ADD COLUMN active_user_id TEXT")
+            room_columns = {str(row[1]) for row in database.execute("PRAGMA table_info(rooms)")}
+            if "place_key" not in room_columns:
+                database.execute("ALTER TABLE rooms ADD COLUMN place_key TEXT")
+            database.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS rooms_place_key_unique_idx "
+                "ON rooms(place_key) WHERE place_key IS NOT NULL"
+            )
             account_migration = database.execute(
                 "SELECT value FROM schema_meta WHERE key='account_identity_schema_version'"
             ).fetchone()
@@ -1479,23 +1526,62 @@ class NormalizedSqliteRepository:
                 (user_low_id, user_high_id, created_at),
             )
 
+    def save_place_verification(self, verification: dict) -> None:
+        with self.connection() as database:
+            database.execute(
+                "INSERT INTO place_verifications(user_id, place_key, room_id, verified_at, expires_at, accuracy_m, distance_m) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(user_id, place_key) DO UPDATE SET room_id=excluded.room_id, "
+                "verified_at=excluded.verified_at, expires_at=excluded.expires_at, "
+                "accuracy_m=excluded.accuracy_m, distance_m=excluded.distance_m",
+                (
+                    verification["user_id"], verification["place_key"], verification["room_id"],
+                    float(verification["verified_at"]), float(verification["expires_at"]),
+                    float(verification["accuracy_m"]), float(verification["distance_m"]),
+                ),
+            )
+
+    def place_verification(self, user_id: str, place_key: str, now: float) -> dict | None:
+        with self.connection() as database:
+            row = database.execute(
+                "SELECT user_id, place_key, room_id, verified_at, expires_at, accuracy_m, distance_m "
+                "FROM place_verifications WHERE user_id=? AND place_key=? AND expires_at>?",
+                (user_id, place_key, now),
+            ).fetchone()
+        if row is None:
+            return None
+        return dict(zip(
+            ("user_id", "place_key", "room_id", "verified_at", "expires_at", "accuracy_m", "distance_m"),
+            row,
+        ))
+
+    def active_place_verification_count(self, place_key: str, now: float) -> int:
+        with self.connection() as database:
+            row = database.execute(
+                "SELECT COUNT(*) FROM place_verifications WHERE place_key=? AND expires_at>?",
+                (place_key, now),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
     def sync_room(self, room: dict) -> None:
         with self.connection() as database:
             database.execute("BEGIN IMMEDIATE")
             expected_revision = int(room.get("_revision", 0))
             row = database.execute("SELECT revision FROM rooms WHERE id=?", (room["id"],)).fetchone()
             direct_key = self.direct_room_key(room)
+            place_key = str(room.get("place", {}).get("key", "")) if room.get("kind") == "place" else ""
+            place_key = place_key or None
             if row is None:
                 if expected_revision != 0:
                     raise ConcurrentUpdateError("room was removed during update")
                 new_revision = 1
                 persisted_room = {**room, "_revision": new_revision}
                 database.execute(
-                    "INSERT INTO rooms(id, kind, created_by, updated_at, revision, direct_key, data_json) "
-                    "VALUES(?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO rooms(id, kind, created_by, updated_at, revision, direct_key, place_key, data_json) "
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         room["id"], room.get("kind", "group"), room.get("created_by", ""),
-                        room.get("updated_at", ""), new_revision, direct_key, self.encode(persisted_room),
+                        room.get("updated_at", ""), new_revision, direct_key, place_key, self.encode(persisted_room),
                     ),
                 )
             else:
@@ -1504,11 +1590,11 @@ class NormalizedSqliteRepository:
                 new_revision = expected_revision + 1
                 persisted_room = {**room, "_revision": new_revision}
                 cursor = database.execute(
-                    "UPDATE rooms SET kind=?, created_by=?, updated_at=?, revision=?, direct_key=?, data_json=? "
+                    "UPDATE rooms SET kind=?, created_by=?, updated_at=?, revision=?, direct_key=?, place_key=?, data_json=? "
                     "WHERE id=? AND revision=?",
                     (
                         room.get("kind", "group"), room.get("created_by", ""), room.get("updated_at", ""),
-                        new_revision, direct_key, self.encode(persisted_room), room["id"], expected_revision,
+                        new_revision, direct_key, place_key, self.encode(persisted_room), room["id"], expected_revision,
                     ),
                 )
                 if cursor.rowcount != 1:
@@ -2608,7 +2694,7 @@ class NormalizedSqliteRepository:
                 for table in (
                     "users", "friendships", "rooms", "room_members", "messages", "message_reactions",
                     "read_positions", "sessions", "shorts_catalog", "shorts_collection_state",
-                    "realtime_events", "presence_leases",
+                    "realtime_events", "presence_leases", "place_verifications",
                 )
             }
             counts["foreign_key_errors"] = len(database.execute("PRAGMA foreign_key_check").fetchall())
@@ -2630,13 +2716,15 @@ class NormalizedSqliteRepository:
         return ":".join(participant_ids)
 
     def _upsert_room(self, database: sqlite3.Connection, room: dict) -> None:
+        place_key = str(room.get("place", {}).get("key", "")) if room.get("kind") == "place" else ""
         database.execute(
-            "INSERT INTO rooms(id, kind, created_by, updated_at, direct_key, data_json) VALUES(?, ?, ?, ?, ?, ?) "
+            "INSERT INTO rooms(id, kind, created_by, updated_at, direct_key, place_key, data_json) VALUES(?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, created_by=excluded.created_by, "
-            "updated_at=excluded.updated_at, direct_key=excluded.direct_key, data_json=excluded.data_json",
+            "updated_at=excluded.updated_at, direct_key=excluded.direct_key, place_key=excluded.place_key, "
+            "data_json=excluded.data_json",
             (
                 room["id"], room.get("kind", "group"), room.get("created_by", ""),
-                room.get("updated_at", ""), self.direct_room_key(room), self.encode(room),
+                room.get("updated_at", ""), self.direct_room_key(room), place_key or None, self.encode(room),
             ),
         )
 

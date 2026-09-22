@@ -43,10 +43,63 @@ class ApplicationServices:
         store: StateStore,
         presence: PresenceStore,
         upload_grants=None,
+        place_service=None,
     ) -> None:
         self.store = store
         self.presence = presence
         self.upload_grants = upload_grants
+        self.place_service = place_service
+
+    def open_place_room(self, user: dict, payload: dict) -> CommandOutcome:
+        if self.place_service is None:
+            raise CommandFailure("장소 서비스를 사용할 수 없습니다.", HTTPStatus.SERVICE_UNAVAILABLE)
+        token = str(payload.get("placeToken", "")).strip()
+        try:
+            place = self.place_service.decode_token(token)
+        except ValueError as error:
+            raise CommandFailure(str(error)) from error
+        room, created, joined, error = self.store.open_place_room(user["username"], place)
+        if error or room is None:
+            raise CommandFailure(error or "장소 채팅방을 열지 못했습니다.")
+        events = []
+        if created or joined:
+            events = [
+                ({"type": "room_created", "room": summary}, {recipient})
+                for recipient, summary in self.store.room_event_summaries(room["id"]).items()
+            ]
+        return CommandOutcome(
+            {"room": room, "created": created, "joined": joined},
+            HTTPStatus.CREATED if created else HTTPStatus.OK,
+            events,
+        )
+
+    def verify_place(self, user: dict, payload: dict) -> CommandOutcome:
+        room_id = str(payload.get("roomId", "")).strip()
+        if not ROOM_ID_PATTERN.fullmatch(room_id):
+            raise CommandFailure("올바른 장소 채팅방을 선택해 주세요.")
+        try:
+            latitude = float(payload.get("latitude"))
+            longitude = float(payload.get("longitude"))
+            accuracy_m = float(payload.get("accuracy"))
+            captured_at = float(payload.get("capturedAt"))
+        except (TypeError, ValueError) as error:
+            raise CommandFailure("올바른 위치 정보를 전송해 주세요.") from error
+        verification, error = self.store.verify_place_location(
+            user["username"], room_id, latitude, longitude, accuracy_m, captured_at
+        )
+        if error or verification is None:
+            status = HTTPStatus.NOT_FOUND if "찾을 수 없습니다" in (error or "") else HTTPStatus.BAD_REQUEST
+            raise CommandFailure(error or "현장 인증에 실패했습니다.", status)
+        event = {
+            "type": "place_verification_updated",
+            "roomId": room_id,
+            "username": user["username"],
+            "expiresAt": verification["expires_at"],
+        }
+        return CommandOutcome(
+            {"verified": True, "verification": verification},
+            events=[(event, self.store.room_event_recipients(room_id))],
+        )
 
     def add_friend(self, user: dict, payload: dict) -> CommandOutcome:
         friend_code = str(payload.get("friendCode", "")).strip()

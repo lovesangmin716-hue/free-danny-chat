@@ -1,6 +1,6 @@
 # Colorless
 
-여러 활동 ID로 친구·그룹·야구 티켓 채팅을 이용할 수 있는 모바일형 메신저 MVP입니다. 별도 프레임워크 없이 Python 표준 라이브러리 서버와 단일 HTML 클라이언트로 동작합니다.
+여러 활동 ID로 친구·그룹·장소·야구 티켓 채팅을 이용할 수 있는 모바일형 메신저 MVP입니다. 별도 프레임워크 없이 Python 표준 라이브러리 서버와 단일 HTML 클라이언트로 동작합니다.
 
 ## 주요 기능
 
@@ -9,6 +9,7 @@
 - 친구 ID 검색과 친구 추가
 - 1:1·그룹 채팅, 답장, 작성자 메시지 편집·삭제, 표준 이모티콘 반응, 숫자형 안 읽음 상태, 접속 상태와 실시간 이벤트
 - 키보드로 조작 가능한 메시지 작업 메뉴와 실패 메시지의 멱등 재전송
+- 네이버 지도·지역 검색 기반 장소별 오픈채팅과 3시간 GPS 현장 인증 배지
 - 이미지, PDF, 텍스트·CSV·Markdown·RTF·ZIP 및 Office 문서 첨부와 채팅 입력창 붙여넣기(이미지 원본은 최대 50MB까지 선택 가능하며 브라우저에서 WebP로 줄인 뒤 8MB 이하만 전송, 나머지 파일은 최대 8MB)
 - 픽셀 아바타 편집과 프로필 사진 업로드(픽셀 원본은 별도 3KB RGB 리소스로 저장·편집기를 열 때만 조회하고, 목록은 immutable 버전 썸네일만 지연 로딩)
 - 계정당 최대 3개 활동 ID와 전체 ID 채팅 모아보기
@@ -96,7 +97,7 @@ cp .env.example .env
 
 `SUPABASE_URL`과 `SUPABASE_SERVICE_ROLE_KEY`를 모두 설정하면 Supabase와 private `chat-uploads` 버킷을 사용합니다. 브라우저는 객체 하나에 한정된 signed upload URL로 저장소에 직접 전송하고, 서버는 크기·MIME·magic bytes를 확인한 뒤에만 메시지 첨부를 허용합니다. 다운로드는 방 접근 권한을 확인한 뒤 기본 60초 signed URL로 redirect하므로 정상 파일 바이트는 앱 서버를 지나지 않습니다. Supabase signed upload token 자체의 유효기간은 플랫폼이 정한 2시간이며, 앱의 pending grant는 기본 10분 뒤 만료되어 첨부에 사용할 수 없습니다. 최신 [`src/colorless/database/supabase-schema.sql`](src/colorless/database/supabase-schema.sql)은 사용자·관계·방·멤버·메시지·답장·반응·읽음 위치·세션의 정규화 테이블과 필수 제약/인덱스·RPC를 생성하며, 전환 검증과 rollback 동안 기존 `app_state`도 보존합니다. 답장·편집·반응 코드를 배포하기 전에 이 파일을 운영 Supabase에 반드시 먼저 적용해야 합니다.
 
-서버는 문서, JSON, 정적 asset, 인증된 업로드를 포함한 모든 HTTP 응답에 CSP, MIME sniffing 차단, framing 차단, Referrer Policy, Permissions Policy를 공통 적용합니다. CSP는 자체 리소스와 Google Identity에 필요한 origin만 허용합니다. HTTPS로 전달된 운영 요청에는 HSTS도 추가되므로 Render 앞단에서 `X-Forwarded-Proto: https`가 유지되어야 합니다.
+서버는 문서, JSON, 정적 asset, 인증된 업로드를 포함한 모든 HTTP 응답에 CSP, MIME sniffing 차단, framing 차단, Referrer Policy, Permissions Policy를 공통 적용합니다. CSP는 자체 리소스와 Google Identity·네이버 지도에 필요한 origin만 허용합니다. HTTPS로 전달된 운영 요청에는 HSTS도 추가되므로 Render 앞단에서 `X-Forwarded-Proto: https`가 유지되어야 합니다.
 
 두 변수가 없으면 상태는 `.colorless-data/chat_state.json.sqlite3`, 첨부 파일은 `.colorless-data/uploads/`에 저장됩니다. 다만 새 데이터 디렉터리가 없고 기존 `outputs/chat-app`에 로컬 DB나 업로드가 있으면 데이터 유실을 피하기 위해 그 위치를 자동으로 이어서 사용합니다. 이 fallback은 요청을 64KB씩 `.part` 파일로 기록하고 magic bytes와 정확한 크기를 검증한 뒤 atomic rename하며, 다운로드의 단일 `Range` 요청과 backpressure를 지원합니다. 런타임 상태와 업로드 파일은 `.gitignore`에 포함되어 있습니다.
 
@@ -117,6 +118,25 @@ Supabase 운영 전환은 쓰기를 잠근 유지보수 창에서 진행합니�
 4. SQL Editor에서 `select public.colorless_storage_counts();`와 `select * from public.app_migrations where key = 'normalized_state';`를 확인한 뒤 쓰기를 다시 엽니다. 서버 복원은 고정 정렬과 `limit`/`offset` 페이지를 사용하므로 PostgREST의 1,000행 응답 상한을 넘는 계정과 방도 누락하지 않습니다.
 
 검증 전에 실패하면 마커를 기록하지 않으므로 원인을 수정한 뒤 가져오기를 다시 실행할 수 있습니다. 이전 서버로 rollback할 때 새 서버가 아직 쓰기를 받지 않았다면 보존된 `app_state`를 그대로 사용합니다. 쓰기를 다시 연 뒤 rollback해야 한다면 구형 `app_state`는 새 변경을 포함하지 않으므로 서버를 내리고 전환 직전 Supabase 백업을 복원해야 합니다.
+
+### 장소 지도와 현장 인증
+
+키를 설정하지 않아도 롯데월드·석촌호수 등 개발용 장소 데이터로 전체 채팅 흐름을 확인할 수 있습니다. 실제 지도와 장소 검색을 사용하려면 다음 값을 설정합니다.
+
+| 변수 | 설명 |
+| --- | --- |
+| `NAVER_MAP_CLIENT_ID` | Naver Cloud Platform Maps의 JavaScript 지도 클라이언트 ID |
+| `NAVER_SEARCH_CLIENT_ID` | 네이버 검색 Open API 애플리케이션 클라이언트 ID |
+| `NAVER_SEARCH_CLIENT_SECRET` | 네이버 검색 Open API 클라이언트 보안 비밀. 브라우저로 전달되지 않음 |
+| `PLACE_TOKEN_SECRET` | 검색 결과를 장소 채팅방으로 안전하게 전달하는 HMAC 비밀값. 운영의 모든 인스턴스에서 같은 긴 난수 사용 |
+
+지도 애플리케이션의 Web service URL에는 로컬 개발 주소 `http://localhost:8765`와 실제 운영 origin을 각각 등록합니다. 장소 검색 결과를 누르면 장소 키당 하나의 공개 채팅방을 생성하거나 기존 방에 참여합니다. 현장 인증은 브라우저가 전달한 GPS 좌표를 서버가 장소 반경, 100m 이하 정확도, 2분 이하 위치 측정 시각으로 재검증한 뒤 발급하며 3시간 후 만료됩니다. 원본 사용자 좌표는 저장하지 않고 인증 시각·만료 시각·정확도·장소와의 거리만 저장합니다.
+
+운영용 비밀값은 예를 들어 다음과 같이 만들 수 있습니다.
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
 
 ### Google 로그인
 
@@ -186,7 +206,7 @@ SOCIAL_DEMO_LOGIN_ENABLED=false
 1. Supabase 백업과 `app_state` 내보내기를 만든 뒤 최신 [`src/colorless/database/supabase-schema.sql`](src/colorless/database/supabase-schema.sql)을 먼저 적용합니다. 이 단계가 기존 사용자에서 계정과 첫 번째 아이덴티티를 분리하고 세션을 보강하며, 메시지 답장·편집·반응 저장소와 RPC를 준비합니다. 스키마 적용이 끝나기 전에는 새 애플리케이션을 배포하지 마세요.
 2. `python tests/deploy_preflight.py`로 소스·Blueprint·스키마 필수 항목을 확인한 뒤 이 저장소를 GitHub에 푸시합니다.
 3. Render에서 새 Blueprint를 만들고 저장소를 연결합니다.
-4. Blueprint 생성 화면에서 `PUBLIC_BASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`와 사용할 Google/Kakao 로그인 자격 증명을 등록합니다.
+4. Blueprint 생성 화면에서 `PUBLIC_BASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, 네이버 지도·검색 키, `PLACE_TOKEN_SECRET`과 사용할 Google/Kakao 로그인 자격 증명을 등록합니다.
 5. 같은 운영 환경 변수로 `python tests/deploy_preflight.py --environment --remote`를 실행하고, 배포된 도메인을 Google과 Kakao의 승인된 원본 및 리디렉션 URI에 추가합니다.
 6. 배포 후 `/live`와 `/ready`가 모두 200인지 확인하고 아래 SQL 결과가 각각 0행/0건인지 확인합니다.
 
