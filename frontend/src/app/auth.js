@@ -54,6 +54,9 @@ function consumeAuthQuery() {
     kakao_access_denied: "카카오 로그인 동의가 취소됐어요.",
     oauth_state_invalid: "로그인 보안 검증에 실패했어요. 다시 시도해 주세요.",
     google_login_failed: "구글 로그인 처리 중 문제가 생겼어요.",
+    google_token_exchange_failed: "구글 인증 코드를 확인하지 못했어요. 관리자에게 클라이언트 시크릿 설정을 확인해 달라고 요청해 주세요.",
+    google_profile_failed: "구글 계정 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
+    google_session_failed: "구글 인증은 완료됐지만 로그인 정보를 저장하지 못했어요. 잠시 후 다시 시도해 주세요.",
     kakao_login_failed: "카카오 로그인 처리 중 문제가 생겼어요.",
   };
   setAuthStatus(messages[authError] || "SNS 로그인 처리 중 문제가 생겼어요.", "error");

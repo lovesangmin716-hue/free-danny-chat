@@ -46,6 +46,17 @@ class AuthRoutesMixin:
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def record_oauth_failure(self, provider: str, stage: str, error: Exception) -> None:
+        self.context.write_structured_log({
+            "timestamp": self.context.utc_now_iso(),
+            "level": "error",
+            "event": "oauth_login_failed",
+            "request_id": getattr(self, "_request_id", ""),
+            "provider": provider,
+            "stage": stage,
+            "error_type": type(error).__name__,
+        })
+
     def finish_google_login(self, query: dict[str, list[str]]) -> None:
         state = query.get("state", [""])[0].strip()
         state_is_valid = self.consume_bound_oauth_state(state)
@@ -60,7 +71,16 @@ class AuthRoutesMixin:
 
         try:
             token_payload = self.request_google_token(code)
-            profile_payload = self.request_google_user_profile(token_payload["access_token"])
+            access_token = str(token_payload.get("access_token", "")).strip()
+            if not access_token:
+                raise ValueError("Google token response did not include an access token.")
+        except Exception as error:
+            self.record_oauth_failure("google", "token_exchange", error)
+            self.redirect_after_oauth("/?auth_error=google_token_exchange_failed")
+            return
+
+        try:
+            profile_payload = self.request_google_user_profile(access_token)
             google_sub = str(profile_payload.get("sub", "")).strip()
             if not google_sub:
                 raise ValueError("구글 사용자 정보를 읽지 못했습니다.")
@@ -70,6 +90,12 @@ class AuthRoutesMixin:
                 or str(profile_payload.get("email", "")).split("@")[0].strip()
                 or f"google_{google_sub[-6:]}"
             )
+        except Exception as error:
+            self.record_oauth_failure("google", "profile", error)
+            self.redirect_after_oauth("/?auth_error=google_profile_failed")
+            return
+
+        try:
             user = self.context.STORE.create_or_update_social_user(
                 "google",
                 google_sub,
@@ -77,8 +103,9 @@ class AuthRoutesMixin:
                 status_message="구글로 접속 중",
             )
             token = self.context.SESSIONS.create(user["username"])
-        except Exception:
-            self.redirect_after_oauth("/?auth_error=google_login_failed")
+        except Exception as error:
+            self.record_oauth_failure("google", "session", error)
+            self.redirect_after_oauth("/?auth_error=google_session_failed")
             return
 
         self.redirect_after_oauth("/", token)

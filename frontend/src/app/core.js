@@ -43,7 +43,6 @@ const initialState = {
   activeList: "places",
   selectedShareRoomIds: [],
   actionBarByTab: {
-    places: { mode: "idle", query: "", filter: "all", selection: [] },
     chats: { mode: "idle", query: "", filter: "all", selection: [] },
     friends: { mode: "idle", query: "", filter: "all", selection: [] },
     my: { mode: "idle", query: "", filter: "all", selection: [] },
@@ -128,12 +127,6 @@ const initialState = {
   roomMemberCursors: new Map(),
   roomMembersLoading: new Set(),
   roomReadTimers: new Map(),
-  placeConfig: null,
-  placeResults: [],
-  placeSearchBusy: false,
-  placeMap: null,
-  placeMarkers: [],
-  placeCurrentLocation: null,
   lastSeenRoomMessageIds: {},
   profilePixels: "",
   profilePixelsDirty: false,
@@ -291,20 +284,12 @@ const headerSearch = document.getElementById("header-search");
 const headerSearchInput = document.getElementById("header-search-input");
 const openListSearchButton = document.getElementById("open-list-search-button");
 const closeListSearchButton = document.getElementById("close-list-search-button");
-const placesTab = document.getElementById("places-tab");
 const chatsTab = document.getElementById("chats-tab");
 const friendsTab = document.getElementById("friends-tab");
 const myTab = document.getElementById("my-tab");
 const chatList = document.getElementById("chat-list");
 const friendList = document.getElementById("friend-list");
 const myView = document.getElementById("my-view");
-const placeView = document.getElementById("place-view");
-const placeSearchForm = document.getElementById("place-search-form");
-const placeSearchInput = document.getElementById("place-search-input");
-const placeMap = document.getElementById("place-map");
-const placeResults = document.getElementById("place-results");
-const placeStatus = document.getElementById("place-status");
-const placeLocationButton = document.getElementById("place-location-button");
 const myProfileAvatar = document.getElementById("my-profile-avatar");
 const myDisplayName = document.getElementById("my-display-name");
 const myFriendCode = document.getElementById("my-friend-code");
@@ -313,7 +298,6 @@ const closeChatRoomButton = document.getElementById("close-chat-room");
 const chatRoomAvatar = document.getElementById("chat-room-avatar");
 const chatRoomName = document.getElementById("chat-room-name");
 const chatRoomPresence = document.getElementById("chat-room-presence");
-const placeRoomVerify = document.getElementById("place-room-verify");
 const openRoomSettingsButton = document.getElementById("open-room-settings-button");
 const roomSettingsSheet = document.getElementById("room-settings-sheet");
 const closeRoomSettingsButton = document.getElementById("close-room-settings-button");
@@ -950,7 +934,6 @@ export {
   chatRoomAvatar,
   chatRoomName,
   chatRoomPresence,
-  placeRoomVerify,
   chatsTab,
   chooseStatusEmoji,
   clearChatDraft,
@@ -999,14 +982,6 @@ export {
   myProfileAvatar,
   myTab,
   myView,
-  placeLocationButton,
-  placeMap,
-  placeResults,
-  placeSearchForm,
-  placeSearchInput,
-  placeStatus,
-  placesTab,
-  placeView,
   newChatGroupName,
   newChatGroupNameField,
   newChatMemberList,

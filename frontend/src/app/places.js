@@ -1,23 +1,50 @@
 "use strict";
 
 import {
-  placeLocationButton,
-  placeMap,
-  placeResults,
-  placeRoomVerify,
-  placeSearchForm,
-  placeSearchInput,
-  placeStatus,
   requestAction,
   setAppStatus,
   state,
 } from "./core.js";
+
+const placesTab = document.getElementById("places-tab");
+const placeView = document.getElementById("place-view");
+const placeSearchForm = document.getElementById("place-search-form");
+const placeSearchInput = document.getElementById("place-search-input");
+const placeMap = document.getElementById("place-map");
+const placeResults = document.getElementById("place-results");
+const placeStatus = document.getElementById("place-status");
+const placeLocationButton = document.getElementById("place-location-button");
+const placeRoomVerify = document.getElementById("place-room-verify");
+
+Object.assign(state, {
+  placeConfig: null,
+  placeResults: [],
+  placeSearchBusy: false,
+  placeMap: null,
+  placeMarkers: [],
+  placeCurrentLocation: null,
+});
 
 let initializationPromise = null;
 
 function setPlaceStatus(copy, isError = false) {
   placeStatus.textContent = copy || "";
   placeStatus.classList.toggle("error", Boolean(isError));
+}
+
+function resetPlaces() {
+  for (const marker of state.placeMarkers) marker.setMap(null);
+  state.placeResults = [];
+  state.placeSearchBusy = false;
+  state.placeMarkers = [];
+  state.placeCurrentLocation = null;
+  state.placeMap = null;
+  initializationPromise = null;
+  placeSearchInput.value = "";
+  placeResults.replaceChildren();
+  placeMap.replaceChildren();
+  placeMap.classList.remove("map-ready");
+  setPlaceStatus("");
 }
 
 function geolocationPosition() {
@@ -318,7 +345,10 @@ placeRoomVerify.addEventListener("click", () => void verifyCurrentPlaceRoom());
 
 export {
   initializePlaces,
+  placesTab,
+  placeView,
   renderPlaces,
+  resetPlaces,
   searchPlaces,
   syncPlaceVerificationButton,
   verifyCurrentPlaceRoom,

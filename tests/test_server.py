@@ -1129,6 +1129,7 @@ class AuthenticationHttpIntegrationTestCase(unittest.TestCase):
                     return_value={"sub": f"google-session-failure-{time.time_ns()}", "name": "Google Mock"},
                 ),
                 mock.patch.object(server.SESSIONS, "create", side_effect=TimeoutError("database timeout")),
+                mock.patch.object(server, "write_structured_log") as write_log,
             ):
                 connection.request("GET", "/auth/google/start")
                 start_response = connection.getresponse()
@@ -1149,7 +1150,15 @@ class AuthenticationHttpIntegrationTestCase(unittest.TestCase):
                 callback_response = connection.getresponse()
                 callback_response.read()
                 self.assertEqual(callback_response.status, 302)
-                self.assertIn("auth_error=google_login_failed", callback_response.getheader("Location", ""))
+                self.assertIn("auth_error=google_session_failed", callback_response.getheader("Location", ""))
+                oauth_logs = [
+                    call.args[0]
+                    for call in write_log.call_args_list
+                    if call.args[0].get("event") == "oauth_login_failed"
+                ]
+                self.assertEqual(oauth_logs[0]["stage"], "session")
+                self.assertEqual(oauth_logs[0]["error_type"], "TimeoutError")
+                self.assertNotIn("database timeout", str(oauth_logs[0]))
         finally:
             connection.close()
             http_server.shutdown()

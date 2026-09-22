@@ -14,8 +14,6 @@ import { createClientMessageId, postMessageWithRetry } from "./platform/message-
 import { isPersistedOutboxReplacement } from "./platform/outbox.js";
 import { readBoundaryIndex } from "./platform/room-snapshots.js";
 import { canMarkSelectedRoomRead, closeMessageReadMenu, completeReplyContext, composerReplySnapshot, composerReplyTarget, decorateMessageRow, registerMessageInteractionHooks, renderComposerContext, resetMessageInteractionState, submitComposerEdit, syncComposerHeight, updateReplyReferences } from "./message-interactions.js";
-
-// Message state, incremental rendering, pagination, retries, and sending.
 const CHAT_HISTORY_PAGE_SIZE = typeof CHAT_MESSAGE_PAGE_SIZE === "number" ? CHAT_MESSAGE_PAGE_SIZE : 30;
 const CHAT_MEMORY_LIMIT = typeof CHAT_MESSAGE_MEMORY_LIMIT === "number" ? CHAT_MESSAGE_MEMORY_LIMIT : 300;
 
@@ -229,7 +227,7 @@ if (attachment.kind === "voice" && attachment.type?.startsWith("audio/")) {
     meta.appendChild(read);
   }
   if (!mine) {
-    if (Number(message.place_verification_expires_at || 0) * 1000 > Date.now()) {
+    if (+message.place_verification_expires_at * 1000 > Date.now()) {
       const verified = document.createElement("span");
       verified.className = "message-verification-badge";
       verified.textContent = "현장 인증";

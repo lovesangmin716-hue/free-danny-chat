@@ -53,6 +53,14 @@ def validate_source() -> list[str]:
         failures,
     )
     require("create table if not exists public.message_reactions" in schema, "Message reactions table is missing.", failures)
+    require("create table if not exists public.place_verifications" in schema, "Place verification table is missing.", failures)
+    require("rooms_place_key_unique_idx" in schema, "Place rooms need a unique place-key index.", failures)
+    require(
+        "alter table public.place_verifications enable row level security" in schema
+        and "public.sessions, public.place_verifications" in schema,
+        "Place verification permissions are incomplete.",
+        failures,
+    )
     require("colorless_edit_message" in schema, "Message edit RPC is missing.", failures)
     require("colorless_toggle_message_reaction" in schema, "Message reaction RPC is missing.", failures)
     require("colorless_delete_message" in schema, "Message delete RPC is missing.", failures)
@@ -149,6 +157,9 @@ def validate_remote_supabase() -> list[str]:
         identities = supabase_request("/rest/v1/users?select=id,account_id&limit=1")
         sessions = supabase_request("/rest/v1/sessions?select=token_hash,account_id,active_user_id&limit=1")
         message_reactions = supabase_request("/rest/v1/message_reactions?select=message_id,user_id,emoji&limit=1")
+        place_verifications = supabase_request(
+            "/rest/v1/place_verifications?select=user_id,place_key,room_id,expires_at&limit=1"
+        )
         insert_probe = supabase_request(
             "/rest/v1/rpc/colorless_insert_message_v2",
             method="POST",
@@ -224,6 +235,7 @@ def validate_remote_supabase() -> list[str]:
         require(isinstance(identities, list), "Supabase account identities are not queryable.", failures)
         require(isinstance(sessions, list), "Supabase account sessions are not queryable.", failures)
         require(isinstance(message_reactions, list), "Supabase message reactions are not queryable.", failures)
+        require(isinstance(place_verifications, list), "Supabase place verifications are not queryable.", failures)
         require(
             isinstance(insert_probe, dict) and insert_probe.get("error") == "not_found",
             "Supabase message insert RPC is unavailable or returned an invalid probe response.",

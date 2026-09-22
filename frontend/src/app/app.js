@@ -1,6 +1,6 @@
 "use strict";
 
-import { CHAT_MESSAGE_PAGE_SIZE, appScreen, appTitle, chatList, chatsTab, createAvatar, createNewChatButton, directorySheet, friendCodeInput, friendList, friendsTab, getDisplayName, myDisplayName, myFriendCode, myProfileAvatar, myTab, myView, newChatGroupName, newChatGroupNameField, newChatMemberList, newChatSearch, newChatSheet, openDirectoryButton, openLoginButton, openNewChatButton, placeView, placesTab, realtimeEvents, registerCoreHooks, renderStatusEmojiControl, requestAction, setAppStatus, shortShareBar, showApp, state, syncAppStatusForActiveTab } from "./core.js";
+import { CHAT_MESSAGE_PAGE_SIZE, appScreen, appTitle, chatList, chatsTab, createAvatar, createNewChatButton, directorySheet, friendCodeInput, friendList, friendsTab, getDisplayName, myDisplayName, myFriendCode, myProfileAvatar, myTab, myView, newChatGroupName, newChatGroupNameField, newChatMemberList, newChatSearch, newChatSheet, openDirectoryButton, openLoginButton, openNewChatButton, realtimeEvents, registerCoreHooks, renderStatusEmojiControl, requestAction, setAppStatus, shortShareBar, showApp, state, syncAppStatusForActiveTab } from "./core.js";
 import { connectEvents, rebuildPresenceIndexes, registerRealtimeHandlers, renderChats, renderDirectory, renderFriends, upsertMessengerRoom } from "./messenger.js";
 import { openChatRoom, rebuildMessageIndexes, renderChatRoom } from "./chat.js";
 import { captureChatVirtualAnchor, chatVirtualScrollTopForAnchor } from "./chat-virtual.js";
@@ -8,7 +8,7 @@ import { renderWorkModeControl, syncWorkModeVisibility } from "./work-mode.js";
 import { activeActionBarState, renderContextActionBar, renderFriendActionBar, renderHeaderSearch } from "./action-bar.js";
 import { mergeAuthoritativeRoomSnapshot, mergeRealtimeRoomSnapshot } from "./platform/room-snapshots.js";
 import { openInitialIdentityRoom, renderIdentityControls } from "./identity-ui.js";
-import { initializePlaces, renderPlaces } from "./places.js";
+import { initializePlaces, placesTab, placeView, renderPlaces, resetPlaces } from "./places.js";
 
 const accountIdentifier = document.getElementById("account-identifier");
 const identitySwitcher = document.getElementById("identity-switcher");
@@ -58,6 +58,7 @@ function renderMessenger() {
 }
 
 function resetApplicationUi() {
+  resetPlaces();
   document.getElementById("threads-panel")?.close();
   state.identityUnread = null;
   document.getElementById("identity-management")?.remove();
