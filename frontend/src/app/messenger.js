@@ -1,6 +1,6 @@
 "use strict";
 
-import { appStore, chatList, chatRoom, chatRoomAvatar, chatRoomPresence, clearChatDraft, createAvatar, formatTime, friendList, getDisplayName, realtimeEvents, requestAction, roomSettingsSheet, setAppStatus, shortShareList, state, userDirectory } from "./core.js";
+import { appStore, chatList, chatRoom, chatRoomAvatar, chatRoomPresence, clearChatDraft, createAvatar, formatTime, friendList, getDisplayName, realtimeEvents, requestAction, roomSettingsSheet, setAppStatus, state, userDirectory } from "./core.js";
 import { renderRoomSettings } from "./room-settings.js";
 import { addMessageReader, appendChatMessageNode, appendChatMessageState, applyMessageReaderToCurrentMessages, applyUpdatedChatMessage, closeChatRoom, loadChatMessages, openChatRoom, openChatRoomAtMessage, removeChatMessageState, renderAllChatMessages, renderChatRoom, scheduleRoomRead, updatePresence } from "./chat.js";
 import { dismissWorkModeMessage, showWorkModeMessage, workModeMessage } from "./work-mode.js";
@@ -351,9 +351,6 @@ function patchRoomPresence(username) {
     if (!room) continue;
     const row = state.roomNodes.get(room.id);
     if (row?.isConnected) replacePresenceAvatar(row, createRoomAvatar(room));
-    shortShareList.querySelectorAll(".short-share-person").forEach((person) => {
-      if (person.dataset.roomId === room.id) replacePresenceAvatar(person, createRoomAvatar(room));
-    });
     if (room.id === state.selectedRoomId && !chatRoom.classList.contains("hidden")) {
       const presence = room.peer?.presence;
       const isInThisRoom = Boolean(presence?.online && presence.active_room_ids?.includes(room.id));

@@ -242,46 +242,6 @@ alter table public.sessions alter column account_id set not null;
 alter table public.sessions alter column active_user_id set not null;
 create index if not exists sessions_expires_idx on public.sessions(expires_at);
 
-create table if not exists public.shorts_feeds (
-  user_id text primary key references public.users(id) on delete cascade,
-  next_cursor text not null default ''
-);
-
-create table if not exists public.shorts_seen (
-  user_id text not null references public.users(id) on delete cascade,
-  video_id text not null,
-  seen_order bigint not null,
-  primary key (user_id, video_id)
-);
-create index if not exists shorts_seen_user_order_idx on public.shorts_seen(user_id, seen_order desc);
-
-create table if not exists public.shorts_catalog (
-  video_id text primary key,
-  source text not null,
-  rank_score double precision not null default 0,
-  discovered_at double precision not null,
-  last_seen_at double precision not null,
-  expires_at double precision not null,
-  data jsonb not null
-);
-create index if not exists shorts_catalog_feed_idx
-  on public.shorts_catalog(expires_at desc, rank_score desc, last_seen_at desc, video_id);
-create index if not exists shorts_catalog_expiry_idx on public.shorts_catalog(expires_at);
-
-create table if not exists public.shorts_collection_state (
-  source text primary key,
-  owner_instance_id text not null default '',
-  lease_until double precision not null default 0,
-  next_job_index integer not null default 0,
-  failure_count integer not null default 0,
-  circuit_open_until double precision not null default 0,
-  last_success_at double precision not null default 0,
-  last_attempt_at double precision not null default 0,
-  last_error text not null default '',
-  quota_window_start double precision not null default 0,
-  quota_used integer not null default 0
-);
-
 create table if not exists public.realtime_events (
   sequence bigint generated always as identity primary key,
   event_id text not null unique,
@@ -319,10 +279,6 @@ alter table public.messages enable row level security;
 alter table public.message_reactions enable row level security;
 alter table public.read_positions enable row level security;
 alter table public.sessions enable row level security;
-alter table public.shorts_feeds enable row level security;
-alter table public.shorts_seen enable row level security;
-alter table public.shorts_catalog enable row level security;
-alter table public.shorts_collection_state enable row level security;
 alter table public.realtime_events enable row level security;
 alter table public.presence_leases enable row level security;
 
@@ -1012,68 +968,6 @@ $$;
 revoke all on function public.colorless_disable_identity(text,text,text) from public, anon, authenticated;
 grant execute on function public.colorless_disable_identity(text,text,text) to service_role;
 
-create or replace function public.colorless_save_shorts_feed(feed_user_id text, seen_video_ids text[], cursor_value text)
-returns void language plpgsql security definer set search_path = public as $$
-begin
-  insert into shorts_feeds(user_id, next_cursor) values(feed_user_id, cursor_value)
-  on conflict(user_id) do update set next_cursor=excluded.next_cursor;
-  delete from shorts_seen where user_id=feed_user_id;
-  insert into shorts_seen(user_id, video_id, seen_order)
-  select feed_user_id, video_id, ordinal - 1 from unnest(seen_video_ids) with ordinality as item(video_id, ordinal);
-end;
-$$;
-
-create or replace function public.colorless_acquire_shorts_collection(
-  collector_owner text, now_epoch double precision, lease_seconds integer,
-  requested_quota integer, daily_quota integer
-) returns jsonb language plpgsql security definer set search_path = public as $$
-declare current_state shorts_collection_state%rowtype;
-begin
-  insert into shorts_collection_state(source, quota_window_start)
-  values('youtube', now_epoch) on conflict(source) do nothing;
-  select * into current_state from shorts_collection_state where source='youtube' for update;
-  if now_epoch-current_state.quota_window_start >= 86400 then
-    current_state.quota_window_start := now_epoch;
-    current_state.quota_used := 0;
-  end if;
-  if (current_state.lease_until>now_epoch and current_state.owner_instance_id<>collector_owner)
-     or current_state.circuit_open_until>now_epoch
-     or current_state.quota_used+requested_quota>daily_quota then
-    return null;
-  end if;
-  update shorts_collection_state set
-    owner_instance_id=collector_owner, lease_until=now_epoch+lease_seconds,
-    last_attempt_at=now_epoch, quota_window_start=current_state.quota_window_start,
-    quota_used=current_state.quota_used+requested_quota
-  where source='youtube';
-  return jsonb_build_object(
-    'next_job_index', current_state.next_job_index,
-    'quota_used', current_state.quota_used+requested_quota
-  );
-end;
-$$;
-
-create or replace function public.colorless_finish_shorts_collection(
-  collector_owner text, now_epoch double precision, next_job_value integer,
-  was_successful boolean, error_code text, circuit_seconds integer
-) returns void language plpgsql security definer set search_path = public as $$
-begin
-  if was_successful then
-    update shorts_collection_state set
-      owner_instance_id='', lease_until=0, next_job_index=next_job_value,
-      failure_count=0, circuit_open_until=0, last_success_at=now_epoch, last_error=''
-    where source='youtube' and owner_instance_id=collector_owner;
-  else
-    update shorts_collection_state set
-      owner_instance_id='', lease_until=0, failure_count=failure_count+1,
-      circuit_open_until=case when failure_count+1>=3 or error_code like 'http-429%' or error_code like 'http-403%'
-        then now_epoch+circuit_seconds else circuit_open_until end,
-      last_error=left(error_code, 80)
-    where source='youtube' and owner_instance_id=collector_owner;
-  end if;
-end;
-$$;
-
 create or replace function public.colorless_publish_event(
   event_data jsonb, recipient_usernames text[], source_instance_id text,
   occurred_epoch double precision, retention_count integer
@@ -1197,8 +1091,6 @@ returns jsonb language sql security definer set search_path = public as $$
     'message_reactions', (select count(*) from message_reactions),
     'read_positions', (select count(*) from read_positions),
     'sessions', (select count(*) from sessions),
-    'shorts_catalog', (select count(*) from shorts_catalog),
-    'shorts_collection_state', (select count(*) from shorts_collection_state),
     'realtime_events', (select count(*) from realtime_events),
     'presence_leases', (select count(*) from presence_leases),
     'foreign_key_errors', 0
@@ -1230,15 +1122,13 @@ $$;
 revoke all on table
   public.app_migrations, public.accounts, public.users, public.profile_art, public.social_accounts, public.friendships,
   public.rooms, public.room_members, public.messages, public.message_reactions, public.read_positions,
-  public.sessions, public.shorts_feeds, public.shorts_seen, public.shorts_catalog,
-  public.shorts_collection_state,
+  public.sessions,
   public.realtime_events, public.presence_leases
 from anon, authenticated;
 grant select, insert, update, delete on table
   public.app_migrations, public.accounts, public.users, public.profile_art, public.social_accounts, public.friendships,
   public.rooms, public.room_members, public.messages, public.message_reactions, public.read_positions,
-  public.sessions, public.shorts_feeds, public.shorts_seen, public.shorts_catalog,
-  public.shorts_collection_state,
+  public.sessions,
   public.realtime_events, public.presence_leases
 to service_role;
 grant usage, select on sequence public.messages_sequence_seq, public.realtime_events_sequence_seq to service_role;
@@ -1258,9 +1148,6 @@ revoke execute on function public.colorless_session_username(text, double precis
 revoke execute on function public.colorless_create_account_session(text, text, text, double precision, double precision, integer) from public, anon, authenticated;
 revoke execute on function public.colorless_account_session_username(text, double precision) from public, anon, authenticated;
 revoke execute on function public.colorless_switch_session_identity(text, text, text) from public, anon, authenticated;
-revoke execute on function public.colorless_save_shorts_feed(text, text[], text) from public, anon, authenticated;
-revoke execute on function public.colorless_acquire_shorts_collection(text, double precision, integer, integer, integer) from public, anon, authenticated;
-revoke execute on function public.colorless_finish_shorts_collection(text, double precision, integer, boolean, text, integer) from public, anon, authenticated;
 revoke execute on function public.colorless_publish_event(jsonb, text[], text, double precision, integer) from public, anon, authenticated;
 revoke execute on function public.colorless_presence_for_user(text) from public, anon, authenticated;
 revoke execute on function public.colorless_presence_for_users(text[]) from public, anon, authenticated;
@@ -1284,9 +1171,6 @@ grant execute on function public.colorless_session_username(text, double precisi
 grant execute on function public.colorless_create_account_session(text, text, text, double precision, double precision, integer) to service_role;
 grant execute on function public.colorless_account_session_username(text, double precision) to service_role;
 grant execute on function public.colorless_switch_session_identity(text, text, text) to service_role;
-grant execute on function public.colorless_save_shorts_feed(text, text[], text) to service_role;
-grant execute on function public.colorless_acquire_shorts_collection(text, double precision, integer, integer, integer) to service_role;
-grant execute on function public.colorless_finish_shorts_collection(text, double precision, integer, boolean, text, integer) to service_role;
 grant execute on function public.colorless_publish_event(jsonb, text[], text, double precision, integer) to service_role;
 grant execute on function public.colorless_presence_for_user(text) to service_role;
 grant execute on function public.colorless_presence_for_users(text[]) to service_role;

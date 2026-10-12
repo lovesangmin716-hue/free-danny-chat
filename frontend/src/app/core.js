@@ -335,10 +335,10 @@ const closeMessageActionButton = document.getElementById("close-message-action-b
 const messageActionSummary = document.getElementById("message-action-summary");
 const messageActionReactions = document.getElementById("message-action-reactions");
 const messageActionStatus = document.getElementById("message-action-status");
-const shortShareBar = document.getElementById("short-share-bar");
-const shortShareList = document.getElementById("short-share-list");
-const shortShareSend = document.getElementById("short-share-send");
-const shortShareFeedback = document.getElementById("short-share-feedback");
+const actionBar = document.getElementById("context-action-bar");
+const actionBarList = document.getElementById("context-action-list");
+const actionBarPrimary = document.getElementById("context-action-primary");
+const actionBarFeedback = document.getElementById("context-action-feedback");
 const appStatus = document.getElementById("app-status");
 const openNewChatButton = document.getElementById("open-new-chat-button");
 const closeNewChatButton = document.getElementById("close-new-chat-button");
@@ -550,7 +550,7 @@ function syncAppStatusForActiveTab() {
   if (showAsChatPopup && appStatus.parentElement !== chatRoom) {
     chatRoom.appendChild(appStatus);
   } else if (!showAsChatPopup && appStatus.parentElement !== appScreen) {
-    appScreen.insertBefore(appStatus, shortShareBar);
+    appScreen.insertBefore(appStatus, actionBar);
   }
   const belongsToActiveTab = appStatus.dataset.tab === state.activeList;
   appStatus.classList.toggle("hidden", !appStatus.textContent || !belongsToActiveTab);
@@ -729,11 +729,11 @@ function showAuth(mode = "login") {
   headerSearch.classList.add("hidden");
   appHeader.classList.remove("searching");
   appTitle.classList.remove("hidden");
-  shortShareBar.classList.remove("replying");
-  shortShareList.replaceChildren();
-  shortShareFeedback.textContent = "";
-  shortShareSend.classList.add("hidden");
-  shortShareSend.disabled = false;
+  actionBar.classList.remove("replying");
+  actionBarList.replaceChildren();
+  actionBarFeedback.textContent = "";
+  actionBarPrimary.classList.add("hidden");
+  actionBarPrimary.disabled = false;
   state.roomMemberCursors.clear();
   state.roomMembersLoading.clear();
   state.lastSeenRoomMessageIds = {};
@@ -1036,10 +1036,10 @@ export {
   setAuthStatus,
   setChatDraft,
   setProviderStatus,
-  shortShareBar,
-  shortShareFeedback,
-  shortShareList,
-  shortShareSend,
+  actionBar,
+  actionBarFeedback,
+  actionBarList,
+  actionBarPrimary,
   showApp,
   showAuth,
   showStatusEmojiRequirement,

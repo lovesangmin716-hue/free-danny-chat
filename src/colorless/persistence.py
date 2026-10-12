@@ -198,10 +198,6 @@ class NormalizedSupabaseRepository:
             user = users_by_username.get(session.get("username", ""))
             if user:
                 self.upsert("sessions", [{"token_hash": token_hash, "user_id": user["id"], "account_id": user["account_id"], "active_user_id": user["id"], "created_at": session["created_at"], "expires_at": session["expires_at"]}], "token_hash")
-        for username, feed in state.get("shorts_feeds", {}).items():
-            user = users_by_username.get(username)
-            if user:
-                self.save_shorts_feed(user["id"], feed.get("seen_ids", []), feed.get("next_cursor", ""))
         self.upsert("app_migrations", [{"key": "normalized_state", "version": SCHEMA_VERSION}], "key")
         return self.verify()
 
@@ -624,125 +620,6 @@ class NormalizedSupabaseRepository:
     def destroy_session(self, token_hash: str) -> None:
         self.transport(f"/rest/v1/sessions?token_hash=eq.{quote(token_hash, safe='')}", method="DELETE")
 
-    def get_shorts_feed(self, user_id: str) -> tuple[list[str], str]:
-        feed = self.rows("shorts_feeds", {"select": "next_cursor", "user_id": f"eq.{user_id}", "limit": "1"})
-        seen = self.rows("shorts_seen", {"select": "video_id", "user_id": f"eq.{user_id}", "order": "seen_order.asc"})
-        return [str(row["video_id"]) for row in seen], str(feed[0]["next_cursor"]) if feed else ""
-
-    def save_shorts_feed(self, user_id: str, seen_ids: list[str], next_cursor: str) -> None:
-        self.rpc("colorless_save_shorts_feed", {"feed_user_id": user_id, "seen_video_ids": seen_ids, "cursor_value": next_cursor})
-
-    def list_shorts_catalog(self, *, limit: int, offset: int = 0) -> list[dict]:
-        rows = self.rows(
-            "shorts_catalog",
-            {
-                "select": "video_id,data,last_seen_at,expires_at,source,rank_score",
-                "order": "expires_at.desc,rank_score.desc,last_seen_at.desc,video_id.asc",
-                "limit": str(limit),
-                "offset": str(offset),
-            },
-        )
-        return [
-            {
-                **dict(row.get("data") or {}),
-                "id": str(row["video_id"]),
-                "last_seen_at": float(row.get("last_seen_at", 0)),
-                "expires_at": float(row.get("expires_at", 0)),
-                "source": str(row.get("source", "")),
-                "rank_score": float(row.get("rank_score", 0)),
-            }
-            for row in rows
-        ]
-
-    def upsert_shorts_catalog(self, items: list[dict], source: str, now: float, ttl_seconds: int) -> None:
-        self.upsert(
-            "shorts_catalog",
-            [
-                {
-                    "video_id": str(item["id"]),
-                    "source": source,
-                    "rank_score": float(item.get("rank_score", 0)),
-                    "discovered_at": now,
-                    "last_seen_at": now,
-                    "expires_at": now + ttl_seconds,
-                    "data": {
-                        "id": str(item["id"]),
-                        "title": str(item.get("title", "YouTube 쇼츠")),
-                        "channel_title": str(item.get("channel_title", "YouTube")),
-                    },
-                }
-                for item in items
-            ],
-            "video_id",
-        )
-
-    def acquire_shorts_collection_lease(
-        self,
-        owner: str,
-        now: float,
-        lease_seconds: int,
-        quota_cost: int,
-        daily_quota: int,
-    ) -> dict | None:
-        result = self.rpc(
-            "colorless_acquire_shorts_collection",
-            {
-                "collector_owner": owner,
-                "now_epoch": now,
-                "lease_seconds": lease_seconds,
-                "requested_quota": quota_cost,
-                "daily_quota": daily_quota,
-            },
-        )
-        return dict(result) if isinstance(result, dict) else None
-
-    def finish_shorts_collection(
-        self,
-        owner: str,
-        *,
-        now: float,
-        next_job: int,
-        success: bool,
-        error: str = "",
-        circuit_seconds: int = 0,
-    ) -> None:
-        self.rpc(
-            "colorless_finish_shorts_collection",
-            {
-                "collector_owner": owner,
-                "now_epoch": now,
-                "next_job_value": next_job,
-                "was_successful": success,
-                "error_code": error[:80],
-                "circuit_seconds": circuit_seconds,
-            },
-        )
-
-    def shorts_catalog_status(self, now: float) -> dict:
-        catalog = self.rows(
-            "shorts_catalog",
-            {"select": "video_id,last_seen_at,expires_at", "order": "last_seen_at.desc", "limit": "1000"},
-        )
-        state_rows = self.rows("shorts_collection_state", {"select": "*", "source": "eq.youtube", "limit": "1"})
-        state = dict(state_rows[0]) if state_rows else {}
-        return {
-            "items": len(catalog),
-            "fresh_items": sum(float(row.get("expires_at", 0)) > now for row in catalog),
-            "age_seconds": max(0.0, now - max((float(row.get("last_seen_at", 0)) for row in catalog), default=0.0)) if catalog else None,
-            "quota_used": int(state.get("quota_used", 0)),
-            "failure_count": int(state.get("failure_count", 0)),
-            "circuit_open": float(state.get("circuit_open_until", 0)) > now,
-            "last_success_at": float(state.get("last_success_at", 0)),
-            "last_error": str(state.get("last_error", "")),
-        }
-
-    def prune_shorts_catalog(self, before: float) -> int:
-        result = self.transport(
-            f"/rest/v1/shorts_catalog?last_seen_at=lt.{before}",
-            method="DELETE",
-            prefer="return=representation",
-        )
-        return len(result) if isinstance(result, list) else 0
 
     def load_state(self) -> dict:
         accounts = [
@@ -813,26 +690,6 @@ class NormalizedSupabaseRepository:
                 "created_at": float(row["created_at"]),
                 "expires_at": float(row["expires_at"]),
             }
-        feed_cursors = {
-            str(row["user_id"]): str(row.get("next_cursor", ""))
-            for row in self.all_rows(
-                "shorts_feeds", {"select": "user_id,next_cursor", "order": "user_id.asc"}
-            )
-        }
-        seen_by_user: dict[str, list[str]] = {}
-        for row in self.all_rows(
-            "shorts_seen",
-            {"select": "user_id,video_id,seen_order", "order": "user_id.asc,seen_order.asc,video_id.asc"},
-        ):
-            seen_by_user.setdefault(str(row["user_id"]), []).append(str(row["video_id"]))
-        shorts_feeds = {}
-        for user_id in feed_cursors.keys() | seen_by_user.keys():
-            user = users_by_id.get(user_id)
-            if user:
-                shorts_feeds[user["username"]] = {
-                    "seen_ids": seen_by_user.get(user_id, []),
-                    "next_cursor": feed_cursors.get(user_id, ""),
-                }
         if not accounts:
             derived_accounts = {
                 user["account_id"]: {
@@ -850,7 +707,7 @@ class NormalizedSupabaseRepository:
                 for user in users
             }
             accounts = list(derived_accounts.values())
-        return {"accounts": accounts, "users": users, "friendships": friendships, "rooms": rooms, "messages": {}, "sessions": sessions, "shorts_feeds": shorts_feeds}
+        return {"accounts": accounts, "users": users, "friendships": friendships, "rooms": rooms, "messages": {}, "sessions": sessions}
 
     def publish_event(
         self,
@@ -1102,44 +959,6 @@ class NormalizedSqliteRepository:
                     expires_at REAL NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions(expires_at);
-                CREATE TABLE IF NOT EXISTS shorts_feeds (
-                    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-                    next_cursor TEXT NOT NULL DEFAULT ''
-                );
-                CREATE TABLE IF NOT EXISTS shorts_seen (
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    video_id TEXT NOT NULL,
-                    seen_order INTEGER NOT NULL,
-                    PRIMARY KEY(user_id, video_id)
-                );
-                CREATE INDEX IF NOT EXISTS shorts_seen_user_order_idx
-                    ON shorts_seen(user_id, seen_order DESC);
-                CREATE TABLE IF NOT EXISTS shorts_catalog (
-                    video_id TEXT PRIMARY KEY,
-                    source TEXT NOT NULL,
-                    rank_score REAL NOT NULL DEFAULT 0,
-                    discovered_at REAL NOT NULL,
-                    last_seen_at REAL NOT NULL,
-                    expires_at REAL NOT NULL,
-                    data_json TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS shorts_catalog_feed_idx
-                    ON shorts_catalog(expires_at DESC, rank_score DESC, last_seen_at DESC, video_id);
-                CREATE INDEX IF NOT EXISTS shorts_catalog_expiry_idx
-                    ON shorts_catalog(expires_at);
-                CREATE TABLE IF NOT EXISTS shorts_collection_state (
-                    source TEXT PRIMARY KEY,
-                    owner_instance_id TEXT NOT NULL DEFAULT '',
-                    lease_until REAL NOT NULL DEFAULT 0,
-                    next_job_index INTEGER NOT NULL DEFAULT 0,
-                    failure_count INTEGER NOT NULL DEFAULT 0,
-                    circuit_open_until REAL NOT NULL DEFAULT 0,
-                    last_success_at REAL NOT NULL DEFAULT 0,
-                    last_attempt_at REAL NOT NULL DEFAULT 0,
-                    last_error TEXT NOT NULL DEFAULT '',
-                    quota_window_start REAL NOT NULL DEFAULT 0,
-                    quota_used INTEGER NOT NULL DEFAULT 0
-                );
                 CREATE TABLE IF NOT EXISTS realtime_events (
                     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                     event_id TEXT NOT NULL UNIQUE,
@@ -1370,19 +1189,6 @@ class NormalizedSqliteRepository:
                     database.execute(
                         "INSERT OR REPLACE INTO sessions(token_hash, user_id, account_id, active_user_id, created_at, expires_at) VALUES(?, ?, ?, ?, ?, ?)",
                         (token_hash, user["id"], user["account_id"], user["id"], session["created_at"], session["expires_at"]),
-                    )
-            for username, feed in state.get("shorts_feeds", {}).items():
-                user = users_by_username.get(username)
-                if not user:
-                    continue
-                database.execute(
-                    "INSERT OR REPLACE INTO shorts_feeds(user_id, next_cursor) VALUES(?, ?)",
-                    (user["id"], feed.get("next_cursor", "")),
-                )
-                for order, video_id in enumerate(feed.get("seen_ids", [])):
-                    database.execute(
-                        "INSERT OR REPLACE INTO shorts_seen(user_id, video_id, seen_order) VALUES(?, ?, ?)",
-                        (user["id"], video_id, order),
                     )
             database.execute(
                 "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('legacy_import_version', ?)",
@@ -1648,165 +1454,6 @@ class NormalizedSqliteRepository:
         with self.connection() as database:
             database.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash,))
 
-    def get_shorts_feed(self, user_id: str) -> tuple[list[str], str]:
-        with self.connection() as database:
-            row = database.execute("SELECT next_cursor FROM shorts_feeds WHERE user_id=?", (user_id,)).fetchone()
-            seen = database.execute(
-                "SELECT video_id FROM shorts_seen WHERE user_id=? ORDER BY seen_order",
-                (user_id,),
-            ).fetchall()
-        return [str(item[0]) for item in seen], str(row[0]) if row else ""
-
-    def save_shorts_feed(self, user_id: str, seen_ids: list[str], next_cursor: str) -> None:
-        with self.connection() as database:
-            database.execute("BEGIN IMMEDIATE")
-            database.execute(
-                "INSERT INTO shorts_feeds(user_id, next_cursor) VALUES(?, ?) "
-                "ON CONFLICT(user_id) DO UPDATE SET next_cursor=excluded.next_cursor",
-                (user_id, next_cursor),
-            )
-            database.execute("DELETE FROM shorts_seen WHERE user_id=?", (user_id,))
-            database.executemany(
-                "INSERT INTO shorts_seen(user_id, video_id, seen_order) VALUES(?, ?, ?)",
-                [(user_id, video_id, order) for order, video_id in enumerate(seen_ids)],
-            )
-
-    def list_shorts_catalog(self, *, limit: int, offset: int = 0) -> list[dict]:
-        with self.connection() as database:
-            rows = database.execute(
-                "SELECT video_id, source, rank_score, last_seen_at, expires_at, data_json "
-                "FROM shorts_catalog ORDER BY expires_at DESC, rank_score DESC, last_seen_at DESC, video_id LIMIT ? OFFSET ?",
-                (limit, offset),
-            ).fetchall()
-        return [
-            {
-                **self.decode(row[5]),
-                "id": str(row[0]),
-                "source": str(row[1]),
-                "rank_score": float(row[2]),
-                "last_seen_at": float(row[3]),
-                "expires_at": float(row[4]),
-            }
-            for row in rows
-        ]
-
-    def upsert_shorts_catalog(self, items: list[dict], source: str, now: float, ttl_seconds: int) -> None:
-        if not items:
-            return
-        with self.connection() as database:
-            database.executemany(
-                "INSERT INTO shorts_catalog(video_id, source, rank_score, discovered_at, last_seen_at, expires_at, data_json) "
-                "VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(video_id) DO UPDATE SET "
-                "source=excluded.source, rank_score=excluded.rank_score, last_seen_at=excluded.last_seen_at, "
-                "expires_at=excluded.expires_at, data_json=excluded.data_json",
-                [
-                    (
-                        str(item["id"]),
-                        source,
-                        float(item.get("rank_score", 0)),
-                        now,
-                        now,
-                        now + ttl_seconds,
-                        self.encode({
-                            "id": str(item["id"]),
-                            "title": str(item.get("title", "YouTube 쇼츠")),
-                            "channel_title": str(item.get("channel_title", "YouTube")),
-                        }),
-                    )
-                    for item in items
-                ],
-            )
-
-    def acquire_shorts_collection_lease(
-        self,
-        owner: str,
-        now: float,
-        lease_seconds: int,
-        quota_cost: int,
-        daily_quota: int,
-    ) -> dict | None:
-        with self.connection() as database:
-            database.execute("BEGIN IMMEDIATE")
-            database.execute(
-                "INSERT OR IGNORE INTO shorts_collection_state(source, quota_window_start) VALUES('youtube', ?)",
-                (now,),
-            )
-            row = database.execute(
-                "SELECT owner_instance_id, lease_until, next_job_index, circuit_open_until, "
-                "quota_window_start, quota_used FROM shorts_collection_state WHERE source='youtube'"
-            ).fetchone()
-            assert row is not None
-            quota_window_start = float(row[4])
-            quota_used = int(row[5])
-            if now - quota_window_start >= 24 * 60 * 60:
-                quota_window_start = now
-                quota_used = 0
-            if (
-                (float(row[1]) > now and str(row[0]) != owner)
-                or float(row[3]) > now
-                or quota_used + quota_cost > daily_quota
-            ):
-                return None
-            database.execute(
-                "UPDATE shorts_collection_state SET owner_instance_id=?, lease_until=?, last_attempt_at=?, "
-                "quota_window_start=?, quota_used=? WHERE source='youtube'",
-                (owner, now + lease_seconds, now, quota_window_start, quota_used + quota_cost),
-            )
-            return {"next_job_index": int(row[2]), "quota_used": quota_used + quota_cost}
-
-    def finish_shorts_collection(
-        self,
-        owner: str,
-        *,
-        now: float,
-        next_job: int,
-        success: bool,
-        error: str = "",
-        circuit_seconds: int = 0,
-    ) -> None:
-        with self.connection() as database:
-            if success:
-                database.execute(
-                    "UPDATE shorts_collection_state SET lease_until=0, owner_instance_id='', next_job_index=?, "
-                    "failure_count=0, circuit_open_until=0, last_success_at=?, last_error='' "
-                    "WHERE source='youtube' AND owner_instance_id=?",
-                    (next_job, now, owner),
-                )
-            else:
-                database.execute(
-                    "UPDATE shorts_collection_state SET lease_until=0, owner_instance_id='', failure_count=failure_count+1, "
-                    "circuit_open_until=CASE WHEN failure_count+1>=3 OR ? LIKE 'http-429%' OR ? LIKE 'http-403%' "
-                    "THEN ? ELSE circuit_open_until END, last_error=? "
-                    "WHERE source='youtube' AND owner_instance_id=?",
-                    (error, error, now + circuit_seconds, error[:80], owner),
-                )
-
-    def shorts_catalog_status(self, now: float) -> dict:
-        with self.connection() as database:
-            row = database.execute(
-                "SELECT COUNT(*), SUM(CASE WHEN expires_at>? THEN 1 ELSE 0 END), MAX(last_seen_at) FROM shorts_catalog",
-                (now,),
-            ).fetchone()
-            state = database.execute(
-                "SELECT quota_used, failure_count, circuit_open_until, last_success_at, last_error "
-                "FROM shorts_collection_state WHERE source='youtube'"
-            ).fetchone()
-        latest = float(row[2]) if row and row[2] is not None else 0.0
-        return {
-            "items": int(row[0]) if row else 0,
-            "fresh_items": int(row[1] or 0) if row else 0,
-            "age_seconds": max(0.0, now - latest) if latest else None,
-            "quota_used": int(state[0]) if state else 0,
-            "failure_count": int(state[1]) if state else 0,
-            "circuit_open": float(state[2]) > now if state else False,
-            "last_success_at": float(state[3]) if state else 0.0,
-            "last_error": str(state[4]) if state else "",
-        }
-
-    def prune_shorts_catalog(self, before: float) -> int:
-        with self.connection() as database:
-            cursor = database.execute("DELETE FROM shorts_catalog WHERE last_seen_at<?", (before,))
-            return cursor.rowcount
 
     def load_state(self) -> dict:
         with self.connection() as database:
@@ -1859,20 +1506,6 @@ class NormalizedSqliteRepository:
                 for row in database.execute("SELECT token_hash, account_id, active_user_id, created_at, expires_at FROM sessions")
                 if row[1] is not None and str(row[2]) in users_by_id
             }
-            seen_by_user: dict[str, list[str]] = {}
-            for user_id, video_id in database.execute(
-                "SELECT user_id, video_id FROM shorts_seen ORDER BY user_id, seen_order"
-            ):
-                seen_by_user.setdefault(str(user_id), []).append(str(video_id))
-            shorts_feeds = {}
-            for user_id, next_cursor in database.execute("SELECT user_id, next_cursor FROM shorts_feeds"):
-                user = users_by_id.get(str(user_id))
-                if not user:
-                    continue
-                shorts_feeds[user["username"]] = {
-                    "seen_ids": seen_by_user.get(str(user_id), []),
-                    "next_cursor": str(next_cursor),
-                }
         for room in rooms:
             room["participant_ids"] = members_by_room.get(room["id"], [])
             room["last_read_by"] = reads_by_room.get(room["id"], {})
@@ -1883,7 +1516,6 @@ class NormalizedSqliteRepository:
             "rooms": rooms,
             "messages": {},
             "sessions": sessions,
-            "shorts_feeds": shorts_feeds,
         }
 
     def insert_message(
@@ -2607,7 +2239,7 @@ class NormalizedSqliteRepository:
                 table: int(database.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
                 for table in (
                     "users", "friendships", "rooms", "room_members", "messages", "message_reactions",
-                    "read_positions", "sessions", "shorts_catalog", "shorts_collection_state",
+                    "read_positions", "sessions",
                     "realtime_events", "presence_leases",
                 )
             }

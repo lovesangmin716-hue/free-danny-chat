@@ -11,7 +11,8 @@ let unreadSelect, readVisible, counter;
 const visibleUnread = new Map();
 const identities = () => state.session?.identities || [];
 const actorName = (id) => identities().find((identity) => identity.id === id)?.username || id;
-const isCurrent = (version) => version === generation && panel?.open && state.session?.user;
+const isVisible = () => panel && !panel.classList.contains("hidden") && state.activeList === "threads" && state.session?.user;
+const isCurrent = (version) => version === generation && isVisible();
 const draftStorage = () => { try { return window.localStorage; } catch (_) { return null; } };
 
 function api(action, payload = {}, writing = false, identity = actor) {
@@ -134,19 +135,16 @@ async function publish(event) {
     await api("create", { body: savedDraft.body, clientId: savedDraft.clientId, parentId: replyTo, visibility: savedDraft.visibility }, true, identity);
     // Do not erase text edited or an ID switched while the request was in flight.
     finishDraft(draftStorage(), identity, replyTo, savedDraft);
-    if (panel?.open && state.session?.user && actor === identity && parent === replyTo) { restore(); await load(); }
+    if (isVisible() && actor === identity && parent === replyTo) { restore(); await load(); }
   } catch (error) { if (isCurrent(version)) status.textContent = error.message; }
   finally { busy = false; submit.disabled = false; }
 }
 function selectMode(value) { persist(); mode = value; parent = ""; root = ""; restore(); void load(); }
-function openThreads() {
+export function openThreads() {
   if (!state.session?.user) return;
+  if (isVisible()) return;
   if (!panel) {
-    const style = el("style"); style.textContent = ".thread-panel{width:min(850px,92vw);height:88vh;box-sizing:border-box;overflow:auto;padding:18px}.thread-panel::backdrop{background:#0008}.thread-panel small{display:block;color:#555}.thread-panel select,.thread-panel input{min-width:0;max-width:100%;padding:8px}.thread-toolbar,.thread-actions{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.thread-panel button{width:auto;min-height:32px;padding:6px 10px;font-size:13px}.thread-card{border:1px solid #aaa;padding:14px;margin:12px 0;overflow-wrap:anywhere}.thread-card p{white-space:pre-wrap}.thread-panel textarea{width:100%;box-sizing:border-box;min-height:100px;padding:10px}.thread-panel form{border-bottom:1px solid #bbb;padding-bottom:12px}";
-    style.textContent += ".thread-panel [hidden]{display:none!important}";
-    document.head.append(style);
-    panel = el("dialog"); panel.id = "threads-panel"; panel.className = "thread-panel"; panel.setAttribute("aria-label", "스레드");
-    const heading = el("div"); heading.className = "thread-toolbar"; heading.append(el("h2", "스레드"), button("닫기", () => panel.close()));
+    panel = document.getElementById("threads-panel");
     actorSelect = el("select"); actorSelect.setAttribute("aria-label", "스레드 활동 ID");
     actorSelect.addEventListener("change", () => { persist(); actor = actorSelect.value; restore(); void load(); });
     scopeSelect = el("select"); scopeSelect.setAttribute("aria-label", "피드와 알림 범위"); scopeSelect.append(option("all", "모든 내 ID 통합"), option("identity", "선택한 ID만")); scopeSelect.addEventListener("change", () => void load());
@@ -168,13 +166,15 @@ function openThreads() {
     const submit = el("button", "게시하기"); submit.type = "submit";
     composer.append(writer, editor, counter, visibility, submit, button("새 게시물 작성", () => selectMode("feed")));
     status = el("p"); status.setAttribute("role", "status"); list = el("section"); list.setAttribute("aria-label", "스레드 목록"); more = button("더 보기", () => void load(true));
-    panel.append(heading, filters, nav, composer, status, list, more); document.body.append(panel);
-    panel.addEventListener("close", () => { persist(); generation++; list.replaceChildren(); editor.value = ""; draft = null; });
+    panel.append(filters, nav, composer, status, list, more);
   }
   actor = state.session.active_identity_id; actorSelect.replaceChildren(...identities().map((identity) => option(identity.id, `@${identity.username}`))); actorSelect.value = actor;
-  parent = ""; root = ""; mode = "feed"; restore(); panel.showModal(); void load();
+  parent = ""; root = ""; mode = "feed"; restore(); panel.classList.remove("hidden"); void load();
 }
-const entry = button("스레드 · 게시물과 알림", openThreads);
-document.getElementById("my-view").append(entry);
+export function closeThreads() {
+  if (!panel || panel.classList.contains("hidden")) return;
+  persist(); generation++; pendingRefresh = false;
+  panel.classList.add("hidden"); list.replaceChildren(); editor.value = ""; draft = null;
+}
 // Refresh only an idle notification inbox; never overwrite an active draft.
-window.setInterval(() => { if (panel?.open && mode === "notifications" && !document.hidden && !pendingRefresh && !busy && !cursor) void load(); }, 20000);
+window.setInterval(() => { if (isVisible() && mode === "notifications" && !document.hidden && !pendingRefresh && !busy && !cursor) void load(); }, 20000);

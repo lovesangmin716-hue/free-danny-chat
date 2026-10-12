@@ -455,15 +455,14 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
         for table in (
             "app_migrations", "users", "profile_art", "social_accounts", "friendships", "rooms", "room_members",
-            "messages", "read_positions", "sessions", "shorts_feeds", "shorts_seen",
-            "shorts_catalog", "shorts_collection_state", "realtime_events", "presence_leases",
+            "messages", "read_positions", "sessions",
+            "realtime_events", "presence_leases",
         ):
             self.assertIn(f"create table if not exists public.{table}", schema.lower())
         for function in (
             "colorless_sync_user", "colorless_sync_room", "colorless_insert_message",
             "colorless_create_session", "colorless_session_username",
-            "colorless_save_shorts_feed", "colorless_storage_counts",
-            "colorless_acquire_shorts_collection", "colorless_finish_shorts_collection",
+            "colorless_storage_counts",
             "colorless_publish_event", "colorless_presence_for_user",
             "colorless_latest_messages", "colorless_presence_for_users",
             "colorless_touch_presence", "colorless_disconnect_presence", "colorless_cleanup_presence",
@@ -580,7 +579,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("def stream_request_body_to_file", server_script)
         self.assertIn('self.send_header("Accept-Ranges", "bytes")', upload_routes)
 
-    def test_shorts_players_wait_for_readiness_and_preload_adjacent_cards(self) -> None:
+    def test_retired_video_feature_has_no_player_modules(self) -> None:
         bootstrap_script = (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8")
         self.assertFalse((FRONTEND_APP_DIR / "shorts.js").exists())
         self.assertFalse((server.PACKAGE_DIR / "http" / "shorts.py").exists())
@@ -643,7 +642,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
             "close-chat-room",
             "open-room-settings-button",
             "chat-attachment-button",
-            "short-share-send",
+            "context-action-primary",
         ):
             button = re.search(rf'<button(?=[^>]*id="{button_id}")[^>]*>', index_html)
             self.assertIsNotNone(button, button_id)
@@ -793,17 +792,17 @@ class StaticAppStructureTestCase(unittest.TestCase):
 
         self.assertRegex(
             index_html,
-            r'class="tab-status hidden" id="app-status".*?</p>\s*<aside class="short-share-bar"',
+            r'class="tab-status hidden" id="app-status".*?</p>\s*<aside class="context-action-bar"',
         )
         self.assertNotIn('class="app-status"', index_html)
         self.assertNotIn("친구를 추가하거나 새 대화를 시작해 보세요.", app_script)
         self.assertIn("appStatus.dataset.tab = state.activeList", core_script)
         self.assertIn("function syncAppStatusForActiveTab", core_script)
         self.assertIn("chatRoom.appendChild(appStatus)", core_script)
-        self.assertIn("appScreen.insertBefore(appStatus, shortShareBar)", core_script)
+        self.assertIn("appScreen.insertBefore(appStatus, actionBar)", core_script)
         self.assertIn(".chat-room > .tab-status", index_html)
 
-    def test_two_hundred_shorts_use_a_fixed_virtual_dom_window(self) -> None:
+    def test_retired_video_feature_has_no_navigation_or_virtual_window(self) -> None:
         core_script = (FRONTEND_APP_DIR / "core.js").read_text(encoding="utf-8")
         bootstrap_script = (FRONTEND_APP_DIR / "bootstrap.js").read_text(encoding="utf-8")
         app_script = (FRONTEND_APP_DIR / "app.js").read_text(encoding="utf-8")
@@ -813,7 +812,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertNotIn('state.activeList === "shorts"', app_script)
         self.assertNotIn('id="shorts-tab"', index_html)
 
-    def test_shorts_embed_identifies_its_web_origin(self) -> None:
+    def test_retired_video_feature_has_no_embed_origin(self) -> None:
         self.assertFalse((FRONTEND_APP_DIR / "shorts.js").exists())
         self.assertNotIn("youtube-nocookie.com", server.CONTENT_SECURITY_POLICY)
 
@@ -1832,204 +1831,6 @@ class OperationsObservabilityTestCase(unittest.TestCase):
 
 
 @unittest.skip("YouTube Shorts 기능이 제거됨")
-class ShortsCatalogTestCase(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory(prefix="colorless-shorts-catalog-")
-        self.database_path = Path(self.temp_dir.name) / "catalog.sqlite3"
-        self.repository = server.NormalizedSqliteRepository(self.database_path)
-
-    def tearDown(self) -> None:
-        self.temp_dir.cleanup()
-
-    @staticmethod
-    def item(video_id: str = "catalog-video", rank: float = 100) -> dict:
-        return {
-            "id": video_id,
-            "title": f"Catalog {video_id}",
-            "channel_title": "Catalog Channel",
-            "rank_score": rank,
-        }
-
-    def test_catalog_is_shared_and_collection_lease_is_single_flight(self) -> None:
-        now = time.time()
-        self.repository.upsert_shorts_catalog([self.item()], "test", now, 60)
-        second = server.NormalizedSqliteRepository(self.database_path)
-        self.assertEqual(second.list_shorts_catalog(limit=10)[0]["id"], "catalog-video")
-
-        first_lease = self.repository.acquire_shorts_collection_lease("instance-a", now, 60, 101, 5000)
-        second_lease = second.acquire_shorts_collection_lease("instance-b", now, 60, 101, 5000)
-        self.assertIsNotNone(first_lease)
-        self.assertIsNone(second_lease)
-        self.repository.finish_shorts_collection(
-            "instance-a", now=now, next_job=1, success=True
-        )
-        next_lease = second.acquire_shorts_collection_lease("instance-b", now + 1, 60, 101, 5000)
-        self.assertEqual(next_lease["next_job_index"], 1)
-
-    def test_429_opens_circuit_and_stale_catalog_remains_available(self) -> None:
-        now = time.time()
-        self.repository.upsert_shorts_catalog([self.item("stale-video")], "test", now - 120, 1)
-        collector = server.ShortsCatalogCollector(self.repository, "collector-a", start=False)
-        try:
-            with (
-                mock.patch.object(shorts, "YOUTUBE_API_KEY", "test-key"),
-                mock.patch.object(
-                    shorts,
-                    "collect_youtube_catalog_job",
-                    side_effect=server.YoutubeCatalogError("http-429"),
-                ),
-            ):
-                self.assertFalse(collector.run_once())
-            status = self.repository.shorts_catalog_status(time.time())
-            self.assertTrue(status["circuit_open"])
-            self.assertEqual(status["failure_count"], 1)
-            self.assertEqual(self.repository.list_shorts_catalog(limit=10)[0]["id"], "stale-video")
-        finally:
-            collector.close()
-
-    def test_two_collectors_do_not_run_the_same_job_concurrently(self) -> None:
-        first = server.ShortsCatalogCollector(self.repository, "collector-a", start=False)
-        second = server.ShortsCatalogCollector(
-            server.NormalizedSqliteRepository(self.database_path), "collector-b", start=False
-        )
-        started = threading.Event()
-        release = threading.Event()
-
-        def slow_collect(_job: dict) -> list[dict]:
-            started.set()
-            release.wait(3)
-            return [self.item("single-flight")]
-
-        try:
-            with (
-                mock.patch.object(shorts, "YOUTUBE_API_KEY", "test-key"),
-                mock.patch.object(shorts, "collect_youtube_catalog_job", side_effect=slow_collect),
-            ):
-                thread = threading.Thread(target=first.run_once)
-                thread.start()
-                self.assertTrue(started.wait(2))
-                self.assertFalse(second.run_once())
-                release.set()
-                thread.join(timeout=3)
-            self.assertEqual(first.successes, 1)
-            self.assertEqual(second.lease_skips, 1)
-            self.assertEqual(self.repository.list_shorts_catalog(limit=10)[0]["id"], "single-flight")
-        finally:
-            release.set()
-            first.close()
-            second.close()
-
-    def test_feed_handler_source_has_no_youtube_request(self) -> None:
-        source = inspect.getsource(server.ChatHandler.serve_public_shorts)
-        self.assertNotIn("fetch_youtube", source)
-        self.assertNotIn("googleapis.com", source)
-        self.assertIn("list_shorts_catalog", source)
-
-    def test_catalog_read_p95_is_below_target(self) -> None:
-        now = time.time()
-        self.repository.upsert_shorts_catalog(
-            [self.item(f"video-{index:04d}", 1000 - index) for index in range(1000)],
-            "fixture",
-            now,
-            60,
-        )
-        timings = []
-        for _ in range(30):
-            started = time.perf_counter()
-            page = self.repository.list_shorts_catalog(limit=100, offset=400)
-            timings.append((time.perf_counter() - started) * 1000)
-            self.assertEqual(len(page), 100)
-        timings.sort()
-        self.assertLess(timings[28], 300)
-
-    def test_http_feed_uses_catalog_without_external_calls(self) -> None:
-        suffix = str(time.time_ns())[-10:]
-        user = server.STORE.create_or_update_social_user(
-            "demo", f"catalog-http-{suffix}", nickname=f"catalog{suffix}"
-        )
-        session_token = server.SESSIONS.create(user["username"])
-        video_id = f"http{suffix}"
-        server.STORE.repository.upsert_shorts_catalog(
-            [self.item(video_id, 1_000_000)],
-            "http-fixture",
-            time.time(),
-            60,
-        )
-        http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
-        server_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
-        server_thread.start()
-        address = ("127.0.0.1", http_server.server_address[1])
-        timings = []
-        try:
-            with (
-                mock.patch.object(shorts, "fetch_youtube_catalog_json", side_effect=AssertionError("external call")) as catalog_fetch,
-            ):
-                for request_index in range(20):
-                    connection = http.client.HTTPConnection(*address, timeout=5)
-                    started = time.perf_counter()
-                    connection.request(
-                        "GET",
-                        "/youtube/shorts",
-                        headers={"Cookie": f"{server.SESSION_COOKIE_NAME}={session_token}"},
-                    )
-                    response = connection.getresponse()
-                    payload = json.loads(response.read().decode("utf-8"))
-                    timings.append((time.perf_counter() - started) * 1000)
-                    connection.close()
-                    self.assertEqual(response.status, 200)
-                    self.assertIn("catalog", payload)
-                    if request_index == 0:
-                        self.assertIn(video_id, {item["id"] for item in payload["items"]})
-                self.assertEqual(catalog_fetch.call_count, 0)
-        finally:
-            http_server.shutdown()
-            http_server.server_close()
-            server_thread.join(timeout=5)
-        timings.sort()
-        self.assertLess(timings[18], 300)
-
-    def test_http_feed_replays_emergency_catalog_after_every_item_was_seen(self) -> None:
-        suffix = str(time.time_ns())[-10:]
-        user = server.STORE.create_or_update_social_user(
-            "demo", f"emergency-http-{suffix}", nickname=f"emergency{suffix}"
-        )
-        session_token = server.SESSIONS.create(user["username"])
-        http_server = server.ChatServer(("127.0.0.1", 0), server.ChatHandler)
-        server_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
-        server_thread.start()
-        address = ("127.0.0.1", http_server.server_address[1])
-        try:
-            with (
-                mock.patch.object(server.STORE.repository, "list_shorts_catalog", return_value=[]),
-                mock.patch.object(
-                    server.STORE,
-                    "get_shorts_feed",
-                    return_value=([item["id"] for item in server.EMERGENCY_SHORTS], "catalog:0"),
-                ),
-                mock.patch.object(server.STORE, "save_shorts_feed") as save_feed,
-            ):
-                connection = http.client.HTTPConnection(*address, timeout=5)
-                connection.request(
-                    "GET",
-                    "/youtube/shorts?refresh=1",
-                    headers={"Cookie": f"{server.SESSION_COOKIE_NAME}={session_token}"},
-                )
-                response = connection.getresponse()
-                payload = json.loads(response.read().decode("utf-8"))
-                connection.close()
-
-            self.assertEqual(response.status, 200)
-            self.assertEqual(
-                [item["id"] for item in payload["items"]],
-                [item["id"] for item in server.EMERGENCY_SHORTS],
-            )
-            self.assertEqual(payload["retry_after"], 0)
-            saved_seen_ids = save_feed.call_args.args[1]
-            self.assertEqual(saved_seen_ids, [item["id"] for item in server.EMERGENCY_SHORTS])
-        finally:
-            http_server.shutdown()
-            http_server.server_close()
-            server_thread.join(timeout=5)
 
 
 class AttachmentGrantContractTestCase(unittest.TestCase):
@@ -3211,44 +3012,6 @@ class SupabaseRepositoryContractTestCase(unittest.TestCase):
         self.assertEqual(len(bytes.fromhex(art_request[1]["payload"][0]["pixels_rgb"][2:])), 3072)
         self.assertIsInstance(art_request[1]["payload"][0]["updated_at"], float)
 
-    def test_shorts_catalog_uses_shared_rows_and_atomic_collector_rpcs(self) -> None:
-        requests = []
-
-        def transport(path: str, **kwargs):
-            requests.append((path, kwargs))
-            if path.endswith("/colorless_acquire_shorts_collection"):
-                return {"next_job_index": 2, "quota_used": 303}
-            if path.startswith("/rest/v1/shorts_catalog?") and kwargs.get("method", "GET") == "GET":
-                return [{
-                    "video_id": "video-1",
-                    "source": "search-0",
-                    "rank_score": 100,
-                    "last_seen_at": 10,
-                    "expires_at": 20,
-                    "data": {"title": "Shared", "channel_title": "Channel"},
-                }]
-            return {}
-
-        repository = server.NormalizedSupabaseRepository("https://example.test", "secret", transport)
-        lease = repository.acquire_shorts_collection_lease("instance-a", 10, 120, 101, 5000)
-        repository.upsert_shorts_catalog(
-            [{"id": "video-1", "title": "Shared", "channel_title": "Channel", "rank_score": 100}],
-            "search-0",
-            10,
-            60,
-        )
-        rows = repository.list_shorts_catalog(limit=20)
-        repository.finish_shorts_collection("instance-a", now=11, next_job=3, success=True)
-
-        self.assertEqual(lease["next_job_index"], 2)
-        self.assertEqual(rows[0]["id"], "video-1")
-        rpc_names = {path.rsplit("/", 1)[-1] for path, _ in requests if "/rpc/" in path}
-        self.assertEqual(
-            rpc_names,
-            {"colorless_acquire_shorts_collection", "colorless_finish_shorts_collection"},
-        )
-        upsert_request = next((path, kwargs) for path, kwargs in requests if path.startswith("/rest/v1/shorts_catalog?on_conflict="))
-        self.assertEqual(upsert_request[1]["prefer"], "resolution=merge-duplicates,return=minimal")
 
     def test_all_rows_pages_past_postgrest_response_limit(self) -> None:
         dataset = [{"id": str(index)} for index in range(5)]
@@ -3277,11 +3040,6 @@ class SupabaseRepositoryContractTestCase(unittest.TestCase):
             "room_members": [{"room_id": "r1", "user_id": "u1"}],
             "read_positions": [{"room_id": "r1", "user_id": "u1", "message_id": "m1"}],
             "sessions": [{"token_hash": "token", "user_id": "u1", "account_id": "a1", "active_user_id": "u1", "created_at": 1, "expires_at": 2}],
-            "shorts_feeds": [{"user_id": "u1", "next_cursor": "next"}],
-            "shorts_seen": [
-                {"user_id": "u1", "video_id": "v1", "seen_order": 0},
-                {"user_id": "u1", "video_id": "v2", "seen_order": 1},
-            ],
         }
 
         def transport(path: str, **kwargs):
@@ -3292,13 +3050,10 @@ class SupabaseRepositoryContractTestCase(unittest.TestCase):
         repository = server.NormalizedSupabaseRepository("https://example.test", "secret", transport)
         state = repository.load_state()
 
-        self.assertEqual(len(requests), 9)
-        self.assertEqual(sum(path.startswith("/rest/v1/shorts_feeds?") for path, _ in requests), 1)
-        self.assertEqual(sum(path.startswith("/rest/v1/shorts_seen?") for path, _ in requests), 1)
+        self.assertEqual(len(requests), 7)
         self.assertEqual(state["rooms"][0]["participant_ids"], ["u1"])
         self.assertEqual(state["rooms"][0]["last_read_by"], {"u1": "m1"})
         self.assertEqual(state["sessions"]["token"]["username"], "alice")
-        self.assertEqual(state["shorts_feeds"]["alice"], {"seen_ids": ["v1", "v2"], "next_cursor": "next"})
 
     def test_room_member_usernames_use_current_normalized_membership(self) -> None:
         requests = []
@@ -3345,14 +3100,13 @@ class SupabaseRepositoryContractTestCase(unittest.TestCase):
         self.assertEqual(repository.insert_message(message, "u1", room, 200), (True, None))
         repository.create_session("token", "a1", "u1", 1, 2, 5)
         self.assertEqual(repository.session_username("token", 1.5), "alice")
-        repository.save_shorts_feed("u1", ["v1"], "next")
 
         rpc_names = {path.rsplit("/", 1)[-1] for path, _ in requests}
         self.assertEqual(
             rpc_names,
             {
                 "colorless_sync_user", "colorless_sync_room", "colorless_insert_message_v2",
-                "colorless_create_account_session", "colorless_account_session_username", "colorless_save_shorts_feed",
+                "colorless_create_account_session", "colorless_account_session_username",
             },
         )
         schema = (SRC_DIR / "colorless" / "database" / "supabase-schema.sql").read_text(

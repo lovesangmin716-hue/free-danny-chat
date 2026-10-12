@@ -1,6 +1,6 @@
 "use strict";
 
-import { PROFILE_IMAGE_SIDE, blankProfilePixels, cancelProfilePhotoButton, chatAttachmentButton, chatAttachmentGuide, chatAttachmentInput, chatAttachmentRemove, chatList, chatMessageForm, chatMessageInput, chatMessageList, chatRoom, chatsTab, chooseStatusEmoji, clearProfileButton, closeChatRoomButton, closeDirectoryButton, closeListSearchButton, closeNewChatButton, closeProfileButton, closeRoomSettingsButton, createNewChatButton, customProfileColor, demoLoginButton, directorySheet, friendCodeAddButton, friendCodeInput, friendList, friendsTab, googleLoginButton, headerSearchInput, kakaoLoginButton, leaveRoomButton, loginForm, logoutButton, messageReadMenu, myTab, newChatGroupName, newChatMemberList, newChatSearch, newChatSheet, normalizeStatusEmoji, openCustomStatusEmojiInput, openDirectoryButton, openListSearchButton, openLoginButton, openNewChatButton, openProfileButton, openRoomSettingsButton, openStatusEmojiButton, openStatusEmojiPicker, profilePaletteSelect, profilePhotoCropCanvas, profilePhotoInput, profilePhotoZoom, profileSheet, profileStatusEmoji, rememberSession, removeProfilePhotoButton, removeRoomPhotoButton, requestAction, roomPhotoInput, roomSettingsSheet, saveProfileButton, saveProfilePhotoButton, saveRoomSettingsButton, selectCenteredStatusEmoji, selectProfilePhotoButton, selectRoomPhotoButton, setAppStatus, setAuthStatus, shortShareBar, shortShareList, shortShareSend, showAuth, showStatusEmojiRequirement, state, statusEmojiAdd, statusEmojiPicker, statusEmojiSheet, togglePalettePickerButton } from "./core.js";
+import { PROFILE_IMAGE_SIDE, blankProfilePixels, cancelProfilePhotoButton, chatAttachmentButton, chatAttachmentGuide, chatAttachmentInput, chatAttachmentRemove, chatList, chatMessageForm, chatMessageInput, chatMessageList, chatRoom, chatsTab, chooseStatusEmoji, clearProfileButton, closeChatRoomButton, closeDirectoryButton, closeListSearchButton, closeNewChatButton, closeProfileButton, closeRoomSettingsButton, createNewChatButton, customProfileColor, demoLoginButton, directorySheet, friendCodeAddButton, friendCodeInput, friendList, friendsTab, googleLoginButton, headerSearchInput, kakaoLoginButton, leaveRoomButton, loginForm, logoutButton, messageReadMenu, myTab, newChatGroupName, newChatMemberList, newChatSearch, newChatSheet, normalizeStatusEmoji, openCustomStatusEmojiInput, openDirectoryButton, openListSearchButton, openLoginButton, openNewChatButton, openProfileButton, openRoomSettingsButton, openStatusEmojiButton, openStatusEmojiPicker, profilePaletteSelect, profilePhotoCropCanvas, profilePhotoInput, profilePhotoZoom, profileSheet, profileStatusEmoji, rememberSession, removeProfilePhotoButton, removeRoomPhotoButton, requestAction, roomPhotoInput, roomSettingsSheet, saveProfileButton, saveProfilePhotoButton, saveRoomSettingsButton, selectCenteredStatusEmoji, selectProfilePhotoButton, selectRoomPhotoButton, setAppStatus, setAuthStatus, actionBar, actionBarList, actionBarPrimary, showAuth, showStatusEmojiRequirement, state, statusEmojiAdd, statusEmojiPicker, statusEmojiSheet, togglePalettePickerButton } from "./core.js";
 import { addCustomPaletteColor, buildProfileEditor, cancelProfileImageCrop, clearProfilePixels, closeProfileEditor, convertCroppedProfileImageToPixels, finishProfileCropPointer, getActiveProfilePalette, moveProfileCrop, openProfileEditor, renderPalettePicker, renderProfileImagePreview, renderProfilePalette, saveProfilePixels, updateProfileCropZoom, uploadSelectedProfileImage } from "./profile.js";
 import { clearChatAttachment, handlePastedChatAttachment, openAttachmentPicker, resetAttachmentSwipe, selectChatAttachment, showAttachmentGuide, updateAttachmentSwipe } from "./attachments.js";
 import { toggleVoiceRecording } from "./voice.js";
@@ -159,26 +159,26 @@ chatRoom.addEventListener("paste", handlePastedChatAttachment);
 chatMessageInput.addEventListener("input", handleComposerInput);
 chatMessageInput.addEventListener("compositionend", handleComposerInput);
 chatMessageInput.addEventListener("keydown", handleComposerKeydown);
-shortShareSend.addEventListener("click", handleContextActionPrimary);
-let shortShareTouch = null;
-shortShareBar.addEventListener("touchstart", (event) => {
+actionBarPrimary.addEventListener("click", handleContextActionPrimary);
+let contextActionTouch = null;
+actionBar.addEventListener("touchstart", (event) => {
   const touch = event.touches[0];
   if (!touch) return;
-  shortShareTouch = { startX: touch.clientX, startY: touch.clientY, scrollLeft: shortShareList.scrollLeft };
+  contextActionTouch = { startX: touch.clientX, startY: touch.clientY, scrollLeft: actionBarList.scrollLeft };
 }, { passive: true });
-shortShareBar.addEventListener("touchmove", (event) => {
-  if (!shortShareTouch) return;
+actionBar.addEventListener("touchmove", (event) => {
+  if (!contextActionTouch) return;
   const touch = event.touches[0];
   if (!touch) return;
   event.preventDefault();
-  const distanceX = touch.clientX - shortShareTouch.startX;
-  const distanceY = touch.clientY - shortShareTouch.startY;
+  const distanceX = touch.clientX - contextActionTouch.startX;
+  const distanceY = touch.clientY - contextActionTouch.startY;
   if (Math.abs(distanceX) > Math.abs(distanceY)) {
-    shortShareList.scrollLeft = shortShareTouch.scrollLeft - distanceX;
+    actionBarList.scrollLeft = contextActionTouch.scrollLeft - distanceX;
   }
 }, { passive: false });
-shortShareBar.addEventListener("touchend", () => { shortShareTouch = null; }, { passive: true });
-shortShareBar.addEventListener("touchcancel", () => { shortShareTouch = null; }, { passive: true });
+actionBar.addEventListener("touchend", () => { contextActionTouch = null; }, { passive: true });
+actionBar.addEventListener("touchcancel", () => { contextActionTouch = null; }, { passive: true });
 document.addEventListener("visibilitychange", () => {
   updatePresence();
   handleChatViewportChange();
@@ -186,6 +186,7 @@ document.addEventListener("visibilitychange", () => {
 chatsTab.addEventListener("click", () => setActiveList("chats"));
 friendsTab.addEventListener("click", () => setActiveList("friends"));
 myTab.addEventListener("click", () => setActiveList("my"));
+document.getElementById("threads-tab").addEventListener("click", () => setActiveList("threads"));
 openListSearchButton.addEventListener("click", openListSearch);
 closeListSearchButton.addEventListener("click", closeListSearch);
 headerSearchInput.addEventListener("input", updateHeaderSearch);

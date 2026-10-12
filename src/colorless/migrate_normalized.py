@@ -24,13 +24,10 @@ def load_legacy_parts(database_path: Path) -> dict:
         "rooms": parts["rooms"],
         "sessions": parts["sessions"],
         "messages": {},
-        "shorts_feeds": {},
     }
     for part_id, value in parts.items():
         if part_id.startswith("messages:"):
             state["messages"][part_id.removeprefix("messages:")] = value
-        elif part_id.startswith("shorts:"):
-            state["shorts_feeds"][part_id.removeprefix("shorts:")] = value
     return state
 
 

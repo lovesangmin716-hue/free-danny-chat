@@ -1,6 +1,6 @@
 "use strict";
 
-import { CHAT_MESSAGE_PAGE_SIZE, appScreen, appTitle, chatList, chatsTab, createAvatar, createNewChatButton, directorySheet, friendCodeInput, friendList, friendsTab, getDisplayName, myDisplayName, myFriendCode, myProfileAvatar, myTab, myView, newChatGroupName, newChatGroupNameField, newChatMemberList, newChatSearch, newChatSheet, openDirectoryButton, openLoginButton, openNewChatButton, realtimeEvents, registerCoreHooks, renderStatusEmojiControl, requestAction, setAppStatus, shortShareBar, showApp, state, syncAppStatusForActiveTab } from "./core.js";
+import { CHAT_MESSAGE_PAGE_SIZE, appScreen, appTitle, chatList, chatsTab, createAvatar, createNewChatButton, directorySheet, friendCodeInput, friendList, friendsTab, getDisplayName, myDisplayName, myFriendCode, myProfileAvatar, myTab, myView, newChatGroupName, newChatGroupNameField, newChatMemberList, newChatSearch, newChatSheet, openDirectoryButton, openLoginButton, openNewChatButton, realtimeEvents, registerCoreHooks, renderStatusEmojiControl, requestAction, setAppStatus, actionBar, showApp, state, syncAppStatusForActiveTab } from "./core.js";
 import { connectEvents, rebuildPresenceIndexes, registerRealtimeHandlers, renderChats, renderDirectory, renderFriends, upsertMessengerRoom } from "./messenger.js";
 import { openChatRoom, rebuildMessageIndexes, renderChatRoom } from "./chat.js";
 import { captureChatVirtualAnchor, chatVirtualScrollTopForAnchor } from "./chat-virtual.js";
@@ -8,6 +8,9 @@ import { renderWorkModeControl, syncWorkModeVisibility } from "./work-mode.js";
 import { activeActionBarState, renderContextActionBar, renderFriendActionBar, renderHeaderSearch } from "./action-bar.js";
 import { mergeAuthoritativeRoomSnapshot, mergeRealtimeRoomSnapshot } from "./platform/room-snapshots.js";
 import { openInitialIdentityRoom, renderIdentityControls } from "./identity-ui.js";
+import { closeThreads, openThreads } from "./threads.js";
+
+const threadsTab = document.getElementById("threads-tab");
 
 const accountIdentifier = document.getElementById("account-identifier");
 const identitySwitcher = document.getElementById("identity-switcher");
@@ -28,7 +31,8 @@ const APP_CHAT_PAGE_SIZE = typeof CHAT_MESSAGE_PAGE_SIZE === "number" ? CHAT_MES
 function renderMessenger() {
   const user = state.messenger.user || state.session?.user;
   appScreen.classList.remove("guest-mode");
-  appTitle.textContent = ({ chats: "채팅", friends: "친구", my: "MY" })[state.activeList] || "채팅";
+  appScreen.classList.toggle("threads-active", state.activeList === "threads");
+  appTitle.textContent = ({ chats: "채팅", friends: "친구", threads: "스레드", my: "MY" })[state.activeList] || "채팅";
   openLoginButton.classList.add("hidden");
   renderStatusEmojiControl();
   syncAppStatusForActiveTab();
@@ -38,20 +42,23 @@ function renderMessenger() {
   chatsTab.classList.toggle("active", state.activeList === "chats");
   friendsTab.classList.toggle("active", state.activeList === "friends");
   myTab.classList.toggle("active", state.activeList === "my");
+  threadsTab.classList.toggle("active", state.activeList === "threads");
   chatList.classList.toggle("hidden", state.activeList !== "chats");
   friendList.classList.toggle("hidden", state.activeList !== "friends");
   myView.classList.toggle("hidden", state.activeList !== "my");
   if (state.activeList === "chats") renderChats();
   if (state.activeList === "friends") renderFriends();
   if (state.activeList === "my") renderMy();
+  if (state.activeList === "threads") openThreads();
+  else closeThreads();
   syncWorkModeVisibility();
   renderContextActionBar();
-  shortShareBar.classList.toggle("hidden", state.activeList === "my");
+  actionBar.classList.toggle("hidden", !["chats", "friends"].includes(state.activeList));
   if (!directorySheet.classList.contains("hidden")) renderDirectory();
 }
 
 function resetApplicationUi() {
-  document.getElementById("threads-panel")?.close();
+  closeThreads();
   state.identityUnread = null;
   document.getElementById("identity-management")?.remove();
   identityCreateModal.classList.add("hidden");

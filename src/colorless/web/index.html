@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#ffffff" />
     <title>Colorless</title>
     <link rel="preload" href="assets/fonts/The%20Jamsil%203%20Regular.woff2?v=4e887c501a6c" as="font" type="font/woff2" crossorigin />
-    <script defer src="assets/js/main.js?v=be576263394b"></script>
+    <script defer src="assets/js/main.js?v=f563da729eb1"></script>
     <style>
       @font-face {
         font-family: "The Jamsil";
@@ -251,7 +251,7 @@
         border-top: 1px solid var(--black);
         display: grid;
         flex: 0 0 auto;
-        grid-template-columns: repeat(3, 1fr);
+        grid-template-columns: repeat(4, 1fr);
       }
 
       .list-tabs button {
@@ -282,6 +282,17 @@
       .empty-list-action { display: block; margin: 12px auto 0; }
 
       .my-view { min-height: 100%; padding: 18px; }
+      .thread-panel { box-sizing: border-box; min-height: 100%; max-width: 850px; margin: 0 auto; padding: 18px; }
+      .app.threads-active .desktop-chat-empty, .app.threads-active .chat-room { display: none !important; }
+      .thread-panel small { display: block; color: var(--gray); }
+      .thread-panel select, .thread-panel input { min-width: 0; max-width: 100%; padding: 8px; }
+      .thread-toolbar, .thread-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+      .thread-panel button { width: auto; min-height: 36px; padding: 6px 10px; font-size: 13px; }
+      .thread-card { border: 1px solid var(--light-gray); padding: 14px; margin: 12px 0; overflow-wrap: anywhere; }
+      .thread-card p { white-space: pre-wrap; }
+      .thread-panel textarea { width: 100%; box-sizing: border-box; min-height: 100px; padding: 10px; }
+      .thread-panel form { border-bottom: 1px solid var(--light-gray); padding-bottom: 12px; }
+      .thread-panel [hidden] { display: none !important; }
       .my-card { border: 1px solid var(--black); display: grid; gap: 14px; padding: 20px; }
       .my-profile-summary { align-items: center; display: grid; gap: 14px; grid-template-columns: 76px minmax(0, 1fr); }
       .my-profile-avatar .avatar { height: 76px; width: 76px; }
@@ -324,7 +335,7 @@
       .work-mode-feedback { bottom: 12px; color: var(--gray); font-size: 12px; left: 0; margin: 0; position: fixed; right: 0; text-align: center; }
       .work-mode-hint { color: var(--gray); font-size: 11px; margin: 0; position: fixed; right: 18px; top: 14px; }
 
-      .short-share-bar {
+      .context-action-bar {
         background: var(--white);
         border-top: 1px solid var(--black);
         color: var(--black);
@@ -339,18 +350,13 @@
         z-index: 2;
       }
 
-      .short-share-label, .short-share-feedback { display: none; }
-      .short-share-list { align-items: center; display: flex; flex: 1; gap: 6px; min-width: 0; overflow-x: auto; overscroll-behavior: contain; padding-right: 8px; scrollbar-width: none; touch-action: pan-x; }
-      .short-share-list::-webkit-scrollbar { display: none; }
-      .short-share-person { align-items: center; background: transparent; border: 0; border-right: 1px solid var(--light-gray); color: var(--black); display: grid; flex: 0 0 106px; gap: 7px; grid-template-columns: 34px minmax(0, 1fr); min-height: 34px; padding: 0 10px; text-align: left; }
-      .short-share-person .avatar { height: 34px; width: 34px; }
-      .short-share-person.selected .avatar { outline: 2px solid var(--black); outline-offset: 2px; }
-      .short-share-person .presence-emoji { bottom: -8px; font-size: 10px; height: 16px; right: -8px; width: 16px; }
-      .short-share-person span:last-child { display: block; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .short-share-send { align-items: center; background: var(--white); border: 0; border-left: 1px solid var(--black); color: var(--black); display: grid; flex: 0 0 44px; min-height: 44px; padding: 0; place-items: center; }
-      .short-share-send:not(:disabled) { background: var(--black); color: var(--white); }
-      .short-share-send:disabled { color: var(--gray); opacity: 1; }
-      .short-share-feedback { color: var(--white); font-size: 11px; margin: 0; min-height: 14px; }
+      .context-action-label, .context-action-feedback { display: none; }
+      .context-action-list { align-items: center; display: flex; flex: 1; gap: 6px; min-width: 0; overflow-x: auto; overscroll-behavior: contain; padding-right: 8px; scrollbar-width: none; touch-action: pan-x; }
+      .context-action-list::-webkit-scrollbar { display: none; }
+      .context-action-primary { align-items: center; background: var(--white); border: 0; border-left: 1px solid var(--black); color: var(--black); display: grid; flex: 0 0 44px; min-height: 44px; padding: 0; place-items: center; }
+      .context-action-primary:not(:disabled) { background: var(--black); color: var(--white); }
+      .context-action-primary:disabled { color: var(--gray); opacity: 1; }
+      .context-action-feedback { color: var(--white); font-size: 11px; margin: 0; min-height: 14px; }
       .context-action { background: var(--white); border: 1px solid var(--black); color: var(--black); flex: 0 0 auto; gap: 5px; min-height: 36px; padding: 0 10px; white-space: nowrap; }
       .context-action .ui-icon { height: 18px; width: 18px; }
       .context-action[aria-pressed="true"] { background: var(--black); color: var(--white); }
@@ -642,11 +648,12 @@
           border: 1px solid var(--black);
         }
         .app-header { align-items: center; box-sizing: border-box; grid-area: header; height: var(--desktop-header-height); padding: 20px 22px; }
+        .app.threads-active { grid-template-areas: "header" "list" "status" "actions" "tabs"; grid-template-columns: minmax(0, 1fr); }
         .app-header h1 { font-size: 32px; }
         .list-content { grid-area: list; }
         .chat-list, .friend-list { border: 0; margin: 0; max-width: none; min-height: 100%; }
         .app > .tab-status { grid-area: status; }
-        .short-share-bar { grid-area: actions; }
+        .context-action-bar { grid-area: actions; }
         .list-tabs { grid-area: tabs; }
         .desktop-chat-empty {
           align-content: center;
@@ -809,6 +816,7 @@
       </header>
 
       <section class="list-content">
+        <section class="thread-panel hidden" id="threads-panel" aria-label="스레드"></section>
         <div class="chat-list" id="chat-list"></div>
         <div class="friend-list hidden" id="friend-list"></div>
         <section class="my-view hidden" id="my-view" aria-label="MY">
@@ -993,11 +1001,11 @@
         </div>
       </section>
       <p class="tab-status hidden" id="app-status" role="status" aria-live="polite"></p>
-      <aside class="short-share-bar" id="short-share-bar" aria-label="컨텍스트 작업">
-        <span class="short-share-label">최근 대화</span>
-        <div class="short-share-list" id="short-share-list"></div>
-        <button class="short-share-send" id="short-share-send" type="button" data-icon="message-circle" data-icon-only aria-label="채팅 시작" disabled>채팅 시작</button>
-        <p class="short-share-feedback" id="short-share-feedback" aria-live="polite"></p>
+      <aside class="context-action-bar" id="context-action-bar" aria-label="컨텍스트 작업">
+        <span class="context-action-label">최근 대화</span>
+        <div class="context-action-list" id="context-action-list"></div>
+        <button class="context-action-primary" id="context-action-primary" type="button" data-icon="message-circle" data-icon-only aria-label="채팅 시작" disabled>채팅 시작</button>
+        <p class="context-action-feedback" id="context-action-feedback" aria-live="polite"></p>
       </aside>
       <section class="desktop-chat-empty" aria-hidden="true">
         <strong>대화를 선택하세요</strong>
@@ -1101,6 +1109,7 @@
       <nav class="list-tabs" aria-label="메신저 탭">
         <button type="button" class="active" id="chats-tab" data-icon="message-circle" aria-label="채팅">채팅</button>
         <button type="button" id="friends-tab" data-icon="users" aria-label="친구">친구</button>
+        <button type="button" id="threads-tab" data-icon="message-plus" aria-label="스레드">스레드</button>
         <button type="button" id="my-tab" data-icon="user" aria-label="MY">MY</button>
       </nav>
 

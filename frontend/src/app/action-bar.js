@@ -1,6 +1,6 @@
 "use strict";
 
-import { appHeader, appTitle, getDisplayName, headerSearch, headerSearchInput, openListSearchButton, shortShareBar, shortShareFeedback, shortShareList, shortShareSend, state } from "./core.js";
+import { appHeader, appTitle, getDisplayName, headerSearch, headerSearchInput, openListSearchButton, actionBar, actionBarFeedback, actionBarList, actionBarPrimary, state } from "./core.js";
 import { recentChatRooms, renderChats, renderFriends, resetChatSearch, scheduleChatSearch } from "./messenger.js";
 import { openChatRoom } from "./chat.js";
 import { openDirectChat } from "./app.js";
@@ -26,12 +26,12 @@ function createContextAction(label, icon, handler, options = {}) {
 }
 
 function resetActionBarControls(label) {
-  shortShareBar.setAttribute("aria-label", label);
-  shortShareBar.classList.remove("replying");
-  shortShareList.replaceChildren();
-  shortShareFeedback.textContent = "";
-  shortShareSend.classList.add("hidden");
-  shortShareSend.disabled = false;
+  actionBar.setAttribute("aria-label", label);
+  actionBar.classList.remove("replying");
+  actionBarList.replaceChildren();
+  actionBarFeedback.textContent = "";
+  actionBarPrimary.classList.add("hidden");
+  actionBarPrimary.disabled = false;
 }
 
 function renderHeaderSearch({ focus = false } = {}) {
@@ -96,7 +96,7 @@ function renderChatActionBar(refresh = true) {
   const identityUnread = state.identityUnread?.counts
     ? new Map(Object.entries(state.identityUnread.counts)) : unreadByIdentity(state.messenger.rooms);
   const unreadCount = visibleRooms.filter((room) => room.unread_count > 0).length;
-  shortShareList.appendChild(createContextAction(
+  actionBarList.appendChild(createContextAction(
     `안 읽음 ${unreadCount}`,
     "message-circle",
     () => {
@@ -109,7 +109,7 @@ function renderChatActionBar(refresh = true) {
   for (const identity of state.session?.identities || []) {
     const visible = state.chatIdentityVisibility[identity.id] !== false;
     const identityLabel = `${getDisplayName(identity)} (@${identity.username}) · ${identityUnread.get(identity.id) || 0}`;
-    shortShareList.appendChild(createContextAction(
+    actionBarList.appendChild(createContextAction(
       identityLabel,
       "",
       () => {
@@ -126,7 +126,7 @@ function renderChatActionBar(refresh = true) {
     ));
   }
   for (const room of visibleRooms.slice(0, 5)) {
-    shortShareList.appendChild(createContextAction(
+    actionBarList.appendChild(createContextAction(
       room.name,
       "",
       () => openChatRoom(room.id),
@@ -144,14 +144,14 @@ function renderFriendActionBar() {
     const summary = document.createElement("span");
     summary.className = "context-summary";
     summary.textContent = `${getDisplayName(selected)} · ${selected.presence?.online ? "온라인" : (selected.status_message || "오프라인")}`;
-    shortShareList.appendChild(summary);
-    shortShareList.appendChild(createContextAction("선택 취소", "x", () => {
+    actionBarList.appendChild(summary);
+    actionBarList.appendChild(createContextAction("선택 취소", "x", () => {
       context.mode = "idle";
       context.selection = [];
       renderContextActionBar();
     }));
-    shortShareSend.classList.remove("hidden");
-    ColorlessPlatform.decorateIconButton(shortShareSend, "message-circle", { label: `${getDisplayName(selected)}님과 채팅 시작`, iconOnly: true });
+    actionBarPrimary.classList.remove("hidden");
+    ColorlessPlatform.decorateIconButton(actionBarPrimary, "message-circle", { label: `${getDisplayName(selected)}님과 채팅 시작`, iconOnly: true });
     return;
   }
 
@@ -163,9 +163,9 @@ function renderFriendActionBar() {
   const online = document.createElement("span");
   online.className = "context-summary";
   online.textContent = `온라인 ${onlineFriends.length}`;
-  shortShareList.appendChild(online);
+  actionBarList.appendChild(online);
   for (const friend of onlineFriends.slice(0, 5)) {
-    shortShareList.appendChild(createContextAction(
+    actionBarList.appendChild(createContextAction(
       getDisplayName(friend),
       "",
       () => selectFriendForActionBar(friend.id),
@@ -187,7 +187,7 @@ function selectFriendForActionBar(friendId) {
 function renderContextActionBar() {
   if (state.activeList === "chats") renderChatActionBar();
   else if (state.activeList === "friends") renderFriendActionBar();
-  else shortShareBar.classList.add("hidden");
+  else actionBar.classList.add("hidden");
 }
 
 async function handleContextActionPrimary() {
