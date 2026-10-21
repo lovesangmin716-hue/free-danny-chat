@@ -34,7 +34,27 @@ Message creation, edit, reaction, delete and identity lifecycle limits have inde
 
 Posts and replies use `author_identity_id`, follows/blocks use `actor_identity_id`/`target_identity_id`, likes use `actor_identity_id`, and notifications use `recipient_identity_id`/`actor_identity_id`, all referencing `users.id`. The implemented APIs use the ownership resolver, transaction-level active-actor validation, identity-keyed drafts, and identity-local blocks. See [THREADS.md](THREADS.md) for the UI, API and database migration.
 
-The Threads text feed, posts/comments/replies, likes/follows/mentions, notification inboxes, block/report UI and actor/privacy tests are implemented. Account erasure/anonymization remains a separate retention workflow; issue #25 is not automatically closed by this feature. Media posts and an operator report-review screen are not part of this first Threads version.
+The Threads text feed, posts/comments/replies, likes/follows/mentions, notification inboxes, block/report UI and actor/privacy tests are implemented. Account erasure/anonymization remains the separately authorized retention workflow described above; issue #25 requires that policy to be documented, not a public hard-delete endpoint. Media posts and an operator report-review screen are not part of this first Threads version.
+
+Creating or disabling an identity now closes only that account's existing SSE subscriptions and discards their queued payloads. The browser reconnects with its durable cursor and the current identity list, so an existing window subscribes to a newly created ID and stops consuming data queued for a disabled ID. Other accounts stay connected. Switching IDs still does not replace the session cookie.
+
+## Issue #25 acceptance audit
+
+| Completion condition | Implementation and verification |
+| --- | --- |
+| At most three active identities | Application checks and SQLite/Supabase identity-limit constraints; `test_disable_releases_capacity_preserves_history_and_revokes_cached_identity` and existing storage tests |
+| Independent profiles, relations, chat, reads and presence | Identity foreign keys and session+identity presence leases; three-profile/three-DM unread regression test, Threads identity-local relation tests |
+| Unified chat and correct replies | Account-scoped room summaries plus room-pinned request actors; `identity-context.js`, `identity-ui.js`, Work mode and request-isolation tests |
+| Cannot impersonate a different room identity | HTTP actor ownership resolver and transaction validation; pinned-sender, cross-account and message membership tests |
+| Correct realtime recipient identities | Owner-private event enrichment and lifecycle SSE reconnection; peer-linkage and owner-only queue invalidation tests |
+| Lossless first-identity migration | Stable `users.id`, rerunnable migration marker and retained social foreign keys; legacy SQLite migration plus normalized-state tests |
+| Identity actors in Threads | Author/actor/recipient identity columns and shared authorization; `test_threads.py` covers posts, replies, likes, follows, mentions and inboxes |
+| No public ownership links | Public-profile filtering, private event copies and identity-scoped HTTP cache; profile/event privacy and `http_cache.mjs` tests |
+| Cross-account spoofing blocked | Header/body mismatch, foreign identity and disabled/suspended actor tests in `test_identity.py` and `test_threads.py` |
+| Disable, closure, suspension and retention policy | Lifecycle and abuse policy above: soft-disable, username retention, inactive account/session invalidation and separate erasure process |
+| Account/identity abuse limits | Separate keys and shared account ceiling documented above; existing message mutation rate-limit tests |
+
+This audit covers the issue's listed completion conditions. Production application, data deletion and identity schema changes are not performed by the audit or its tests.
 
 ## Deployment and verification
 

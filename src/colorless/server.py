@@ -393,6 +393,30 @@ def cleanup_expired_storage() -> int:
 
 
 
+def reconnect_identity_streams(usernames: set[str]) -> None:
+    """Refresh an owner's identity snapshot without affecting other accounts.
+
+    Drop queued data before the EOF sentinel: it may target an identity just
+    disabled. EventSource reconnects using the durable cursor and current IDs.
+    """
+    with SUBSCRIBERS_LOCK:
+        subscribers = {
+            subscriber for username in usernames
+            for subscriber in SUBSCRIBERS_BY_USERNAME.get(username, ())
+        }
+        for subscriber in subscribers:
+            SUBSCRIBERS.pop(subscriber, None)
+            for username, queues in list(SUBSCRIBERS_BY_USERNAME.items()):
+                queues.discard(subscriber)
+                if not queues:
+                    SUBSCRIBERS_BY_USERNAME.pop(username, None)
+            try:
+                while True:
+                    subscriber.get_nowait()
+            except queue.Empty:
+                subscriber.put_nowait(None)
+
+
 def push_event(event: dict, recipients: set[str]) -> None:
     if not recipients:
         return

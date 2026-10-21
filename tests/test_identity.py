@@ -1,6 +1,8 @@
 import json
+import queue
 import time
 import unittest
+from unittest import mock
 
 try:
     import test_server as support
@@ -37,8 +39,9 @@ class IdentityBoundaryTest(unittest.TestCase):
 
     def test_pinned_actor_survives_shared_session_switch_and_cannot_switch_room_sender(self):
         alternate = self.new_identity()
-        status, _, _ = self.post("/identities/switch", {"identityId": alternate["id"]})
+        status, _, headers = self.post("/identities/switch", {"identityId": alternate["id"]})
         self.assertEqual(status, 200)
+        self.assertNotIn("Set-Cookie", headers)
         status, sent, _ = self.post("/messages", {"roomId": self.room["id"], "text": "Pinned sender"}, self.user["id"])
         self.assertEqual(status, 201, sent)
         self.assertEqual(sent["username"], self.username)
@@ -110,6 +113,59 @@ class IdentityBoundaryTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(result["counts"], {self.user["id"]: 1, alternate["id"]: 1})
         self.assertEqual(result["total"], 2)
+
+    def test_identity_lifecycle_reconnects_only_owner_streams_and_drops_queued_data(self):
+        own_queue, peer_queue = queue.Queue(maxsize=1), queue.Queue(maxsize=1)
+        own_queue.put({"message": "Queued for an old identity snapshot"})
+        peer_queue.put({"message": "Keep another account connected"})
+        subscribers = {own_queue: self.username, peer_queue: self.peer["username"]}
+        by_username = {self.username: {own_queue}, self.peer["username"]: {peer_queue}}
+        with (mock.patch.object(server, "SUBSCRIBERS", subscribers),
+              mock.patch.object(server, "SUBSCRIBERS_BY_USERNAME", by_username)):
+            alternate = self.new_identity()
+            self.assertIsNone(own_queue.get_nowait())
+            self.assertNotIn(own_queue, subscribers)
+            self.assertNotIn(self.username, by_username)
+            self.assertIn(peer_queue, subscribers)
+            self.assertEqual(peer_queue.qsize(), 1)
+
+            # A stream opened under the alternate must also stop when that ID
+            # is disabled from the primary, with no queued payload delivered.
+            alternate_queue = queue.Queue(maxsize=1)
+            alternate_queue.put({"message": "Disabled identity data"})
+            subscribers[alternate_queue] = alternate["username"]
+            by_username[alternate["username"]] = {alternate_queue}
+            status, _, _ = self.post("/identities/disable", {"identityId": alternate["id"]})
+            self.assertEqual(status, 200)
+            self.assertIsNone(alternate_queue.get_nowait())
+            self.assertNotIn(alternate_queue, subscribers)
+            self.assertIn(peer_queue, subscribers)
+            self.assertEqual(peer_queue.get_nowait()["message"], "Keep another account connected")
+
+    def test_three_identity_profiles_and_read_positions_remain_independent(self):
+        identities = [self.user, self.new_identity(), self.new_identity()]
+        for index, identity in enumerate(identities):
+            status, body, _ = self.post("/profile", {"displayName": f"Profile {index}", "statusMessage": f"Status {index}",
+                                                    "friendCode": identity["friend_code"]}, identity["id"])
+            self.assertEqual(status, 200, body)
+        for index, identity in enumerate(identities):
+            profile = server.STORE.get_user_public(identity["username"])
+            self.assertEqual(profile["display_name"], f"Profile {index}")
+            self.assertEqual(profile["status_message"], f"Status {index}")
+            self.assertNotIn("account_id", profile)
+        rooms = [self.room]
+        for identity in identities[1:]:
+            server.STORE.add_friend(identity["username"], self.peer["id"])
+            room, _, error = server.STORE.create_or_get_direct_room(identity["username"], self.peer["id"])
+            self.assertIsNone(error)
+            rooms.append(room)
+        self.assertEqual(len({room["id"] for room in rooms}), 3)
+        for room in rooms:
+            server.STORE.add_message(room["id"], self.peer["username"], "Unread for this ID")
+        server.STORE.mark_room_read(rooms[1]["id"], identities[1]["username"])
+        status, _, body = self.request("GET", "/identities/unread")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"counts": {identities[0]["id"]: 1, identities[1]["id"]: 0, identities[2]["id"]: 1}, "total": 2})
 
 
 if __name__ == "__main__":

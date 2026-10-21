@@ -6,6 +6,13 @@ from ..identity import resolve_actor, disable_identity, event_for_viewer, unread
 
 
 class MessagingRoutesMixin:
+    def reconnect_account_identity_streams(self, user: dict) -> None:
+        store = self.context.STORE
+        with store.lock:
+            owner = store._users_by_id.get(user["id"])
+            usernames = {identity["username"] for identity in store._users_by_account_id.get(owner["account_id"], [])} if owner else set()
+        self.context.reconnect_identity_streams(usernames)
+
     def serve_identity_unread(self, user: dict) -> None:
         self.send_json(unread_summary(self.context.STORE, user["username"]), self.context.HTTPStatus.OK)
 
@@ -34,6 +41,7 @@ class MessagingRoutesMixin:
             self.send_json({"error": error}, self.context.HTTPStatus.BAD_REQUEST)
             return
         account_context = self.context.STORE.get_account_context(user["username"]) or {}
+        self.reconnect_account_identity_streams(user)
         self.send_json({"identity": identity, **account_context}, self.context.HTTPStatus.CREATED)
 
     def switch_identity(self, user: dict) -> None:
@@ -65,6 +73,7 @@ class MessagingRoutesMixin:
                            else "사용할 수 없는 활동 ID입니다."}, self.context.HTTPStatus.CONFLICT
                            if error == "switch_first" else self.context.HTTPStatus.FORBIDDEN)
             return
+        self.reconnect_account_identity_streams(user)
         self.send_json({"disabled": disabled, **(self.context.STORE.get_account_context(user["username"]) or {})}, self.context.HTTPStatus.OK)
 
     def allow_actor_request(self, user: dict, scope: str, limit: int, seconds: int) -> bool:
