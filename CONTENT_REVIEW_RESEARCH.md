@@ -56,7 +56,7 @@ python research/kaist_smoke.py .codex-review-model-data/kaist new-smoke-report.j
 
 [multilingual-e5-small 모델 카드](https://huggingface.co/intfloat/multilingual-e5-small)는 MIT, 384차원이며 고정 revision 후보는 `614241f622f53c4eeff9890bdc4f31cfecc418b3`이다. 다국어 공통 벡터 공간의 첫 기준 모델로 선정하되 아직 운영 검색에 연결하지 않았다. 대칭 유사도에는 양쪽 `query: ` 접두사, 비대칭 검색에는 query/passage 접두사, attention-mask 평균 pooling과 L2 정규화를 사용한다. 긴 본문은 문단/구간별로 처리하며 잘린 기사만 보고 전체가 중복이라고 판단하지 않는다. 높은 cosine 하나로 게시 위반을 결정하지 않는다.
 
-ANN·영속 검색 저장소·삭제 동기화와 세 검사 모델 학습은 별도 남은 작업이다. 공개 가중치를 찾고 실행하는 것과 현재 서비스 정책의 정확도·오차단율·운영 처리량을 검증하는 것은 각각 확인한다.
+E5의 고정 ONNX 파일과 실제 격리 SQLite 검색·삭제/수정 스냅샷 동기화는 [후속 검색 구현](CONTENT_REVIEW_RETRIEVAL.md)에 추가했다. 운영 ANN·outbox·worker와 세 검사 모델 학습은 남은 작업이다. 공개 가중치를 찾고 실행하는 것과 현재 서비스 정책의 정확도·오차단율·운영 처리량을 검증하는 것은 각각 확인한다.
 
 ## 출처 표시와 변경
 

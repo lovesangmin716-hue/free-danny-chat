@@ -1,0 +1,4 @@
+# Explicit local experiments only; no server dependency changes.
+onnxruntime==1.31.0
+tokenizers==0.22.2
+numpy==2.4.6

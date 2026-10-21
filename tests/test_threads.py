@@ -72,6 +72,35 @@ class ThreadsTest(unittest.TestCase):
         self.assertEqual(self.request("GET", "/threads/api/feed", headers={"Cookie": ""})[0], 401)
         self.assertEqual(self.send("unknown", {})[0], 404)
 
+    def test_review_snapshot_excludes_private_roots_descendants_and_deleted_text(self):
+        public = self.post("public searchable")
+        private = self.post("private root", visibility="followers")
+        descendant = self.post("private child", parentId=private)
+        deleted = self.post("deleted root")
+        self.post("child of deleted root", parentId=deleted)
+        self.service().write("delete", {"id": deleted})
+        # Legacy/inconsistent child visibility must not bypass the root ACL.
+        with self.thread_store.repository.connection() as db:
+            db.execute("UPDATE thread_posts SET visibility='public' WHERE id=?", (descendant,))
+            db.execute("UPDATE thread_meta SET revision=revision+1 WHERE id=1")
+        repo = ThreadRepository(self.thread_store.repository)
+        revision, documents = repo.review_snapshot()
+        self.assertEqual(revision, repo.revision())
+        self.assertEqual([d["id"] for d in documents], [public])
+        self.assertEqual(documents[0]["body"], "public searchable")
+        self.assertNotIn("author_identity_id", documents[0])
+
+    def test_review_snapshot_rejects_overflow_and_concurrent_mutation(self):
+        self.post("first")
+        self.post("second")
+        repo = ThreadRepository(self.thread_store.repository)
+        with self.assertRaisesRegex(ValueError, "capacity"):
+            repo.review_snapshot(capacity=1)
+        revision = repo.revision()
+        with mock.patch.object(repo, "revision", side_effect=[revision, revision + 1]):
+            with self.assertRaisesRegex(ValueError, "changed"):
+                repo.review_snapshot()
+
     def test_other_owned_identity_cannot_edit_or_delete(self):
         alternate = self.alternate()
         post = self.post(user=alternate)

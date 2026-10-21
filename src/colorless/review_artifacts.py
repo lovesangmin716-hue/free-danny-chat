@@ -45,6 +45,15 @@ KAIST_FILES = (
              "b3383b8739ae890383a6ed9ad871e592cc14d5b0c36ffdb9d3be6e416256640a"),
 )
 
+E5_REVISION = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
+E5_BASE = f"https://huggingface.co/intfloat/multilingual-e5-small/resolve/{E5_REVISION}/"
+E5_FILES = (
+    Artifact("model.onnx", E5_BASE + "onnx/model.onnx", 470268510,
+             "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665"),
+    Artifact("tokenizer.json", E5_BASE + "tokenizer.json", 17082730,
+             "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39"),
+)
+
 
 def verify_artifact(path, artifact):
     path = Path(path)
@@ -132,11 +141,12 @@ def verify_kaist(directory):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Download pinned KAIST research weights (~404 MB transfer)")
+    parser = argparse.ArgumentParser(description="Download pinned offline research models")
     parser.add_argument("directory", type=Path)
+    parser.add_argument("--model", choices=("kaist", "e5"), default="kaist")
     args = parser.parse_args(argv)
     with httpx.Client(follow_redirects=True, timeout=60) as client:
-        for artifact in KAIST_FILES:
+        for artifact in E5_FILES if args.model == "e5" else KAIST_FILES:
             path = fetch_artifact(client, args.directory, artifact)
             print(f"verified {path.name}: {artifact.size} bytes")
 

@@ -1,0 +1,29 @@
+{
+  "date": "2026-10-21",
+  "scope": "Real E5 + isolated SQLite Threads lifecycle smoke; synthetic text, no accuracy claim.",
+  "quality_metrics": null,
+  "model_version": "multilingual-e5-small:614241f622f53c4eeff9890bdc4f31cfecc418b3:query-mean-l2:windows-v1",
+  "dimensions": 384,
+  "model_load_ms": 4077.012,
+  "environment": {
+    "python": "3.11.0",
+    "platform": "Windows-10-10.0.19045-SP0",
+    "onnxruntime": "1.31.0",
+    "tokenizers": "0.22.2",
+    "numpy": "2.4.6",
+    "cpu_threads": 2
+  },
+  "initial_public_documents": 3,
+  "excluded_private_documents": 1,
+  "metadata_only_reembedded_documents": 0,
+  "stale_mutations_rejected": 2,
+  "long_text_characters": 3820,
+  "long_text_segments": 9,
+  "retrieval_requests": 20,
+  "retrieval_median_ms": 36.212,
+  "retrieval_p95_ms": 40.282,
+  "cached_retrieval_requests": 20,
+  "cached_retrieval_p95_ms": 18.714,
+  "includes": "query embedding + exact search + authoritative DB ACL + revision checks",
+  "excludes": "HTTP, joint classification, KAIST, commit, notifications and throughput"
+}

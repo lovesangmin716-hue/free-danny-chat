@@ -157,7 +157,7 @@ class ContentReview:
             try:
                 if not all(callable(x) for x in (self.search, self.joint_model, self.kaist)):
                     raise ReviewFailure("review_unavailable")
-                candidates = self.search(copy.deepcopy(submission), timeout=remaining())
+                candidates = self.search(copy.deepcopy(submission), authorize=authorize, timeout=remaining())
                 if not isinstance(candidates, list) or len(candidates) > 20:
                     raise ValueError("bounded candidate list required")
                 ids = set()

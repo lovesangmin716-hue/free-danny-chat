@@ -14,7 +14,7 @@
 
 `ContentReview(search=..., joint_model=..., kaist=..., policy_version=...)`를 격리 서버의 composition root에 명시적으로 주입한다. 세 collaborator는 모두 `timeout` 키워드를 받고, 외부 I/O에도 해당 잔여 제한 시간을 적용한다.
 
-1. 다국어 임베딩 생성 및 검색을 담당하는 `search(submission, timeout=...)`가 최대 20개의 비교 문서를 반환한다. 전체 글·문단 임베딩을 병합한 결과를 문서/구간 ID로 중복 제거한다. 현재 수정 중인 글은 제외한다.
+1. 다국어 임베딩 생성 및 검색을 담당하는 `search(submission, authorize=..., timeout=...)`가 최대 20개의 비교 문서를 반환한다. 최종 top-k 전에 현재 권한을 적용하고 전체 글·문단 후보를 문서 ID로 병합한다. 현재 수정 중인 글은 제외한다. 고정 E5 모델과 격리 SQLite 저장소 연결은 [실제 검색 실험](CONTENT_REVIEW_RETRIEVAL.md)에 설명한다.
 2. 공개 후보는 DB 원문·삭제 여부·공개 범위·현재 활동 ID 권한과 재대조한다. 현재 연결은 `source_kind=thread`만 허용한다. 차단 기록은 내부 경로에서만 받아 정책 버전·차단 사유·만료 시각을 검사한다. 공개 조회와 공유하지 않는다.
 3. `joint_model(request, timeout=...)`를 **한 번** 호출해 세 검사를 함께 받는다. 작업별 모델을 직렬 호출하지 않는다.
 4. 출력 계약 및 모든 근거 오프셋을 검증한다. 위반이면 다음 모델을 호출하지 않고 422로 중단한다.
@@ -53,6 +53,8 @@ BERT 공유 인코더+복수 출력층과 소형 causal LM 구조화 출력 모�
 ## 검색 인프라와 색인 수명
 
 `content_search.ReviewIndex`는 격리 실험용 **메모리 exact cosine** 참조 구현이다. 모델/차원 검증, 공개·차단 별도 저장소, 권한 필터 후 top-k, upsert/remove, 차단 TTL, 정책·임베딩 버전 변경 시 clear를 제공한다. 최대 10,000건이 기본이며 영속 저장·ANN·분산 동기화·임베딩 생성은 제공하지 않는다. 활동 ID의 팔로워 공개 글은 이 공유 색인에 넣지 않는다. 일반 검색에는 `search_public`, 내부 검사에는 `search_for_review`를 사용한다. Python 내부 capability이며 별도 공개 endpoint는 없다. 외부 기사 후보는 수집 권한 검증 경로를 구현하기 전 현재 HTTP 연결에서 거부한다.
+
+추가된 `review_embeddings.E5Encoder` / `review_store.PersistentReviewSearch`는 실제 ONNX 임베딩, 전체/문단·긴 글 구간 검색, 공개/차단 별도 SQLite 파일, 완전한 revision 스냅샷 교체, 본문 digest별 벡터 재사용, stale watermark 거부와 TTL 제거를 제공한다. [별도 실행·권한·캐시·수명 문서](CONTENT_REVIEW_RETRIEVAL.md)를 따른다. 이 경로도 기본 서버에는 연결되지 않으며 자동 운영 worker/outbox나 ANN을 대신하지 않는다.
 
 이 참조 색인은 기존 쓰기에 **자동 연결되지 않는다**. 운영 전에는 다음 과정을 가진 별도 검색 저장소/worker가 필요하다.
 
@@ -97,7 +99,7 @@ python -m colorless.review_evaluation reviewed-dataset.jsonl model-b-predictions
 5. durable index outbox·watermark·ACL·삭제/번복 동기화·비공개 차단 보존 정책을 구현하고 누락/재색인/복구 시험을 통과한다.
 6. 결과와 예산을 검토한 별도 변경에서만 composition root에 ContentReview를 명시적으로 주입한다. 운영 활성화와 배포는 이 브랜치의 작업이 아니다. 롤백은 새 검사를 None으로 되돌리고, 검색 색인은 별도 비활성화한다.
 
-현재 완료: 공통 스키마·라벨 기준, 요청/응답 검증기, 단일 추론/별도 KAIST 연결 계약, 기본 비활성 hook, 네 가지 쓰기 경로와 저장/알림 차단·재시도 테스트, 격리 검색 참조 구현, 입력 저장·전송 대기 개선, 실제 예측 JSONL을 검증하는 언어별 오프라인 평가 도구, 후속 운영/평가 계획.
+현재 완료: 공통 스키마·라벨 기준, 요청/응답 검증기, 단일 추론/별도 KAIST 연결 계약, 기본 비활성 hook, 네 가지 쓰기 경로와 저장/알림 차단·재시도 테스트, 실제 E5 격리 영속 검색과 revision/ACL 검증, KAIST 로컬 재현, 입력 저장·전송 대기 및 벡터 재사용 개선, 실제 예측 JSONL을 검증하는 언어별 오프라인 평가 도구, 후속 운영/평가 계획.
 
 미완료: 검수된 실제 학습셋·학습/모델 비교·언어별 실측 성능·실제 서버 추론 처리량, KAIST 실제 모델 연결, 운영 검색/기사 수집 및 트랜잭션 색인 동기화, 거부 원문의 비공개 보존, 운영 활성화. 따라서 issue #33 전체 완료/자동 종료로 표시하지 않는다.
 
