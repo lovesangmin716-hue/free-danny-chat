@@ -1,5 +1,20 @@
 export function draftKey(identity, parent = "") { return `colorless:thread:${identity}:${parent}`; }
 const fallback = new Map();
+const pending = new Map();
+let timer;
+// Keep typing in memory; batch synchronous localStorage I/O after a short pause.
+export function queueDraft(storage, identity, parent, draft) {
+  const key = draftKey(identity, parent);
+  fallback.set(key, { ...draft });
+  pending.set(key, { storage, identity, parent, draft: { ...draft } });
+  clearTimeout(timer);
+  timer = setTimeout(flushDrafts, 200);
+}
+export function flushDrafts() {
+  clearTimeout(timer);
+  timer = undefined;
+  for (const { storage, identity, parent, draft } of [...pending.values()]) saveDraft(storage, identity, parent, draft);
+}
 export function loadDraft(storage, identity, parent = "") {
   const key = draftKey(identity, parent);
   try {
@@ -11,11 +26,13 @@ export function loadDraft(storage, identity, parent = "") {
 }
 export function saveDraft(storage, identity, parent, draft) {
   const key = draftKey(identity, parent);
+  pending.delete(key);
   try { storage.setItem(key, JSON.stringify(draft)); fallback.delete(key); }
   catch (_) { fallback.set(key, { ...draft }); }
 }
 export function clearDraft(storage, identity, parent) {
   const key = draftKey(identity, parent);
+  pending.delete(key);
   try { storage.removeItem(key); fallback.delete(key); }
   catch (_) { fallback.set(key, null); }
 }

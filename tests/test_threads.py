@@ -72,6 +72,35 @@ class ThreadsTest(unittest.TestCase):
         self.assertEqual(self.request("GET", "/threads/api/feed", headers={"Cookie": ""})[0], 401)
         self.assertEqual(self.send("unknown", {})[0], 404)
 
+    def test_review_snapshot_excludes_private_roots_descendants_and_deleted_text(self):
+        public = self.post("public searchable")
+        private = self.post("private root", visibility="followers")
+        descendant = self.post("private child", parentId=private)
+        deleted = self.post("deleted root")
+        self.post("child of deleted root", parentId=deleted)
+        self.service().write("delete", {"id": deleted})
+        # Legacy/inconsistent child visibility must not bypass the root ACL.
+        with self.thread_store.repository.connection() as db:
+            db.execute("UPDATE thread_posts SET visibility='public' WHERE id=?", (descendant,))
+            db.execute("UPDATE thread_meta SET revision=revision+1 WHERE id=1")
+        repo = ThreadRepository(self.thread_store.repository)
+        revision, documents = repo.review_snapshot()
+        self.assertEqual(revision, repo.revision())
+        self.assertEqual([d["id"] for d in documents], [public])
+        self.assertEqual(documents[0]["body"], "public searchable")
+        self.assertNotIn("author_identity_id", documents[0])
+
+    def test_review_snapshot_rejects_overflow_and_concurrent_mutation(self):
+        self.post("first")
+        self.post("second")
+        repo = ThreadRepository(self.thread_store.repository)
+        with self.assertRaisesRegex(ValueError, "capacity"):
+            repo.review_snapshot(capacity=1)
+        revision = repo.revision()
+        with mock.patch.object(repo, "revision", side_effect=[revision, revision + 1]):
+            with self.assertRaisesRegex(ValueError, "changed"):
+                repo.review_snapshot()
+
     def test_other_owned_identity_cannot_edit_or_delete(self):
         alternate = self.alternate()
         post = self.post(user=alternate)
@@ -189,6 +218,75 @@ class ThreadsTest(unittest.TestCase):
         self.assertEqual(self.send("report", {"id": post, "reason": "Same report"})[0], 200)
         self.assertEqual(len(self.service().db.rows("thread_reports", {"post_id": f"eq.{post}"})), 1)
         self.assertNotIn("report", json.dumps(self.get("detail", id=post)[1]))
+
+    def test_review_blocks_all_content_paths_before_posts_or_notifications(self):
+        from colorless.content_review import ReviewFailure
+        root = self.post("Root", user=self.peer)
+        comment = self.post("Comment", parentId=root)
+        reviewer = mock.Mock()
+        reviewer.check.side_effect = ReviewFailure("review_blocked_reupload", 422)
+        db = self.service().db
+        before_posts = db.rows("thread_posts", limit=100)
+        before_notifications = db.rows("thread_notifications", limit=100)
+        cases = [("create", {"body": f"Blocked @{self.peer['username']}", "clientId": "blocked-root"}),
+                 ("create", {"body": "Blocked comment", "clientId": "blocked-comment", "parentId": root}),
+                 ("create", {"body": "Blocked reply", "clientId": "blocked-reply", "parentId": comment}),
+                 ("edit", {"body": "Blocked edit", "id": comment})]
+        with mock.patch.object(server, "THREAD_CONTENT_REVIEW", reviewer):
+            for action, payload in cases:
+                status, response = self.send(action, payload)
+                self.assertEqual(status, 422, response)
+                self.assertNotIn("candidate", str(response))
+        self.assertEqual(reviewer.check.call_count, 4)
+        self.assertEqual(db.rows("thread_posts", limit=100), before_posts)
+        self.assertEqual(db.rows("thread_notifications", limit=100), before_notifications)
+
+    def test_review_success_retry_disabled_default_and_unavailable(self):
+        from colorless.content_review import ReviewFailure
+        reviewer = mock.Mock()
+        payload = {"body": f"Reviewed @{self.peer['username']}", "clientId": "review-retry"}
+        with mock.patch.object(server, "THREAD_CONTENT_REVIEW", reviewer):
+            first = self.send("create", payload)
+            self.assertEqual(first[0], 200, first)
+            self.assertEqual(self.send("create", payload)[1]['id'], first[1]['id'])
+            reviewer.check.assert_called_once()
+            reviewer.check.side_effect = ReviewFailure("review_timeout")
+            self.assertEqual(self.send("edit", {"id": first[1]['id'], "body": "Timed out"})[0], 503)
+        self.assertEqual(self.service().post(first[1]['id'])["body"], payload['body'])
+        # Defaults remain compatible even if no model infrastructure exists.
+        self.assertEqual(self.send("create", {"body": "Default", "clientId": "default-review"})[0], 200)
+        notes = self.service(self.peer).read("notifications", {})['items']
+        self.assertEqual(len([n for n in notes if n['post_id'] == first[1]['id']]), 1)
+
+    def test_review_reauthorizes_current_search_documents(self):
+        root = self.post("Public", user=self.peer)
+        secret = self.post("Followers", user=self.peer, visibility="followers")
+        deleted = self.post("Removed", user=self.peer)
+        self.service(self.peer).write("delete", {"id": deleted})
+        reviewer = mock.Mock()
+        def inspect(submission, *, authorize):
+            self.assertFalse(authorize({"id": secret, "body": "Followers", "source_kind": "thread"}))
+            self.assertFalse(authorize({"id": deleted, "body": "Removed", "source_kind": "thread"}))
+            self.assertFalse(authorize({"id": root, "body": "Stale", "source_kind": "thread"}))
+            self.assertFalse(authorize({"id": root, "body": "Public", "title": "Invented", "source_kind": "thread"}))
+            self.assertTrue(authorize({"id": root, "body": "Public", "source_kind": "thread"}))
+        reviewer.check.side_effect = inspect
+        with mock.patch.object(server, "THREAD_CONTENT_REVIEW", reviewer):
+            self.assertEqual(self.send("create", {"body": "Check", "clientId": "authorize-review"})[0], 200)
+
+    def test_review_cas_conflict_rechecks_and_denied_retry_is_safe(self):
+        from colorless.content_review import ReviewFailure
+        service = self.service()
+        reviewer = mock.Mock()
+        reviewer.check.side_effect = [None, ReviewFailure("review_undetermined")]
+        service.content_review = reviewer
+        with mock.patch.object(service.db, "commit", return_value={"error": "conflict"}) as commit:
+            with self.assertRaises(ThreadError) as failure:
+                service.write("create", {"body": "Race", "clientId": "review-race"})
+        self.assertEqual(failure.exception.status, 503)
+        self.assertEqual(reviewer.check.call_count, 2)
+        commit.assert_called_once()
+        self.assertEqual(self.service().db.rows("thread_posts", {"client_id": "eq.review-race"}), [])
 
     def test_supabase_adapter_uses_bounded_reads_and_atomic_rpc(self):
         repository = mock.Mock(spec=["rows", "rpc"])

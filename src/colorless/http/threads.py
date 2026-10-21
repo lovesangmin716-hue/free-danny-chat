@@ -16,7 +16,7 @@ class ThreadRoutesMixin:
         if write and not self.allow_actor_request(user, "threads-" + action, 30 if action == "create" else 60, 60):
             return
         try:
-            service = Threads(self.context.STORE, user)
+            service = Threads(self.context.STORE, user, content_review=self.context.THREAD_CONTENT_REVIEW)
             result = service.write(action, payload) if write else service.read(action, payload)
             self.send_json(result, 200, headers={"Cache-Control": "no-store"})
         except ThreadError as error:

@@ -1,0 +1,4 @@
+# Optional offline runner only. Install the CPU torch wheel separately as documented.
+transformers==4.57.1
+tokenizers==0.22.2
+numpy==2.4.6

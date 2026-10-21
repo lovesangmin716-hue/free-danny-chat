@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-21",
+  "scope": "local CPU smoke only; no ground-truth accuracy or service throughput evaluation",
+  "model_version": "kaist-cross-national-zenodo-21348299-v2.1",
+  "checkpoint_sha256": "a49d9901256383935ac2140087f543e7a78f4ecddb74bbcf0490ae8eb1401556",
+  "sample_sha256": "40ab0bb035f4db8add527a5ef95432da3cd1258c62a70404c9c9e6d065363a10",
+  "environment": {
+    "python": "3.11.0",
+    "platform": "Windows-10-10.0.19045-SP0",
+    "processor": "Intel64 Family 6 Model 142 Stepping 11, GenuineIntel",
+    "torch": "2.14.1+cpu",
+    "transformers": "4.57.1",
+    "tokenizers": "0.22.2",
+    "numpy": "2.4.6",
+    "cpu_threads": 2
+  },
+  "load_ms": 5954.706,
+  "requested": 23,
+  "completed": 23,
+  "rejected_over_512_tokens": 0,
+  "invalid_inputs_rejected": 3,
+  "public_sample_inputs": 20,
+  "synthetic_smoke_inputs": 3,
+  "token_range": [
+    5,
+    179
+  ],
+  "first_inference_ms": 151.006,
+  "warm_median_ms": 125.1435,
+  "warm_p95_ms": 309.002,
+  "quality_metrics": null,
+  "moderation_validated": false
+}

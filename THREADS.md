@@ -1,5 +1,7 @@
 # 스레드 — issue #25
 
+issue #33의 기본 비활성 콘텐츠 검사 연결, 한·영 모델/검색 계약과 격리 실험·활성화 계획은 [CONTENT_REVIEW.md](CONTENT_REVIEW.md)에 정리되어 있습니다. 실제 학습 모델과 운영 검색은 후속 구현 범위입니다.
+
 로그인 후 **스레드 탭**에서 이용합니다. 별도 가입이나 OAuth 설정은 필요하지 않습니다.
 
 ## 구현 범위
@@ -14,6 +16,9 @@
 - 답글 대상 작성자/본문 미리보기(차단·삭제 시 숨김), 알림으로 연 답글이 40번째 이후여도 바로 표시
 - 안 읽은 알림 필터, 화면에 불러온 알림만 ID별로 묶어 읽음 처리
 - 편집 중 다른 창에서 수정된 글을 덮어쓰지 않도록 충돌 안내, 작성 글자 수 표시
+- 수정·신고·삭제·차단은 앱 내부 대화상자에서 처리하며 실패하면 작성한 수정 내용·신고 사유를 유지
+- Ctrl/⌘+Enter로 게시·수정 저장, Enter로 줄바꿈·검색 실행(한글 조합 중에는 실행하지 않음)
+- 빈 글 게시 방지, 답글 상세에서 피드로 돌아가기, 대화상자 Escape 취소와 처리 중 중복 요청 방지
 
 브라우저 저장소가 차단되거나 용량이 찬 경우에도 현재 창 안에서는 ID별 초안을 메모리에 보존합니다. 이 경우 새로고침/창 닫기 이후의 보존은 보장되지 않습니다. 일괄 읽음은 표시된 알림만 대상으로 하며 아직 불러오지 않은 알림은 읽음 처리하지 않습니다.
 
@@ -67,7 +72,7 @@ SQLite 개발 환경은 시작할 때 추가 스키마가 자동 생성됩니다
 
 ## 테스트와 남은 범위
 
-`python -m unittest discover -s tests -p 'test_*.py'`, `node tests/thread_drafts.mjs`, 프론트 빌드/구문/정적 예산 검사를 실행합니다. `tests/test_threads.py`는 실제 HTTP 소유권, 공개 범위, 독립 관계/반응/읽음, 차단, 멘션, 수정/삭제, 페이지네이션, 입력 검증, 비활성화, CAS 및 DB 어댑터를 검증합니다.
+`python -m unittest discover -s tests -p 'test_*.py'`, `node tests/thread_drafts.mjs`, `node tests/thread_dialog.mjs`, 프론트 빌드/구문/정적 예산 검사를 실행합니다. `tests/test_threads.py`는 실제 HTTP 소유권, 공개 범위, 독립 관계/반응/읽음, 차단, 멘션, 수정/삭제, 페이지네이션, 입력 검증, 비활성화, CAS 및 DB 어댑터를 검증합니다.
 
 CI의 `tests/threads_postgres.mjs`는 임시 PGlite(PostgreSQL/WASM) DB에서 SQL 재실행, 모든 변경 테이블의 upsert/delete, 트랜잭션 롤백, revision 충돌, 계정 제재 및 anon/authenticated 권한 거부를 검증합니다. 운영 의존성에는 추가하지 않으며 실제 Supabase/PostgREST 연결 검증은 배포 전 remote preflight로 별도 수행합니다.
 

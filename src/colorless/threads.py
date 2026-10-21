@@ -5,6 +5,7 @@ import uuid
 from .threads_repository import ThreadRepository
 from .identity import resolve_actor
 from .utils import utc_now_iso
+from .content_review import ReviewFailure
 
 ID = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 MENTION = re.compile(r"(?<![\w@])@([A-Za-z0-9_]{3,32})")
@@ -30,10 +31,39 @@ def new_id(prefix):
 
 
 class Threads:
-    def __init__(self, store, actor):
+    def __init__(self, store, actor, *, content_review=None):
         self.store, self.actor = store, actor["id"]
+        self.content_review = content_review
         self.db = ThreadRepository(store.repository)
         self.user_cache, self.edge_cache, self.post_cache, self.like_cache = {}, {}, {}, {}
+
+    def review_content(self, post):
+        if self.content_review is None:
+            return
+
+        def authorize(candidate):
+            # Fetch authoritative state, never rely on a search index ACL snapshot.
+            if candidate.get("source_kind") != "thread" or candidate["id"] == post["id"]:
+                return False
+            rows = self.db.rows("thread_post_summary", {"id": f"eq.{checked_id(candidate['id'])}"}, limit=1)
+            current = rows[0] if rows else None
+            return bool(current and not current["deleted"] and current["visibility"] == "public"
+                        and current["body"] == candidate["body"] and not candidate.get("title")
+                        and self.visible(current, self.actor))
+
+        submission = {"id": post["id"], "body": post["body"], "title": "", "language": "auto",
+                      "source_kind": "thread", "parent_id": post["parent_id"], "root_id": post["root_id"],
+                      "visibility": post["visibility"], "published_at": post["created_at"],
+                      "modified_at": post["edited_at"] or None, "first_observed_at": None,
+                      "source_url": None, "original_id": None}
+        try:
+            self.content_review.check(submission, authorize=authorize)
+        except ReviewFailure as error:
+            reasons = {"review_context_distortion": "제목과 본문의 맥락 왜곡이 감지되었습니다.",
+                       "review_duplicate_rewrite": "기존 내용의 중복 또는 단순 재작성이 감지되었습니다.",
+                       "review_blocked_reupload": "정책에 따라 차단된 내용의 재게시가 감지되었습니다.",
+                       "review_agitation": "분란 조장 검사에서 게시가 제한되었습니다."}
+            raise ThreadError(reasons.get(error.code, "콘텐츠 검사를 완료하지 못했습니다. 잠시 후 다시 시도해 주세요."), error.status) from None
 
     def prime(self, posts, viewers):
         """Batch each bounded page; never truncate an authorization edge lookup."""
@@ -287,6 +317,7 @@ class Threads:
                     "root_id": (parent["root_id"] or parent["id"]) if parent else None,
                     "body": body, "visibility": parent["visibility"] if parent else visibility,
                     "client_id": client_id, "created_at": now, "edited_at": "", "deleted": 0}
+            self.review_content(post)
             change("thread_posts", post)
             if parent:
                 notify(parent["author_identity_id"], "reply", post)
@@ -334,6 +365,8 @@ class Threads:
             if action == "edit" and "originalBody" in payload and payload["originalBody"] != post["body"]:
                 raise ThreadError("다른 창에서 내용이 수정되었습니다. 새로고침한 뒤 다시 수정해 주세요.", 409)
             record = {key: value for key, value in post.items() if key not in ("like_count", "reply_count")}
+            if action == "edit":
+                self.review_content({**record, "body": body, "edited_at": now})
             change("thread_posts", {**record, "body": body if action == "edit" else "",
                                    "edited_at": now, "deleted": int(action == "delete")})
             if action == "edit":

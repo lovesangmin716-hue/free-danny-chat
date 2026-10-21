@@ -49,6 +49,37 @@ class ThreadRepository:
     def revision(self):
         return int(self.rows("thread_meta", {"id": "eq.1"}, limit=1)[0]["revision"])
 
+    def review_snapshot(self, *, capacity=10000):
+        """Read-only complete public snapshot for an isolated review index.
+
+        Global revision checks bound the paginated read on SQLite and PostgREST.
+        Overflow/churn is an error, never an apparently complete partial index.
+        """
+        if type(capacity) is not int or not 1 <= capacity <= 10000:
+            raise ValueError("invalid snapshot capacity")
+        revision = self.revision()
+        posts, after = [], None
+        while True:
+            page = self.rows("thread_posts", {"id": f"gt.{after}"} if after else {}, order="id.asc", limit=500)
+            posts.extend(page)
+            if len(posts) > capacity:
+                raise ValueError("thread snapshot exceeds capacity")
+            if len(page) < 500:
+                break
+            after = page[-1]["id"]
+        by_id = {post["id"]: post for post in posts}
+        documents = []
+        for post in posts:
+            root = by_id.get(post["root_id"]) if post.get("root_id") else post
+            if post["deleted"] or post["visibility"] != "public" or not root or root["deleted"] or root["visibility"] != "public":
+                continue
+            documents.append(dict(id=post["id"], body=post["body"], title="", scope="public", source_kind="thread",
+                                  source_url=None, original_id=None, first_observed_at=None,
+                                  published_at=post["created_at"], modified_at=post["edited_at"] or None))
+        if self.revision() != revision:
+            raise ValueError("threads changed while reading snapshot")
+        return revision, documents
+
     def commit(self, actor_id, revision, mutations):
         if not self.sqlite:
             return self.repository.rpc("colorless_threads_commit", {
