@@ -32,3 +32,28 @@ const full = { getItem: () => JSON.stringify(a), setItem() { throw Error("quota"
 saveDraft(full, "quota", "", b);
 assert.deepEqual(loadDraft(full, "quota"), b);
 console.log("Threads per-identity drafts and in-flight edit preservation OK");
+
+// Typing never performs synchronous storage writes; lifecycle/submit flushes do.
+const { queueDraft, flushDrafts, clearDraft } = await import('../frontend/src/app/platform/thread-drafts.js');
+let writes = 0;
+const batchedRows = new Map();
+const batchedStorage = { getItem: key => batchedRows.get(key), setItem(key, value) { writes++; batchedRows.set(key, value); }, removeItem: key => batchedRows.delete(key) };
+for (let i = 1; i <= 100; i++) queueDraft(batchedStorage, 'typing', '', { body: '한'.repeat(i), clientId: 'typing-1' });
+assert.equal(writes, 0);
+assert.equal(loadDraft(batchedStorage, 'typing').body.length, 100);
+flushDrafts();
+assert.equal(writes, 1);
+assert.equal(JSON.parse(batchedRows.get('colorless:thread:typing:')).body.length, 100);
+queueDraft(batchedStorage, 'typing', '', { body: 'next', clientId: 'typing-2' });
+clearDraft(batchedStorage, 'typing', '');
+flushDrafts();
+assert.equal(loadDraft(batchedStorage, 'typing').body, '');
+queueDraft(batchedStorage, 'inflight', '', { body: 'changed while sending', clientId: 'sent' });
+finishDraft(batchedStorage, 'inflight', '', { body: 'sent text', clientId: 'sent' });
+flushDrafts();
+assert.equal(loadDraft(batchedStorage, 'inflight').body, 'changed while sending');
+assert.notEqual(loadDraft(batchedStorage, 'inflight').clientId, 'sent');
+queueDraft(batchedStorage, 'idle', '', { body: 'idle save', clientId: 'idle' });
+await new Promise(resolve => setTimeout(resolve, 240));
+assert.equal(JSON.parse(batchedRows.get('colorless:thread:idle:')).body, 'idle save');
+console.log('100 typing events: 0 synchronous writes, 1 flush; no cleared-draft resurrection; idle save OK');

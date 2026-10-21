@@ -1,5 +1,6 @@
 import { requestAction, state } from "./core.js";
-import { loadDraft, saveDraft, finishDraft } from "./platform/thread-drafts.js";
+import { loadDraft, saveDraft, finishDraft, queueDraft, flushDrafts } from "./platform/thread-drafts.js";
+import { openThreadDialog, closeThreadDialog } from "./platform/thread-dialog.js";
 
 const el = (tag, text = "") => { const node = document.createElement(tag); node.textContent = text; return node; };
 const button = (text, action) => { const node = el("button", text); node.type = "button"; node.addEventListener("click", action); return node; };
@@ -7,7 +8,7 @@ const option = (value, text) => { const node = el("option", text); node.value = 
 let panel, actor, mode = "feed", generation = 0, parent = "", root = "", cursor = "", draft, busy = false;
 let actorSelect, scopeSelect, modeSelect, search, editor, status, list, more, composer, visibility, writer;
 let pendingRefresh = false;
-let unreadSelect, readVisible, counter;
+let unreadSelect, readVisible, counter, submitButton, backToFeed;
 const visibleUnread = new Map();
 const identities = () => state.session?.identities || [];
 const actorName = (id) => identities().find((identity) => identity.id === id)?.username || id;
@@ -23,6 +24,14 @@ function api(action, payload = {}, writing = false, identity = actor) {
   });
 }
 function persist() { if (draft && editor && actor) { draft.body = editor.value; draft.visibility = visibility.value; saveDraft(draftStorage(), actor, parent, draft); } }
+function syncSubmit() { if (submitButton) submitButton.disabled = busy || !editor.value.trim(); }
+function onDraftInput() {
+  if (!draft || !actor) return;
+  draft.body = editor.value; draft.visibility = visibility.value;
+  queueDraft(draftStorage(), actor, parent, draft);
+  counter.textContent = `${editor.value.length}/2,000자${parent ? " · 선택한 글에 답글" : ""}`;
+  syncSubmit();
+}
 function restore() {
   draft = loadDraft(draftStorage(), actor, parent);
   editor.value = draft.body;
@@ -30,17 +39,41 @@ function restore() {
   writer.textContent = `@${actorName(actor)}로 ${parent ? "답글" : "게시물"} 작성 중`;
   visibility.hidden = Boolean(parent);
   counter.textContent = `${editor.value.length}/2,000자${parent ? " · 선택한 글에 답글" : ""}`;
+  syncSubmit();
 }
 function chooseReply(id, identity) {
   persist(); actor = identity; actorSelect.value = identity; parent = id; restore(); editor.focus();
 }
 async function mutate(action, payload, identity = actor) {
   if (busy) return;
-  busy = true;
+  busy = true; syncSubmit();
   const version = generation;
   try { await api(action, payload, true, identity); if (isCurrent(version)) { status.textContent = "반영했습니다."; await load(); } }
   catch (error) { if (isCurrent(version)) status.textContent = error.message; }
-  finally { busy = false; }
+  finally { busy = false; syncSubmit(); }
+}
+function postDialog(post, action) {
+  if (busy) return;
+  const identity = post.viewer_identity_id, version = generation;
+  const editing = action === "edit", reporting = action === "report";
+  const settings = editing ? { title: `@${actorName(identity)}의 내용 수정`, value: post.body, confirmLabel: "수정 저장" }
+    : reporting ? { title: `@${actorName(identity)}로 신고`, value: "", minLength: 5, maxLength: 500, confirmLabel: "신고하기" }
+    : { title: action === "delete" ? "게시물 삭제" : "활동 ID 차단", confirmLabel: action === "delete" ? "삭제하기" : "차단하기" };
+  openThreadDialog({ ...settings, description: editing ? "수정한 내용은 작성 ID로 저장됩니다. Ctrl/⌘+Enter로 저장할 수 있어요."
+    : reporting ? "신고 사유를 5~500자로 입력해 주세요. 사유는 공개되지 않습니다."
+    : action === "delete" ? "내용이 지워지고 기존 답글의 연결은 유지됩니다."
+    : `@${actorName(identity)}에서 @${post.author.username}를 차단합니다. 다른 소유 ID에는 전파되지 않습니다.`,
+    onConfirm: async value => {
+      busy = true; syncSubmit();
+      try {
+        const payload = editing ? { id: post.id, body: value, originalBody: post.body }
+          : reporting ? { id: post.id, reason: value }
+          : action === "delete" ? { id: post.id } : { identityId: post.author_identity_id, enabled: true };
+        await api(action, payload, true, identity);
+        if (isCurrent(version)) { status.textContent = "반영했습니다."; void load(); }
+      } finally { busy = false; syncSubmit(); }
+    },
+  });
 }
 function card(post) {
   const node = el("article");
@@ -61,12 +94,12 @@ function card(post) {
       else chooseReply(post.id, identity);
     }));
     if (post.author_identity_id === identity) {
-      actions.append(button("수정", () => { const body = window.prompt(`@${actorName(identity)}의 내용 수정`, post.body); if (body !== null) void mutate("edit", { id: post.id, body, originalBody: post.body }, identity); }));
-      actions.append(button("삭제", () => { if (window.confirm(`@${actorName(identity)}로 작성한 이 내용을 삭제할까요? 내용은 비워지고 답글 연결은 유지됩니다.`)) void mutate("delete", { id: post.id }, identity); }));
+      actions.append(button("수정", () => postDialog(post, "edit")));
+      actions.append(button("삭제", () => postDialog(post, "delete")));
     } else {
       actions.append(button(post.following ? "팔로우 취소" : "팔로우", () => mutate("follow", { identityId: post.author_identity_id, enabled: !post.following }, identity)));
-      actions.append(button("차단", () => { if (window.confirm(`@${actorName(identity)}에서만 @${post.author.username}를 차단할까요? 다른 소유 ID에는 전파되지 않습니다.`)) void mutate("block", { identityId: post.author_identity_id, enabled: true }, identity); }));
-      actions.append(button("신고", () => { const reason = window.prompt(`@${actorName(identity)}로 신고합니다. 사유를 5자 이상 입력해 주세요.`); if (reason !== null) void mutate("report", { id: post.id, reason }, identity); }));
+      actions.append(button("차단", () => postDialog(post, "block")));
+      actions.append(button("신고", () => postDialog(post, "report")));
     }
   }
   node.append(actions); return node;
@@ -83,6 +116,7 @@ function notification(item) {
 async function readShown() {
   if (busy || !visibleUnread.size) return;
   busy = true; readVisible.disabled = true;
+  syncSubmit();
   const version = generation, groups = new Map();
   for (const [id, recipient] of visibleUnread) groups.set(recipient, [...(groups.get(recipient) || []), id]);
   try {
@@ -92,7 +126,7 @@ async function readShown() {
     }
     if (isCurrent(version)) await load();
   } catch (error) { if (isCurrent(version)) status.textContent = error.message; }
-  finally { busy = false; readVisible.disabled = !visibleUnread.size; }
+  finally { busy = false; syncSubmit(); readVisible.disabled = !visibleUnread.size; }
 }
 async function load(append = false) {
   if (pendingRefresh && append) return;
@@ -104,6 +138,7 @@ async function load(append = false) {
   readVisible.disabled = true;
   status.textContent = "불러오는 중…";
   composer.hidden = !["feed", "detail"].includes(mode);
+  backToFeed.hidden = mode !== "detail";
   try {
     const action = mode === "blocked" || mode === "following-list" ? "relationships" : mode;
     const data = await api(action, { scope: scopeSelect.value, mode: modeSelect.value, q: search.value, id: root, cursor, unread: unreadSelect.value, kind: mode === "blocked" ? "block" : "follow" });
@@ -127,7 +162,7 @@ async function load(append = false) {
   finally { if (version === generation) { more.disabled = false; pendingRefresh = false; readVisible.disabled = !visibleUnread.size; } }
 }
 async function publish(event) {
-  event.preventDefault(); if (busy) return;
+  event.preventDefault(); if (busy || !editor.value.trim()) return;
   persist(); busy = true;
   const version = generation, identity = actor, replyTo = parent, savedDraft = { ...draft };
   const submit = composer.querySelector('button[type="submit"]'); submit.disabled = true;
@@ -135,9 +170,9 @@ async function publish(event) {
     await api("create", { body: savedDraft.body, clientId: savedDraft.clientId, parentId: replyTo, visibility: savedDraft.visibility }, true, identity);
     // Do not erase text edited or an ID switched while the request was in flight.
     finishDraft(draftStorage(), identity, replyTo, savedDraft);
-    if (isVisible() && actor === identity && parent === replyTo) { restore(); await load(); }
+    if (isVisible() && actor === identity && parent === replyTo) { restore(); void load(); }
   } catch (error) { if (isCurrent(version)) status.textContent = error.message; }
-  finally { busy = false; submit.disabled = false; }
+  finally { busy = false; syncSubmit(); }
 }
 function selectMode(value) { persist(); mode = value; parent = ""; root = ""; restore(); void load(); }
 export function openThreads() {
@@ -153,18 +188,30 @@ export function openThreads() {
     const nav = el("div"); nav.className = "thread-toolbar";
     for (const [value, name] of [["feed", "피드"], ["notifications", "알림함"], ["following-list", "팔로잉 관리"], ["blocked", "차단 관리"]]) nav.append(button(name, () => selectMode(value)));
     nav.append(button("새로고침", () => void load()));
+    backToFeed = button("← 피드로 돌아가기", () => selectMode("feed")); backToFeed.hidden = true; nav.append(backToFeed);
     unreadSelect = el("select"); unreadSelect.setAttribute("aria-label", "알림 읽음 필터");
     unreadSelect.append(option("0", "모든 알림"), option("1", "안 읽은 알림만")); unreadSelect.addEventListener("change", () => void load());
     readVisible = button("표시된 알림 읽음", readShown); nav.append(unreadSelect, readVisible);
     search = el("input"); search.placeholder = "게시물 검색 / 정확한 @사용자명"; search.maxLength = 100; search.setAttribute("aria-label", "스레드 검색");
+    search.addEventListener("keydown", event => {
+      if (event.key === "Enter" && !event.isComposing && event.keyCode !== 229) {
+        event.preventDefault(); selectMode(mode === "people" ? "people" : "feed");
+      }
+    });
     nav.append(search, button("게시물 검색", () => selectMode("feed")), button("사용자 찾기", () => selectMode("people")));
     composer = el("form"); composer.addEventListener("submit", publish);
-    writer = el("strong"); editor = el("textarea"); editor.maxLength = 2000; editor.setAttribute("aria-label", "스레드 내용"); editor.placeholder = "무슨 생각을 하고 있나요? @사용자명으로 멘션할 수 있어요."; editor.addEventListener("input", persist);
-    counter = el("small"); editor.addEventListener("input", () => { counter.textContent = `${editor.value.length}/2,000자`; });
+    writer = el("strong"); editor = el("textarea"); editor.maxLength = 2000; editor.setAttribute("aria-label", "스레드 내용"); editor.placeholder = "무슨 생각을 하고 있나요? @사용자명으로 멘션할 수 있어요."; editor.addEventListener("input", onDraftInput);
+    editor.setAttribute("aria-keyshortcuts", "Control+Enter Meta+Enter");
+    editor.addEventListener("keydown", event => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing && event.keyCode !== 229) {
+        event.preventDefault(); if (!submitButton.disabled) composer.requestSubmit();
+      }
+    });
+    counter = el("small");
     visibility = el("select"); visibility.setAttribute("aria-label", "게시물 공개 범위"); visibility.append(option("public", "전체 공개"), option("followers", "팔로워 공개"));
     visibility.addEventListener("change", persist);
-    const submit = el("button", "게시하기"); submit.type = "submit";
-    composer.append(writer, editor, counter, visibility, submit, button("새 게시물 작성", () => selectMode("feed")));
+    submitButton = el("button", "게시하기"); submitButton.type = "submit";
+    composer.append(writer, editor, counter, el("small", "Ctrl/⌘+Enter로 게시 · Enter로 줄바꿈"), visibility, submitButton, button("새 게시물 작성", () => selectMode("feed")));
     status = el("p"); status.setAttribute("role", "status"); list = el("section"); list.setAttribute("aria-label", "스레드 목록"); more = button("더 보기", () => void load(true));
     panel.append(filters, nav, composer, status, list, more);
   }
@@ -172,9 +219,12 @@ export function openThreads() {
   parent = ""; root = ""; mode = "feed"; restore(); panel.classList.remove("hidden"); void load();
 }
 export function closeThreads() {
+  closeThreadDialog();
   if (!panel || panel.classList.contains("hidden")) return;
   persist(); generation++; pendingRefresh = false;
   panel.classList.add("hidden"); list.replaceChildren(); editor.value = ""; draft = null;
 }
 // Refresh only an idle notification inbox; never overwrite an active draft.
 window.setInterval(() => { if (isVisible() && mode === "notifications" && !document.hidden && !pendingRefresh && !busy && !cursor) void load(); }, 20000);
+window.addEventListener("pagehide", flushDrafts);
+document.addEventListener("visibilitychange", () => { if (document.hidden) flushDrafts(); });

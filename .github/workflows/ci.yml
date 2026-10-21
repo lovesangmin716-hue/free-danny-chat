@@ -34,6 +34,7 @@ jobs:
       - run: node tests/submit_guard.mjs
       - run: node tests/identity_context.mjs
       - run: node tests/thread_drafts.mjs
+      - run: node tests/thread_dialog.mjs
       - name: Verify Threads PostgreSQL migration
         run: |
           npm install --prefix "$RUNNER_TEMP/threads-sql" --no-save @electric-sql/pglite@0.5.8

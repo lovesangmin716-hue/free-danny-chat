@@ -452,6 +452,9 @@ def social_provider_config(google_redirect_uri: str, kakao_redirect_uri: str) ->
     }
 
 
+# Experimental issue #33 gate. Only an explicitly wired, validated adapter enables it.
+# No environment toggle, external calls or production schema change by default.
+THREAD_CONTENT_REVIEW = None
 STORE = StateStore(STATE_FILE)
 SESSIONS = SessionStore(state_store=STORE)
 PRESENCE = PresenceStore(STORE.repository, INSTANCE_ID)

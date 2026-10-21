@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "content-review-training.schema.json",
+  "type": "object",
+  "properties": {
+    "example_id": {
+      "type": "string"
+    },
+    "cluster_id": {
+      "type": "string"
+    },
+    "split": {
+      "enum": [
+        "train",
+        "validation",
+        "test"
+      ]
+    },
+    "annotation_status": {
+      "enum": [
+        "synthetic",
+        "human_reviewed"
+      ]
+    },
+    "request": {
+      "$ref": "content-review-request.schema.json"
+    },
+    "response": {
+      "$ref": "content-review-response.schema.json"
+    }
+  },
+  "required": [
+    "example_id",
+    "cluster_id",
+    "split",
+    "annotation_status",
+    "request",
+    "response"
+  ],
+  "additionalProperties": false
+}

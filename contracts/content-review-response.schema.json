@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "content-review-response.schema.json",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "1"
+    },
+    "policy_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "decision": {
+      "enum": [
+        "allow",
+        "block",
+        "hold"
+      ]
+    },
+    "checks": {
+      "type": "object",
+      "properties": {
+        "context_distortion": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "enum": [
+                "pass",
+                "violation",
+                "undetermined"
+              ]
+            },
+            "evidence": {
+              "type": "array",
+              "maxItems": 40,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "document_id": {
+                    "type": "string"
+                  },
+                  "field": {
+                    "enum": [
+                      "title",
+                      "body"
+                    ]
+                  },
+                  "start": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "end": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "quote": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "document_id",
+                  "field",
+                  "start",
+                  "end",
+                  "quote"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "missing_evidence": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "string"
+              }
+            },
+            "candidate_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "matching_information": {
+              "type": "string"
+            },
+            "new_information": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "evidence",
+            "missing_evidence"
+          ],
+          "additionalProperties": false
+        },
+        "duplicate_rewrite": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "enum": [
+                "pass",
+                "violation",
+                "undetermined"
+              ]
+            },
+            "evidence": {
+              "type": "array",
+              "maxItems": 40,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "document_id": {
+                    "type": "string"
+                  },
+                  "field": {
+                    "enum": [
+                      "title",
+                      "body"
+                    ]
+                  },
+                  "start": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "end": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "quote": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "document_id",
+                  "field",
+                  "start",
+                  "end",
+                  "quote"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "missing_evidence": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "string"
+              }
+            },
+            "candidate_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "matching_information": {
+              "type": "string"
+            },
+            "new_information": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "evidence",
+            "missing_evidence"
+          ],
+          "additionalProperties": false
+        },
+        "blocked_reupload": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "enum": [
+                "pass",
+                "violation",
+                "undetermined"
+              ]
+            },
+            "evidence": {
+              "type": "array",
+              "maxItems": 40,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "document_id": {
+                    "type": "string"
+                  },
+                  "field": {
+                    "enum": [
+                      "title",
+                      "body"
+                    ]
+                  },
+                  "start": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "end": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "quote": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "document_id",
+                  "field",
+                  "start",
+                  "end",
+                  "quote"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "missing_evidence": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "string"
+              }
+            },
+            "candidate_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "matching_information": {
+              "type": "string"
+            },
+            "new_information": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "evidence",
+            "missing_evidence"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "context_distortion",
+        "duplicate_rewrite",
+        "blocked_reupload"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema_version",
+    "policy_version",
+    "model_version",
+    "decision",
+    "checks"
+  ],
+  "additionalProperties": false
+}
