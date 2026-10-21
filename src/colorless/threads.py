@@ -9,6 +9,7 @@ from .content_review import ReviewFailure
 
 ID = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 MENTION = re.compile(r"(?<![\w@])@([A-Za-z0-9_]{3,32})")
+USERNAME_QUERY = re.compile(r"[\w-]{2,32}")
 WRITE_ACTIONS = {"create", "edit", "delete", "like", "follow", "block", "report", "read", "read_many"}
 READ_ACTIONS = {"feed", "detail", "notifications", "people", "relationships"}
 
@@ -201,7 +202,7 @@ class Threads:
                 users = [self.user(row["target_identity_id"]) for row in rows[:40]]
                 return {"items": users, "next_cursor": rows[39]["target_identity_id"] if len(rows) > 40 else ""}
             query = str(payload.get("q", "")).strip().lstrip("@")
-            if not re.fullmatch(r"[A-Za-z0-9_]{3,32}", query):
+            if not USERNAME_QUERY.fullmatch(query):
                 raise ThreadError("정확한 @사용자명을 입력해 주세요.")
             users = self.db.rows("users", {"username": f"eq.{query}"}, limit=1)
             return {"items": [self.user(row["id"]) for row in users if not self.blocked(self.actor, row["id"])]}
@@ -224,12 +225,21 @@ class Threads:
                               "recipient": self.user(recipient), "post_body": post["body"] if post else ""})
             return {"items": items, "next_cursor": rows[39]["id"] if len(rows) > 40 else ""}
         # Scan a bounded number of candidates and advance the cursor even when filtered.
-        query = str(payload.get("q", "")).strip().casefold()
+        query = str(payload.get("q", "")).strip()
         if len(query) > 100:
             raise ThreadError("검색어는 100자 이내로 입력해 주세요.")
+        author_id = checked_id(payload.get("authorId", ""), optional=True)
+        if not author_id and query.startswith("@") and USERNAME_QUERY.fullmatch(query[1:]):
+            users = self.db.rows("users", {"username": f"eq.{query[1:]}"}, limit=1)
+            if not users:
+                return {"items": [], "next_cursor": ""}
+            author_id, query = users[0]["id"], ""
+        query = query.casefold()
         items, scanned, more = [], cursor, True
         for _ in range(10):
             filters = {"parent_id": "is.null", "deleted": "eq.0"}
+            if author_id:
+                filters["author_identity_id"] = f"eq.{author_id}"
             if scanned:
                 filters["id"] = f"lt.{scanned}"
             rows = self.db.rows("thread_post_summary", filters, limit=40)
@@ -242,7 +252,7 @@ class Threads:
                 if query and query not in row["body"].casefold():
                     continue
                 eligible = viewers
-                if payload.get("mode") == "following":
+                if payload.get("mode") == "following" and not author_id:
                     eligible = [viewer for viewer in viewers if viewer == row["author_identity_id"]
                                 or self.edge(viewer, row["author_identity_id"], "follow")]
                 item = self.present(row, eligible)

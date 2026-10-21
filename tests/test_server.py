@@ -407,7 +407,7 @@ class StaticAppStructureTestCase(unittest.TestCase):
         self.assertIn("message.retry_data", chat_script)
         self.assertIn("await deliverPendingMessage(message.id, pendingMessage, message.retry_data)", chat_script)
         self.assertIn("colorless-chat-draft:${encodeURIComponent(owner)}:${encodeURIComponent(roomId)}", core_script)
-        self.assertIn("sessionStorage.setItem(key, draft)", core_script)
+        self.assertIn("chatDraftWriter.queue(key, draft)", core_script)
 
     def test_signup_is_a_separate_responsive_document(self) -> None:
         index_html = server.INDEX_FILE.read_text(encoding="utf-8")

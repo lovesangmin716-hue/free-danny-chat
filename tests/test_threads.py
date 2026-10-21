@@ -109,6 +109,57 @@ class ThreadsTest(unittest.TestCase):
         self.assertEqual(self.send("edit", {"id": post, "body": "Updated"}, alternate["id"])[0], 200)
         self.assertEqual(self.service().post(post)["body"], "Updated")
 
+    def test_other_author_feed_and_detail_work_without_following(self):
+        public = self.post("A public post without the author's username", self.peer)
+        self.post("Followers only", self.peer, visibility="followers")
+        removed = self.post("Removed", self.peer)
+        self.service(self.peer).write("delete", {"id": removed})
+        self.assertFalse(self.service().edge(self.user["id"], self.peer["id"], "follow"))
+        for filters in ({"authorId": self.peer["id"]}, {"q": "@" + self.peer["username"]}):
+            status, feed, _ = self.get("feed", mode="following", **filters)
+            self.assertEqual(status, 200)
+            self.assertEqual([post["id"] for post in feed["items"]], [public])
+            self.assertEqual(feed["items"][0]["viewer_identity_id"], self.user["id"])
+            self.assertNotIn("account_id", json.dumps(feed))
+        self.assertEqual(self.get("detail", id=public)[0], 200)
+        self.assertEqual(self.get("feed", self.peer["id"], authorId=self.peer["id"])[0], 403)
+
+    def test_author_filter_reaches_posts_older_than_global_scan_window(self):
+        target = self.post("Older public post", self.peer)
+        # A bounded fixture population avoids hundreds of unrelated HTTP writes.
+        with self.thread_store.repository.connection() as db:
+            db.executemany("INSERT INTO thread_posts(id,author_identity_id,body,visibility,client_id,created_at) "
+                           "VALUES (?,?,'Recent unrelated post','public',?,'2026-10-21')",
+                           [(f"zz_recent_{index:04d}", self.user["id"], f"recent_{index}") for index in range(401)])
+            db.execute("UPDATE thread_meta SET revision=revision+1 WHERE id=1")
+        feed = self.get("feed", authorId=self.peer["id"])[1]
+        self.assertEqual([post["id"] for post in feed["items"]], [target])
+        feed = self.get("feed", q="@" + self.peer["username"])[1]
+        self.assertEqual([post["id"] for post in feed["items"]], [target])
+
+    def test_author_feed_retains_identity_scoped_private_and_block_permissions(self):
+        alternate = self.alternate()
+        public = self.post("Public", self.peer)
+        private = self.post("Private", self.peer, visibility="followers")
+        self.service(alternate).write("follow", {"identityId": self.peer["id"], "enabled": True})
+        self.assertEqual([p["id"] for p in self.get("feed", authorId=self.peer["id"])[1]["items"]], [public])
+        merged = self.get("feed", authorId=self.peer["id"], scope="all")[1]["items"]
+        self.assertEqual({p["id"] for p in merged}, {public, private})
+        self.assertEqual(next(p for p in merged if p["id"] == private)["viewer_identity_id"], alternate["id"])
+        self.service().write("block", {"identityId": self.peer["id"], "enabled": True})
+        self.assertEqual(self.get("feed", authorId=self.peer["id"])[1]["items"], [])
+        self.assertEqual({p["id"] for p in self.get("feed", alternate["id"], authorId=self.peer["id"])[1]["items"]},
+                         {public, private})
+
+    def test_legacy_unicode_and_mixed_case_author_search(self):
+        for index, username in enumerate(("한글", "Mixed_Name", "legacy-name")):
+            user, error = self.thread_store.create_local_user(username, f"searchcase{index}", "password", "",
+                                                              f"0105555555{index}", "20대", "남성")
+            self.assertIsNone(error)
+            post = self.post("A searchable original", user)
+            self.assertEqual(self.get("people", q="@" + username)[1]["items"][0]["id"], user["id"])
+            self.assertEqual([p["id"] for p in self.get("feed", q="@" + username)[1]["items"]], [post])
+
     def test_followers_visibility_and_union_feed(self):
         alternate = self.alternate()
         post = self.post("private-marker", self.peer, visibility="followers")

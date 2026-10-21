@@ -8,6 +8,8 @@ const option = (value, text) => { const node = el("option", text); node.value = 
 let panel, actor, mode = "feed", generation = 0, parent = "", root = "", cursor = "", draft, busy = false;
 let actorSelect, scopeSelect, modeSelect, search, editor, status, list, more, composer, visibility, writer;
 let pendingRefresh = false;
+let authorFilter = "";
+let displayedView = "", firstPage = true;
 let unreadSelect, readVisible, counter, submitButton, backToFeed;
 const visibleUnread = new Map();
 const identities = () => state.session?.identities || [];
@@ -15,13 +17,14 @@ const actorName = (id) => identities().find((identity) => identity.id === id)?.u
 const isVisible = () => panel && !panel.classList.contains("hidden") && state.activeList === "threads" && state.session?.user;
 const isCurrent = (version) => version === generation && isVisible();
 const draftStorage = () => { try { return window.localStorage; } catch (_) { return null; } };
+const viewKey = () => JSON.stringify([actor, mode, authorFilter, root, scopeSelect.value, modeSelect.value, search.value, unreadSelect.value]);
 
 function api(action, payload = {}, writing = false, identity = actor) {
   const url = `/threads/api/${action}`;
   return requestAction(`threads.${action}`, writing ? url : `${url}?${new URLSearchParams(payload)}`, {
     headers: { "X-Acting-Identity": identity },
     ...(writing ? { method: "POST", body: JSON.stringify(payload) } : {}),
-  });
+  }, writing ? {} : { key: "threads-view", policy: "replace" });
 }
 function persist() { if (draft && editor && actor) { draft.body = editor.value; draft.visibility = visibility.value; saveDraft(draftStorage(), actor, parent, draft); } }
 function syncSubmit() { if (submitButton) submitButton.disabled = busy || !editor.value.trim(); }
@@ -44,11 +47,15 @@ function restore() {
 function chooseReply(id, identity) {
   persist(); actor = identity; actorSelect.value = identity; parent = id; restore(); editor.focus();
 }
+function chooseAuthor(id) {
+  authorFilter = id; search.value = ""; modeSelect.value = "public";
+  persist(); mode = "feed"; parent = ""; root = ""; restore(); void load();
+}
 async function mutate(action, payload, identity = actor) {
   if (busy) return;
   busy = true; syncSubmit();
   const version = generation;
-  try { await api(action, payload, true, identity); if (isCurrent(version)) { status.textContent = "반영했습니다."; await load(); } }
+  try { await api(action, payload, true, identity); if (isCurrent(version)) { status.textContent = "반영했습니다."; void load(); } }
   catch (error) { if (isCurrent(version)) status.textContent = error.message; }
   finally { busy = false; syncSubmit(); }
 }
@@ -70,7 +77,11 @@ function postDialog(post, action) {
           : reporting ? { id: post.id, reason: value }
           : action === "delete" ? { id: post.id } : { identityId: post.author_identity_id, enabled: true };
         await api(action, payload, true, identity);
-        if (isCurrent(version)) { status.textContent = "반영했습니다."; void load(); }
+        if (isCurrent(version)) {
+          status.textContent = "반영했습니다.";
+          if (action === "delete" || action === "block") { list.replaceChildren(); visibleUnread.clear(); }
+          void load();
+        }
       } finally { busy = false; syncSubmit(); }
     },
   });
@@ -80,7 +91,7 @@ function card(post) {
   node.className = "thread-card";
   node.id = `thread-${post.id}`;
   const identity = post.viewer_identity_id;
-  node.append(el("strong", `@${post.author.username}`), el("small", `${post.visibility === "followers" ? "팔로워 공개" : "전체 공개"} · ${new Date(post.created_at).toLocaleString()}${post.edited_at ? " · 수정됨" : ""}`));
+  node.append(button(`@${post.author.username} · 게시물 보기`, () => chooseAuthor(post.author_identity_id)), el("small", `${post.visibility === "followers" ? "팔로워 공개" : "전체 공개"} · ${new Date(post.created_at).toLocaleString()}${post.edited_at ? " · 수정됨" : ""}`));
   if (post.parent_id) node.append(el("small", post.reply_to
     ? `@${post.reply_to.author.username}에게 답글: ${post.reply_to.deleted ? "삭제된 내용" : post.reply_to.body}`
     : "열람할 수 없는 글에 대한 답글"));
@@ -131,18 +142,21 @@ async function readShown() {
 async function load(append = false) {
   if (pendingRefresh && append) return;
   const version = ++generation;
+  if (displayedView !== viewKey()) {
+    append = false; list.replaceChildren(); visibleUnread.clear();
+  }
   pendingRefresh = true;
   more.disabled = true;
-  if (!append) { cursor = ""; list.replaceChildren(); visibleUnread.clear(); }
   readVisible.hidden = unreadSelect.hidden = mode !== "notifications";
   readVisible.disabled = true;
   status.textContent = "불러오는 중…";
   composer.hidden = !["feed", "detail"].includes(mode);
-  backToFeed.hidden = mode !== "detail";
+  backToFeed.hidden = mode !== "detail" && !authorFilter && !search.value.startsWith("@");
   try {
     const action = mode === "blocked" || mode === "following-list" ? "relationships" : mode;
-    const data = await api(action, { scope: scopeSelect.value, mode: modeSelect.value, q: search.value, id: root, cursor, unread: unreadSelect.value, kind: mode === "blocked" ? "block" : "follow" });
+    const data = await api(action, { scope: scopeSelect.value, mode: modeSelect.value, q: search.value, authorId: authorFilter, id: root, cursor: append ? cursor : "", unread: unreadSelect.value, kind: mode === "blocked" ? "block" : "follow" });
     if (!isCurrent(version)) return;
+    if (!append) { list.replaceChildren(); visibleUnread.clear(); }
     if (data.post && !append) { root = data.post.id; list.append(card(data.post)); }
     if (data.focused_reply && !append) { list.append(el("strong", "선택한 답글"), card(data.focused_reply)); }
     for (const item of data.items) {
@@ -151,11 +165,13 @@ async function load(append = false) {
         const node = el("article"); node.className = "thread-card";
         const identity = actor;
         node.append(el("strong", `@${item.username} · ${item.display_name}`));
+        node.append(button("게시물 보기", () => chooseAuthor(item.id)));
         if (item.id !== identity) node.append(button(mode === "blocked" ? "이 ID의 차단 해제" : mode === "following-list" ? "팔로우 취소" : "팔로우", () => mutate(mode === "blocked" ? "block" : "follow", { identityId: item.id, enabled: mode === "people" }, identity)));
         list.append(node);
       } else if (!document.getElementById(`thread-${item.id}`)) list.append(card(item));
     }
     cursor = data.next_cursor;
+    displayedView = viewKey(); firstPage = !append;
     more.hidden = !cursor;
     status.textContent = list.childElementCount ? "" : cursor ? "이 구간에 표시할 내용이 없습니다. 더 보기를 눌러 주세요." : "표시할 내용이 없습니다.";
   } catch (error) { if (isCurrent(version)) status.textContent = error.message; }
@@ -174,7 +190,7 @@ async function publish(event) {
   } catch (error) { if (isCurrent(version)) status.textContent = error.message; }
   finally { busy = false; syncSubmit(); }
 }
-function selectMode(value) { persist(); mode = value; parent = ""; root = ""; restore(); void load(); }
+function selectMode(value) { persist(); mode = value; authorFilter = ""; parent = ""; root = ""; restore(); void load(); }
 export function openThreads() {
   if (!state.session?.user) return;
   if (isVisible()) return;
@@ -188,11 +204,11 @@ export function openThreads() {
     const nav = el("div"); nav.className = "thread-toolbar";
     for (const [value, name] of [["feed", "피드"], ["notifications", "알림함"], ["following-list", "팔로잉 관리"], ["blocked", "차단 관리"]]) nav.append(button(name, () => selectMode(value)));
     nav.append(button("새로고침", () => void load()));
-    backToFeed = button("← 피드로 돌아가기", () => selectMode("feed")); backToFeed.hidden = true; nav.append(backToFeed);
+    backToFeed = button("← 전체 피드", () => { search.value = ""; selectMode("feed"); }); backToFeed.hidden = true; nav.append(backToFeed);
     unreadSelect = el("select"); unreadSelect.setAttribute("aria-label", "알림 읽음 필터");
     unreadSelect.append(option("0", "모든 알림"), option("1", "안 읽은 알림만")); unreadSelect.addEventListener("change", () => void load());
     readVisible = button("표시된 알림 읽음", readShown); nav.append(unreadSelect, readVisible);
-    search = el("input"); search.placeholder = "게시물 검색 / 정확한 @사용자명"; search.maxLength = 100; search.setAttribute("aria-label", "스레드 검색");
+    search = el("input"); search.placeholder = "글 내용 / @작성자 검색"; search.maxLength = 100; search.setAttribute("aria-label", "스레드 검색");
     search.addEventListener("keydown", event => {
       if (event.key === "Enter" && !event.isComposing && event.keyCode !== 229) {
         event.preventDefault(); selectMode(mode === "people" ? "people" : "feed");
@@ -216,7 +232,7 @@ export function openThreads() {
     panel.append(filters, nav, composer, status, list, more);
   }
   actor = state.session.active_identity_id; actorSelect.replaceChildren(...identities().map((identity) => option(identity.id, `@${identity.username}`))); actorSelect.value = actor;
-  parent = ""; root = ""; mode = "feed"; restore(); panel.classList.remove("hidden"); void load();
+  parent = ""; root = ""; authorFilter = ""; mode = "feed"; restore(); panel.classList.remove("hidden"); void load();
 }
 export function closeThreads() {
   closeThreadDialog();
@@ -224,7 +240,7 @@ export function closeThreads() {
   persist(); generation++; pendingRefresh = false;
   panel.classList.add("hidden"); list.replaceChildren(); editor.value = ""; draft = null;
 }
-// Refresh only an idle notification inbox; never overwrite an active draft.
-window.setInterval(() => { if (isVisible() && mode === "notifications" && !document.hidden && !pendingRefresh && !busy && !cursor) void load(); }, 20000);
+// Refresh idle first pages so other authors' new posts appear without reopening.
+window.setInterval(() => { if (isVisible() && ["notifications", "feed"].includes(mode) && !document.hidden && !document.querySelector("dialog[open]") && !pendingRefresh && !busy && firstPage && panel.parentElement.scrollTop < 80 && !editor.value.trim()) void load(); }, 20000);
 window.addEventListener("pagehide", flushDrafts);
 document.addEventListener("visibilitychange", () => { if (document.hidden) flushDrafts(); });
