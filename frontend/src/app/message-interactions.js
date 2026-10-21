@@ -196,7 +196,10 @@ function decorateMessageRow(row, bubble, meta, message, { mine = false } = {}) {
   row.appendChild(actionButton);
 }
 
+let composerHeightFrame = 0;
 function syncComposerHeight() {
+  if (composerHeightFrame) cancelAnimationFrame(composerHeightFrame);
+  composerHeightFrame = 0;
   chatMessageInput.style.height = "auto";
   chatMessageInput.style.height = `${Math.min(chatMessageInput.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
 }
@@ -640,7 +643,7 @@ function handleComposerInput() {
   if (state.selectedRoomId && state.composerContext?.mode !== "edit") {
     setChatDraft(state.selectedRoomId, chatMessageInput.value);
   }
-  syncComposerHeight();
+  if (!composerHeightFrame) composerHeightFrame = requestAnimationFrame(syncComposerHeight);
 }
 
 function handleComposerKeydown(event) {

@@ -1,13 +1,13 @@
 <!doctype html>
 <html lang="ko">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
-    <meta name="theme-color" content="#ffffff" />
-    <title>Colorless</title>
-    <link rel="preload" href="assets/fonts/The%20Jamsil%203%20Regular.woff2?v=4e887c501a6c" as="font" type="font/woff2" crossorigin />
-    <script defer src="assets/js/main.js?v=3f9a4695e5ac"></script>
-    <style>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+<meta name="theme-color" content="#ffffff" />
+<title>Colorless</title>
+<link rel="preload" href="assets/fonts/The%20Jamsil%203%20Regular.woff2?v=4e887c501a6c" as="font" type="font/woff2" crossorigin />
+<script defer src="assets/js/main.js?v=272000088f1a"></script>
+<style>
   @font-face {
     font-family: "The Jamsil";
     font-style: normal;
@@ -753,518 +753,518 @@
     }
   }
 </style>
-    <link rel="stylesheet" href="assets/css/ticket-hub.css?v=f0ee332dc78e" />
-  </head>
-  <body>
-    <section class="auth-shell hidden" id="auth-screen">
-      <div class="auth-header">
-        <div>
-          <h1>Colorless</h1>
-          <p>채팅의 본질을 되찾다</p>
-        </div>
-      </div>
+<link rel="stylesheet" href="assets/css/ticket-hub.css?v=f0ee332dc78e" />
+</head>
+<body>
+<section class="auth-shell hidden" id="auth-screen">
+<div class="auth-header">
+<div>
+<h1>Colorless</h1>
+<p>채팅의 본질을 되찾다</p>
+</div>
+</div>
 
-      <div class="auth-scroll">
-        <div class="provider-card">
-          <h2>SNS 로그인</h2>
-          <p class="provider-copy">구글과 카카오 계정으로 로그인할 수 있어요.</p>
-          <div class="provider-stack">
-            <button type="button" class="provider-button google" id="google-login-button" aria-label="구글로 계속하기">구글로 계속하기</button>
-            <button type="button" class="provider-button kakao" id="kakao-login-button" aria-label="카카오로 계속하기">카카오로 계속하기</button>
-            <button type="button" class="provider-button demo" id="demo-login-button" aria-label="개발용 SNS 체험 로그인">개발용 SNS 체험 로그인</button>
-          </div>
-          <p class="provider-status" id="provider-status">SNS 로그인 설정을 확인하고 있어요.</p>
-        </div>
+<div class="auth-scroll">
+<div class="provider-card">
+<h2>SNS 로그인</h2>
+<p class="provider-copy">구글과 카카오 계정으로 로그인할 수 있어요.</p>
+<div class="provider-stack">
+<button type="button" class="provider-button google" id="google-login-button" aria-label="구글로 계속하기">구글로 계속하기</button>
+<button type="button" class="provider-button kakao" id="kakao-login-button" aria-label="카카오로 계속하기">카카오로 계속하기</button>
+<button type="button" class="provider-button demo" id="demo-login-button" aria-label="개발용 SNS 체험 로그인">개발용 SNS 체험 로그인</button>
+</div>
+<p class="provider-status" id="provider-status">SNS 로그인 설정을 확인하고 있어요.</p>
+</div>
 
-        <div class="auth-card" id="login-card">
-          <h2>기존 비밀번호 계정</h2>
-          <p class="auth-note">기존 계정으로 로그인할 수 있어요.</p>
-          <form id="login-form">
-            <div class="field">
-              <label for="login-username">사용자 이름</label>
-              <input id="login-username" maxlength="24" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required />
-            </div>
-            <div class="field">
-              <label for="login-password">비밀번호</label>
-              <input id="login-password" type="password" maxlength="40" autocomplete="current-password" required />
-            </div>
-            <button type="submit" id="login-submit-button">로그인하기</button>
-          </form>
-        </div>
+<div class="auth-card" id="login-card">
+<h2>기존 비밀번호 계정</h2>
+<p class="auth-note">기존 계정으로 로그인할 수 있어요.</p>
+<form id="login-form">
+<div class="field">
+<label for="login-username">사용자 이름</label>
+<input id="login-username" maxlength="24" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required />
+</div>
+<div class="field">
+<label for="login-password">비밀번호</label>
+<input id="login-password" type="password" maxlength="40" autocomplete="current-password" required />
+</div>
+<button type="submit" id="login-submit-button">로그인하기</button>
+</form>
+</div>
 
-        <div class="signup-banner" id="signup-banner">
-          <div>
-            <strong>비밀번호 계정도 필요하신가요?</strong>
-            <span>휴대폰 인증 기반 가입을 열 수 있어요.</span>
-          </div>
-          <a class="signup-link" href="/signup">회원가입</a>
-        </div>
+<div class="signup-banner" id="signup-banner">
+<div>
+<strong>비밀번호 계정도 필요하신가요?</strong>
+<span>휴대폰 인증 기반 가입을 열 수 있어요.</span>
+</div>
+<a class="signup-link" href="/signup">회원가입</a>
+</div>
 
-        <p class="auth-status" id="auth-status">SNS 로그인 또는 기존 계정 로그인을 선택해 주세요.</p>
-      </div>
-    </section>
+<p class="auth-status" id="auth-status">SNS 로그인 또는 기존 계정 로그인을 선택해 주세요.</p>
+</div>
+</section>
 
-    <main class="app hidden" id="app-screen" aria-label="메신저">
-      <header class="app-header">
-        <div class="app-header-main">
-          <h1 id="app-title">채팅</h1>
-          <div class="header-search hidden" id="header-search">
-            <input id="header-search-input" type="search" autocomplete="off" aria-label="목록 검색" />
-            <button type="button" id="close-list-search-button" data-icon="x" data-icon-only aria-label="검색 닫기">검색 닫기</button>
-          </div>
-        </div>
-        <div class="app-actions">
-          <button type="button" id="open-login-button">로그인</button>
-          <button type="button" class="friend-add-button" id="open-list-search-button" data-icon="search" data-icon-only aria-label="검색">검색</button>
-          <button type="button" class="friend-add-button" id="open-new-chat-button" data-icon="message-plus" data-icon-only aria-label="새 채팅">새 채팅</button>
-          <button type="button" class="friend-add-button" id="open-directory-button" data-icon="user-plus" data-icon-only aria-label="친구 추가">친구 추가</button>
-        </div>
-      </header>
+<main class="app hidden" id="app-screen" aria-label="메신저">
+<header class="app-header">
+<div class="app-header-main">
+<h1 id="app-title">채팅</h1>
+<div class="header-search hidden" id="header-search">
+<input id="header-search-input" type="search" autocomplete="off" aria-label="목록 검색" />
+<button type="button" id="close-list-search-button" data-icon="x" data-icon-only aria-label="검색 닫기">검색 닫기</button>
+</div>
+</div>
+<div class="app-actions">
+<button type="button" id="open-login-button">로그인</button>
+<button type="button" class="friend-add-button" id="open-list-search-button" data-icon="search" data-icon-only aria-label="검색">검색</button>
+<button type="button" class="friend-add-button" id="open-new-chat-button" data-icon="message-plus" data-icon-only aria-label="새 채팅">새 채팅</button>
+<button type="button" class="friend-add-button" id="open-directory-button" data-icon="user-plus" data-icon-only aria-label="친구 추가">친구 추가</button>
+</div>
+</header>
 
-      <section class="list-content">
-        <section class="thread-panel hidden" id="threads-panel" aria-label="스레드"></section>
-        <div class="chat-list" id="chat-list"></div>
-        <div class="friend-list hidden" id="friend-list"></div>
-        <section class="my-view hidden" id="my-view" aria-label="MY">
-          <div class="my-card">
-            <div class="my-profile-summary">
-              <div class="my-profile-avatar" id="my-profile-avatar"></div>
-              <div class="my-profile-copy">
-                <strong id="my-display-name"></strong>
-                <span id="my-friend-code"></span>
-              </div>
-            </div>
-            <div class="identity-panel" aria-labelledby="identity-panel-title">
-              <strong id="identity-panel-title">활동 ID</strong>
-              <p class="identity-panel-copy" id="account-identifier"></p>
-              <label class="sr-only" for="identity-switcher">현재 활동 ID</label>
-              <div class="identity-switch-row"><select id="identity-switcher" aria-label="현재 활동 ID"></select><button type="button" class="secondary-button identity-add-button" id="open-identity-create-button" aria-label="활동 ID 추가">+</button></div>
-              <p class="identity-form-status" id="identity-form-status" role="status" aria-live="polite"></p>
-            </div>
-            <div class="my-status-row">
-              <div class="my-status-copy">
-                <strong>활동 이모티콘</strong>
-                <span>누르면 현재 감정을 변경할 수 있어요.</span>
-              </div>
-              <button type="button" class="header-status-button" id="open-status-emoji-button" aria-label="현재 상태">🙂</button>
-            </div>
-            <div class="my-work-mode-row">
-              <div class="my-work-mode-copy">
-                <strong>Work mode</strong>
-                <span>새 메시지만 크게 보고 키보드로 바로 답장합니다. Alt+W로 전환할 수 있어요.</span>
-              </div>
-              <button type="button" class="secondary-button my-work-mode-toggle" id="work-mode-toggle" aria-pressed="false">켜기</button>
-            </div>
-            <div class="my-actions">
-              <button type="button" class="secondary-button" id="open-ticket-transfer-button">⚾ 야구 티켓 양도</button>
-              <button type="button" class="secondary-button hidden" id="open-ticket-admin-button">⚙ 티켓 관리자</button>
-              <button type="button" class="secondary-button" id="open-profile-button" data-icon="user" aria-label="개인정보 수정">개인정보 수정</button>
-              <button type="button" id="logout-button" data-icon="log-out" aria-label="로그아웃">로그아웃</button>
-            </div>
-          </div>
-        </section>
-      </section>
-      <div class="sheet-backdrop hidden" id="identity-create-modal" role="dialog" aria-modal="true" aria-labelledby="identity-create-title">
-        <section class="user-sheet">
-          <header class="sheet-header"><h2 id="identity-create-title">새 활동 ID</h2><button type="button" class="sheet-close" id="close-identity-create-button">닫기</button></header>
-          <form class="identity-create-form sheet-content" id="identity-create-form">
-            <label for="identity-display-name">이름</label><input id="identity-display-name" maxlength="24" autocomplete="nickname" placeholder="표시할 이름" required />
-            <label for="identity-username">ID</label><input id="identity-username" maxlength="24" autocomplete="off" placeholder="사용할 ID" required />
-            <button type="submit" id="identity-create-button">만들기</button>
-            <p class="identity-form-status" id="identity-create-status" role="status" aria-live="polite"></p>
-          </form>
-        </section>
-      </div>
-      <section class="ticket-transfer-screen hidden" id="ticket-transfer-screen" aria-label="야구 티켓 양도" aria-hidden="true">
-        <header class="ticket-header">
-          <button type="button" class="ticket-header-button" id="close-ticket-transfer-button" aria-label="티켓 양도 닫기">←</button>
-          <div class="ticket-header-copy">
-            <h2>야구 티켓 양도</h2>
-            <span id="ticket-identity-label">야구 전용 ID를 선택해 주세요.</span>
-          </div>
-          <button type="button" class="ticket-header-button" id="refresh-ticket-transfer-button" aria-label="새로고침">↻</button>
-        </header>
-        <div class="ticket-transfer-body">
-          <section class="ticket-identity-setup" id="ticket-identity-setup">
-            <h3>야구 전용 ID 선택</h3>
-            <p>계정당 활동 ID 한 개만 선택할 수 있으며, 선택 후에는 다른 ID로 변경할 수 없습니다. 티켓 게시와 대화는 이 ID로만 이용합니다.</p>
-            <select id="ticket-identity-select" aria-label="야구 전용 활동 ID"></select>
-            <button type="button" id="designate-ticket-identity-button">이 ID를 야구 전용으로 선택</button>
-            <p class="ticket-status" id="ticket-identity-status" role="status" aria-live="polite"></p>
-          </section>
-          <section class="hidden" id="ticket-transfer-content">
-            <p class="ticket-status" id="ticket-screen-status" role="status" aria-live="polite"></p>
-            <section class="ticket-pane" data-ticket-pane="home">
-              <div class="ticket-pane-heading">
-                <h3>현재 양도 티켓</h3>
-                <button type="button" class="secondary-button" id="open-ticket-search-button" aria-expanded="false" aria-controls="ticket-listing-filters">⌕ 검색</button>
-              </div>
-              <form class="ticket-filters hidden" id="ticket-listing-filters" aria-label="양도 티켓 검색">
-                <div class="ticket-popup-header"><h3>티켓 검색</h3><button type="button" class="secondary-button" id="close-ticket-search-button" aria-label="검색 닫기">×</button></div>
-                <div class="ticket-filter-grid">
-                  <div class="ticket-filter-field"><label for="ticket-filter-date">날짜</label><input type="date" id="ticket-filter-date" /></div>
-                  <div class="ticket-filter-field"><label for="ticket-filter-stadium">경기장</label><select id="ticket-filter-stadium"><option value="">전체 경기장</option></select></div>
-                  <div class="ticket-filter-field"><label for="ticket-filter-seat">좌석 등급 (2026 기준)</label><select id="ticket-filter-seat" disabled><option value="">경기장을 먼저 선택</option></select></div>
-                  <div class="ticket-pane-heading-actions"><button type="button" class="secondary-button ticket-filter-reset" id="reset-ticket-filters">초기화</button><button type="submit" class="ticket-filter-reset">조건 적용</button></div>
-                </div>
-                <p class="ticket-filter-status" id="ticket-filter-status" role="status" aria-live="polite"></p>
-              </form>
-              <div class="ticket-list" id="ticket-listings"></div>
-            </section>
-            <section class="ticket-pane ticket-pane-popup hidden" data-ticket-pane="seller">
-              <div class="ticket-popup-header"><h3>판매자</h3><div class="ticket-pane-heading-actions"><button type="button" id="open-ticket-form-button">티켓 올리기</button><button type="button" class="secondary-button" data-ticket-close-popup aria-label="판매자 창 닫기">×</button></div></div>
-              <section class="ticket-access-panel hidden" id="ticket-access-panel">
-                <strong id="ticket-access-title"></strong>
-                <p id="ticket-access-copy"></p>
-                <div class="ticket-access-actions" id="ticket-access-actions"></div>
-              </section>
-              <form class="ticket-form ticket-form-popup hidden" id="ticket-listing-form">
-                <div class="ticket-popup-header"><h3>티켓 판매 등록</h3><button type="button" class="secondary-button" id="cancel-ticket-form-button" aria-label="판매 등록 닫기">×</button></div>
-                <div class="ticket-form-grid">
-                  <div class="ticket-field"><label for="ticket-game-date">경기 날짜</label><input type="date" id="ticket-game-date" required /></div>
-                  <div class="ticket-field"><label for="ticket-stadium">야구장</label><select id="ticket-stadium" required></select></div>
-                  <div class="ticket-field"><label for="ticket-home-team">홈 팀</label><input id="ticket-home-team" readonly /></div>
-                  <div class="ticket-field"><label for="ticket-away-team">상대 팀</label><select id="ticket-away-team" required></select></div>
-                  <div class="ticket-field" id="ticket-seat-grade-select-field"><label for="ticket-seat-grade-select">좌석 등급 (2026 기준)</label><select id="ticket-seat-grade-select"></select></div>
-                  <div class="ticket-field hidden" id="ticket-seat-grade-input-field"><label for="ticket-seat-grade-input">좌석 등급 (2026 기준)</label><input id="ticket-seat-grade-input" maxlength="80" placeholder="좌석 등급을 입력해 주세요" /></div>
-                  <div class="ticket-field"><label for="ticket-seat-detail">구역·열</label><input id="ticket-seat-detail" maxlength="120" placeholder="예: 107블록 8열 12번" required /></div>
-                  <div class="ticket-field"><label for="ticket-purchase-price">실제 구매가·1장 (원)</label><input type="number" id="ticket-purchase-price" min="0" max="10000000" step="1000" required /></div>
-                  <div class="ticket-field"><label for="ticket-unit-price">판매가·1장 (원)</label><input type="number" id="ticket-unit-price" min="0" max="10000000" step="1000" required /></div>
-                  <div class="ticket-field"><label for="ticket-quantity">티켓 수량</label><input type="number" id="ticket-quantity" min="1" max="20" value="1" required /></div>
-                  <div class="ticket-field ticket-field-wide"><label for="ticket-delivery-method">수령 방식</label><select id="ticket-delivery-method" required></select></div>
-                  <p class="ticket-price-note ticket-field-wide">구매가는 정가가 아니라 실제 결제한 금액입니다. 취소표 대기 수수료 등 실제 결제 비용이 포함될 수 있지만, 판매가는 이 구매가를 초과할 수 없습니다.</p>
-                  <div class="ticket-field ticket-field-wide"><label for="ticket-description">추가 설명 (선택)</label><textarea id="ticket-description" maxlength="500" placeholder="양도 조건이나 참고사항을 입력해 주세요."></textarea></div>
-                </div>
-                <div class="ticket-form-actions"><button type="button" class="secondary-button" data-ticket-cancel-form>취소</button><button type="submit" id="submit-ticket-form-button">등록</button></div>
-                <p class="ticket-status" id="ticket-form-status" role="status" aria-live="polite"></p>
-              </form>
-              <div class="ticket-list" id="ticket-selling"></div>
-            </section>
-            <section class="ticket-pane ticket-pane-popup hidden" data-ticket-pane="buyer">
-              <div class="ticket-popup-header"><h3>구매자</h3><button type="button" class="secondary-button" data-ticket-close-popup aria-label="구매자 창 닫기">×</button></div>
-              <section class="ticket-subsection"><h4>참여한 오픈채팅</h4><div class="ticket-list" id="ticket-buying"></div></section>
-              <section class="ticket-subsection"><h4>1:1 거래</h4><div class="ticket-list" id="ticket-deals"></div></section>
-            </section>
-            <section class="ticket-pane ticket-pane-popup hidden" data-ticket-pane="chats"><div class="ticket-popup-header"><h3>티켓 채팅</h3><button type="button" class="secondary-button" data-ticket-close-popup aria-label="채팅 창 닫기">×</button></div><div class="ticket-list" id="ticket-chats"></div></section>
-            <section class="ticket-pane ticket-pane-popup hidden" data-ticket-pane="guide">
-              <div class="ticket-popup-header"><h3>이용 설명</h3><button type="button" class="secondary-button" data-ticket-close-popup aria-label="설명 창 닫기">×</button></div>
-              <div class="ticket-guide-list">
-                <article><strong>구매하기</strong><p>홈에서 티켓을 고르고 필요한 수량을 입력하면 오픈채팅에 참여할 수 있습니다. 신청만 취소하면 대화는 유지되고, 채팅에서 나가도 작성한 메시지는 다른 참여자에게 그대로 남습니다.</p></article>
-                <article><strong>판매하기</strong><p>판매자 메뉴에서 티켓을 등록하고 신청자별 희망 수량을 확인할 수 있습니다. 판매가는 실제 구매가를 넘을 수 없습니다.</p></article>
-                <article><strong>보관 기간</strong><p>게시글과 오픈채팅, 1:1 거래 채팅은 경기일로부터 7일이 끝난 뒤 메시지와 함께 영구 삭제됩니다.</p></article>
-                <article><strong>신고와 문의</strong><p>사기·허위 판매 또는 구매가 초과 판매는 게시글에서 신고할 수 있습니다. 정지나 검증 관련 문의는 관리자 채팅을 이용해 주세요.</p></article>
-              </div>
-            </section>
-            <section class="ticket-pane ticket-pane-popup hidden" data-ticket-pane="moderation"><div class="ticket-popup-header"><h3>티켓 관리자</h3><button type="button" class="secondary-button" data-ticket-close-popup aria-label="관리자 창 닫기">×</button></div><p class="ticket-price-note">관리자 전용 화면입니다. 판매글별 손그림 서명, 레드체크 요청, 신고와 정지 계정을 확인하고 처리할 수 있습니다.</p><div class="ticket-list" id="ticket-moderation"></div></section>
-            <nav class="ticket-tabs" aria-label="티켓 양도 메뉴">
-              <button type="button" class="ticket-tab active" data-ticket-tab="home"><span>⌂</span>홈</button>
-              <button type="button" class="ticket-tab" data-ticket-tab="seller"><span>＋</span>판매자</button>
-              <button type="button" class="ticket-tab" data-ticket-tab="buyer"><span>⌁</span>구매자</button>
-              <button type="button" class="ticket-tab" data-ticket-tab="chats"><span>◌</span>채팅</button>
-              <button type="button" class="ticket-tab" data-ticket-tab="guide"><span>?</span>설명</button>
-              <button type="button" class="ticket-tab hidden" id="ticket-moderation-tab" data-ticket-tab="moderation"><span>⚙</span>관리자</button>
-            </nav>
-          </section>
-        </div>
-        <div class="sheet-backdrop ticket-modal hidden" id="ticket-agreement-modal" role="dialog" aria-modal="true" aria-labelledby="ticket-agreement-title">
-          <section class="user-sheet">
-            <header class="sheet-header"><h2 id="ticket-agreement-title">티켓 판매 규정 서명</h2><button type="button" class="sheet-close" id="close-ticket-agreement-button">닫기</button></header>
-            <form class="ticket-modal-content" id="ticket-agreement-form">
-              <p>이 판매글을 등록하려면 아래에 직접 서명해야 합니다. 관련 법령과 입장권 부정판매 방지 취지에 따라 실제 구매가를 초과하는 가격으로 티켓을 판매할 수 없습니다.</p>
-              <ul><li>판매가는 판매자가 실제 결제한 구매가 이하여야 합니다.</li><li>구매가는 정가와 다를 수 있으며 취소표 대기 수수료 등 실제 결제 비용이 포함될 수 있습니다.</li><li>허위 구매가 입력, 사기 및 허위 판매 신고가 접수되면 티켓 기능이 즉시 정지되며 관리자에게 소명해야 합니다.</li></ul>
-              <label for="ticket-agreement-signature">손그림 서명</label><canvas class="ticket-signature-pad" id="ticket-agreement-signature" width="1040" height="320" tabindex="0" aria-label="손그림 서명란"></canvas>
-              <div class="ticket-signature-actions"><button type="button" class="secondary-button" id="clear-ticket-agreement-signature">다시 그리기</button></div>
-              <label class="ticket-policy-confirm"><input type="checkbox" id="ticket-agreement-confirm" required /><span>위 내용을 확인했고 구매가를 초과해 판매하지 않겠습니다. 이 판매글의 서명 기록이 관리자에게 저장되는 것에 동의합니다.</span></label>
-              <button type="submit" id="submit-ticket-agreement-button">서명하고 판매글 등록</button>
-              <p class="ticket-status" id="ticket-agreement-status" role="status" aria-live="polite"></p>
-            </form>
-          </section>
-        </div>
-        <div class="sheet-backdrop ticket-modal hidden" id="ticket-interest-modal" role="dialog" aria-modal="true" aria-labelledby="ticket-interest-title">
-          <section class="user-sheet">
-            <header class="sheet-header"><h2 id="ticket-interest-title">오픈채팅 신청</h2><button type="button" class="sheet-close" id="close-ticket-interest-button">닫기</button></header>
-            <form class="ticket-modal-content" id="ticket-interest-form">
-              <p id="ticket-interest-summary"></p>
-              <div class="ticket-field"><label for="ticket-interest-quantity">필요한 티켓 수량</label><input type="number" id="ticket-interest-quantity" min="1" max="20" value="1" required /></div>
-              <p>희망 수량은 판매자 화면에 표시됩니다. 수량을 선택해야 오픈채팅에 들어갈 수 있습니다.</p>
-              <button type="submit" id="submit-ticket-interest-button">신청하고 오픈채팅 들어가기</button>
-              <p class="ticket-status" id="ticket-interest-status" role="status" aria-live="polite"></p>
-            </form>
-          </section>
-        </div>
-        <div class="sheet-backdrop ticket-modal hidden" id="ticket-report-modal" role="dialog" aria-modal="true" aria-labelledby="ticket-report-title">
-          <section class="user-sheet">
-            <header class="sheet-header"><h2 id="ticket-report-title">티켓 신고하기</h2><button type="button" class="sheet-close" id="close-ticket-report-button">닫기</button></header>
-            <form class="ticket-modal-content" id="ticket-report-form">
-              <label for="ticket-report-reason">신고 유형</label><select id="ticket-report-reason" required></select>
-              <p class="ticket-price-note" id="ticket-report-price-notice"></p>
-              <label for="ticket-report-description">신고 내용</label><textarea id="ticket-report-description" maxlength="500" placeholder="확인할 수 있는 내용을 구체적으로 적어 주세요."></textarea>
-              <p>신고가 접수되면 피신고 판매자의 티켓 판매 기능과 게시물이 즉시 정지됩니다. 허위 신고는 금지됩니다.</p>
-              <button type="submit" id="submit-ticket-report-button">신고 접수</button>
-              <p class="ticket-status" id="ticket-report-status" role="status" aria-live="polite"></p>
-            </form>
-          </section>
-        </div>
-      </section>
-      <p class="tab-status hidden" id="app-status" role="status" aria-live="polite"></p>
-      <aside class="context-action-bar" id="context-action-bar" aria-label="컨텍스트 작업">
-        <span class="context-action-label">최근 대화</span>
-        <div class="context-action-list" id="context-action-list"></div>
-        <button class="context-action-primary" id="context-action-primary" type="button" data-icon="message-circle" data-icon-only aria-label="채팅 시작" disabled>채팅 시작</button>
-        <p class="context-action-feedback" id="context-action-feedback" aria-live="polite"></p>
-      </aside>
-      <section class="desktop-chat-empty" aria-hidden="true">
-        <strong>대화를 선택하세요</strong>
-        <p>왼쪽 목록에서 채팅방을 열면<br />여기에서 대화를 이어갈 수 있어요.</p>
-      </section>
-      <section class="chat-room hidden" id="chat-room" aria-label="chat">
-        <header class="chat-room-header">
-          <button type="button" class="chat-room-back" id="close-chat-room" data-icon="arrow-left" data-icon-only aria-label="채팅방 닫기">뒤로</button>
-          <span id="chat-room-avatar"></span>
-          <div class="chat-room-title">
-            <strong id="chat-room-name"></strong>
-            <span class="chat-presence" id="chat-room-presence"></span>
-          </div>
-          <button type="button" class="chat-room-settings-button hidden" id="open-room-settings-button" data-icon="settings" data-icon-only aria-label="채팅방 설정">설정</button>
-        </header>
-        <div class="chat-message-list" id="chat-message-list" role="log" aria-live="polite" aria-relevant="additions" aria-busy="false"></div>
-        <div class="chat-attachment-preview hidden" id="chat-attachment-preview">
-          <span class="chat-attachment-name" id="chat-attachment-name" role="status" aria-live="polite"></span>
-          <audio class="chat-voice-preview hidden" id="chat-voice-preview" controls preload="metadata" controlslist="nodownload noplaybackrate"></audio>
-          <button class="chat-attachment-remove" id="chat-attachment-remove" type="button" data-icon="x" data-icon-only aria-label="첨부 취소">첨부 취소</button>
-        </div>
-        <div class="chat-attachment-tray hidden" id="chat-attachment-tray" aria-label="Attachment options">
-          <div class="chat-attachment-options">
-            <button class="chat-attachment-option" type="button" data-attachment-kind="photo">Photo</button>
-            <button class="chat-attachment-option" type="button" data-attachment-kind="pdf">PDF</button>
-            <button class="chat-attachment-option" type="button" data-attachment-kind="file">File</button>
-            <button class="chat-attachment-option" type="button" data-attachment-kind="camera">Camera<br>soon</button>
-            <button class="chat-attachment-option" type="button" data-attachment-kind="photo"><span>▣</span><strong>사진</strong></button>
-            <button class="chat-attachment-option" type="button" data-attachment-kind="pdf"><span>PDF</span><strong>PDF</strong></button>
-            <button class="chat-attachment-option" type="button" data-attachment-kind="file"><span>···</span><strong>파일</strong></button>
-          </div>
-          <button class="chat-attachment-puck" id="chat-attachment-puck" type="button" aria-label="Drag to choose attachment">+</button>
-        </div>
-        <div class="chat-attachment-guide hidden" id="chat-attachment-guide" aria-hidden="true">
-          <svg viewBox="0 0 240 240" width="240" height="240">
-            <path class="attachment-guide-sector" data-kind="photo" d="M 0 240 L 0 0 A 240 240 0 0 1 74.2 11.7 Z" />
-            <path class="attachment-guide-sector" data-kind="pdf" d="M 0 240 L 74.2 11.7 A 240 240 0 0 1 141.1 45.8 Z" />
-            <path class="attachment-guide-sector" data-kind="voice" d="M 0 240 L 141.1 45.8 A 240 240 0 0 1 194.2 98.9 Z" />
-            <path class="attachment-guide-sector" data-kind="file" d="M 0 240 L 194.2 98.9 A 240 240 0 0 1 228.3 165.8 Z" />
-            <path class="attachment-guide-sector" data-kind="camera" d="M 0 240 L 228.3 165.8 A 240 240 0 0 1 240 240 Z" />
-          </svg>
-          <label class="attachment-guide-label" data-kind="photo" for="chat-attachment-input">사진</label>
-          <label class="attachment-guide-label" data-kind="pdf" for="chat-attachment-input">PDF</label>
-          <button class="attachment-guide-label" data-kind="voice" type="button" data-icon="mic" aria-label="음성 녹음">음성</button>
-          <label class="attachment-guide-label" data-kind="file" for="chat-attachment-input">파일</label>
-          <span class="attachment-guide-label" data-kind="camera">카메라</span>
-        </div>
-        <button type="button" class="chat-new-messages hidden" id="chat-new-messages-button">새 메시지</button>
-        <div class="chat-composer-context hidden" id="chat-composer-context">
-          <div class="chat-composer-context-copy">
-            <strong id="chat-composer-context-title"></strong>
-            <span id="chat-composer-context-copy"></span>
-          </div>
-          <button type="button" id="cancel-chat-composer-context" data-icon="x" data-icon-only aria-label="답장 또는 수정 취소">취소</button>
-        </div>
-        <form class="chat-message-form" id="chat-message-form">
-          <input class="chat-attachment-input" id="chat-attachment-input" type="file" accept="image/*,application/pdf,.txt,.csv,.md,.rtf,.zip,.doc,.xls,.ppt,.docx,.xlsx,.pptx" />
-          <button class="chat-attachment-button" id="chat-attachment-button" type="button" data-icon="paperclip" data-icon-only aria-label="첨부 메뉴 열기" aria-expanded="false">첨부</button>
-          <textarea id="chat-message-input" rows="1" maxlength="300" autocomplete="off" enterkeyhint="send" aria-label="메시지 입력" placeholder="메시지 입력"></textarea>
-          <button type="submit" data-icon="send" data-icon-only aria-label="메시지 보내기">보내기</button>
-        </form>
-        <div class="message-read-menu hidden" id="message-read-menu" role="status" aria-live="polite" aria-hidden="true">
-          <strong id="message-read-menu-title">읽음 상태</strong>
-          <p id="message-read-menu-copy"></p>
-        </div>
-        <div class="sheet-backdrop message-action-backdrop hidden" id="message-action-dialog" role="dialog" aria-modal="true" aria-labelledby="message-action-title" aria-describedby="message-action-summary"><section class="user-sheet message-action-sheet"><header class="sheet-header"><h2 id="message-action-title">메시지 작업</h2><button type="button" class="sheet-close" id="close-message-action-button">닫기</button></header><p class="message-action-summary" id="message-action-summary"></p><div class="message-action-reactions" id="message-action-reactions" aria-label="빠른 반응"><button type="button" data-message-reaction="👍" aria-label="좋아요 반응">👍</button><button type="button" data-message-reaction="❤️" aria-label="하트 반응">❤️</button><button type="button" data-message-reaction="😂" aria-label="웃음 반응">😂</button><button type="button" data-message-reaction="😮" aria-label="놀람 반응">😮</button><button type="button" data-message-reaction="😢" aria-label="슬픔 반응">😢</button><button type="button" data-message-reaction="🙏" aria-label="감사 반응">🙏</button></div><div class="message-action-list"><button type="button" data-message-action="reply">답장</button><button type="button" data-message-action="copy">복사</button><button type="button" data-message-action="edit">수정</button><button type="button" data-message-action="read">읽음 정보</button><button type="button" data-message-action="retry">다시 보내기</button><button type="button" class="message-action-delete" data-message-action="delete">삭제</button><p class="message-action-status" id="message-action-status" role="status" aria-live="polite"></p></div></section></div>
-        <div class="sheet-backdrop room-settings-backdrop hidden" id="room-settings-sheet" role="dialog" aria-modal="true" aria-labelledby="room-settings-title">
-          <section class="user-sheet room-settings-sheet">
-            <header class="sheet-header">
-              <h2 id="room-settings-title">채팅방 설정</h2>
-              <button type="button" class="sheet-close" id="close-room-settings-button">닫기</button>
-            </header>
-            <div class="room-settings-content">
-              <section class="room-settings-photo" aria-labelledby="room-settings-photo-title">
-                <div class="room-settings-photo-preview" id="room-settings-photo-preview"></div>
-                <div>
-                  <strong id="room-settings-photo-title">채팅방 사진</strong>
-                  <p class="room-settings-photo-copy">선택한 사진은 기기에서 정사각형으로 조정한 뒤 1024×1024 WebP로 저장합니다.</p>
-                  <div class="room-settings-photo-actions">
-                    <button type="button" class="secondary-button" id="select-room-photo-button">사진 선택</button>
-                    <button type="button" class="secondary-button" id="remove-room-photo-button">사진 삭제</button>
-                  </div>
-                  <input type="file" id="room-photo-input" accept="image/jpeg,image/png,image/webp,image/avif,image/heic,image/heif" hidden />
-                </div>
-              </section>
-              <div class="field">
-                <label for="room-settings-name">채팅방 이름</label>
-                <input id="room-settings-name" maxlength="32" autocomplete="off" />
-              </div>
-              <button type="button" id="save-room-settings-button">변경사항 저장</button>
-              <p class="room-settings-owner-help" id="room-settings-owner-help"></p>
-              <section class="room-settings-danger" aria-label="채팅방 나가기">
-                <strong>채팅방 나가기</strong>
-                <p>나가면 이 채팅방의 메시지와 첨부 파일에 더 이상 접근할 수 없습니다.</p>
-                <button type="button" class="room-leave-button" id="leave-room-button">채팅방 나가기</button>
-              </section>
-            </div>
-          </section>
-        </div>
-      </section>
-      <nav class="list-tabs" aria-label="메신저 탭">
-        <button type="button" class="active" id="chats-tab" data-icon="message-circle" aria-label="채팅">채팅</button>
-        <button type="button" id="friends-tab" data-icon="users" aria-label="친구">친구</button>
-        <button type="button" id="threads-tab" data-icon="message-plus" aria-label="스레드">스레드</button>
-        <button type="button" id="my-tab" data-icon="user" aria-label="MY">MY</button>
-      </nav>
+<section class="list-content">
+<section class="thread-panel hidden" id="threads-panel" aria-label="스레드"></section>
+<div class="chat-list" id="chat-list"></div>
+<div class="friend-list hidden" id="friend-list"></div>
+<section class="my-view hidden" id="my-view" aria-label="MY">
+<div class="my-card">
+<div class="my-profile-summary">
+<div class="my-profile-avatar" id="my-profile-avatar"></div>
+<div class="my-profile-copy">
+<strong id="my-display-name"></strong>
+<span id="my-friend-code"></span>
+</div>
+</div>
+<div class="identity-panel" aria-labelledby="identity-panel-title">
+<strong id="identity-panel-title">활동 ID</strong>
+<p class="identity-panel-copy" id="account-identifier"></p>
+<label class="sr-only" for="identity-switcher">현재 활동 ID</label>
+<div class="identity-switch-row"><select id="identity-switcher" aria-label="현재 활동 ID"></select><button type="button" class="secondary-button identity-add-button" id="open-identity-create-button" aria-label="활동 ID 추가">+</button></div>
+<p class="identity-form-status" id="identity-form-status" role="status" aria-live="polite"></p>
+</div>
+<div class="my-status-row">
+<div class="my-status-copy">
+<strong>활동 이모티콘</strong>
+<span>누르면 현재 감정을 변경할 수 있어요.</span>
+</div>
+<button type="button" class="header-status-button" id="open-status-emoji-button" aria-label="현재 상태">🙂</button>
+</div>
+<div class="my-work-mode-row">
+<div class="my-work-mode-copy">
+<strong>Work mode</strong>
+<span>새 메시지만 크게 보고 키보드로 바로 답장합니다. Alt+W로 전환할 수 있어요.</span>
+</div>
+<button type="button" class="secondary-button my-work-mode-toggle" id="work-mode-toggle" aria-pressed="false">켜기</button>
+</div>
+<div class="my-actions">
+<button type="button" class="secondary-button" id="open-ticket-transfer-button">⚾ 야구 티켓 양도</button>
+<button type="button" class="secondary-button hidden" id="open-ticket-admin-button">⚙ 티켓 관리자</button>
+<button type="button" class="secondary-button" id="open-profile-button" data-icon="user" aria-label="개인정보 수정">개인정보 수정</button>
+<button type="button" id="logout-button" data-icon="log-out" aria-label="로그아웃">로그아웃</button>
+</div>
+</div>
+</section>
+</section>
+<div class="sheet-backdrop hidden" id="identity-create-modal" role="dialog" aria-modal="true" aria-labelledby="identity-create-title">
+<section class="user-sheet">
+<header class="sheet-header"><h2 id="identity-create-title">새 활동 ID</h2><button type="button" class="sheet-close" id="close-identity-create-button">닫기</button></header>
+<form class="identity-create-form sheet-content" id="identity-create-form">
+<label for="identity-display-name">이름</label><input id="identity-display-name" maxlength="24" autocomplete="nickname" placeholder="표시할 이름" required />
+<label for="identity-username">ID</label><input id="identity-username" maxlength="24" autocomplete="off" placeholder="사용할 ID" required />
+<button type="submit" id="identity-create-button">만들기</button>
+<p class="identity-form-status" id="identity-create-status" role="status" aria-live="polite"></p>
+</form>
+</section>
+</div>
+<section class="ticket-transfer-screen hidden" id="ticket-transfer-screen" aria-label="야구 티켓 양도" aria-hidden="true">
+<header class="ticket-header">
+<button type="button" class="ticket-header-button" id="close-ticket-transfer-button" aria-label="티켓 양도 닫기">←</button>
+<div class="ticket-header-copy">
+<h2>야구 티켓 양도</h2>
+<span id="ticket-identity-label">야구 전용 ID를 선택해 주세요.</span>
+</div>
+<button type="button" class="ticket-header-button" id="refresh-ticket-transfer-button" aria-label="새로고침">↻</button>
+</header>
+<div class="ticket-transfer-body">
+<section class="ticket-identity-setup" id="ticket-identity-setup">
+<h3>야구 전용 ID 선택</h3>
+<p>계정당 활동 ID 한 개만 선택할 수 있으며, 선택 후에는 다른 ID로 변경할 수 없습니다. 티켓 게시와 대화는 이 ID로만 이용합니다.</p>
+<select id="ticket-identity-select" aria-label="야구 전용 활동 ID"></select>
+<button type="button" id="designate-ticket-identity-button">이 ID를 야구 전용으로 선택</button>
+<p class="ticket-status" id="ticket-identity-status" role="status" aria-live="polite"></p>
+</section>
+<section class="hidden" id="ticket-transfer-content">
+<p class="ticket-status" id="ticket-screen-status" role="status" aria-live="polite"></p>
+<section class="ticket-pane" data-ticket-pane="home">
+<div class="ticket-pane-heading">
+<h3>현재 양도 티켓</h3>
+<button type="button" class="secondary-button" id="open-ticket-search-button" aria-expanded="false" aria-controls="ticket-listing-filters">⌕ 검색</button>
+</div>
+<form class="ticket-filters hidden" id="ticket-listing-filters" aria-label="양도 티켓 검색">
+<div class="ticket-popup-header"><h3>티켓 검색</h3><button type="button" class="secondary-button" id="close-ticket-search-button" aria-label="검색 닫기">×</button></div>
+<div class="ticket-filter-grid">
+<div class="ticket-filter-field"><label for="ticket-filter-date">날짜</label><input type="date" id="ticket-filter-date" /></div>
+<div class="ticket-filter-field"><label for="ticket-filter-stadium">경기장</label><select id="ticket-filter-stadium"><option value="">전체 경기장</option></select></div>
+<div class="ticket-filter-field"><label for="ticket-filter-seat">좌석 등급 (2026 기준)</label><select id="ticket-filter-seat" disabled><option value="">경기장을 먼저 선택</option></select></div>
+<div class="ticket-pane-heading-actions"><button type="button" class="secondary-button ticket-filter-reset" id="reset-ticket-filters">초기화</button><button type="submit" class="ticket-filter-reset">조건 적용</button></div>
+</div>
+<p class="ticket-filter-status" id="ticket-filter-status" role="status" aria-live="polite"></p>
+</form>
+<div class="ticket-list" id="ticket-listings"></div>
+</section>
+<section class="ticket-pane ticket-pane-popup hidden" data-ticket-pane="seller">
+<div class="ticket-popup-header"><h3>판매자</h3><div class="ticket-pane-heading-actions"><button type="button" id="open-ticket-form-button">티켓 올리기</button><button type="button" class="secondary-button" data-ticket-close-popup aria-label="판매자 창 닫기">×</button></div></div>
+<section class="ticket-access-panel hidden" id="ticket-access-panel">
+<strong id="ticket-access-title"></strong>
+<p id="ticket-access-copy"></p>
+<div class="ticket-access-actions" id="ticket-access-actions"></div>
+</section>
+<form class="ticket-form ticket-form-popup hidden" id="ticket-listing-form">
+<div class="ticket-popup-header"><h3>티켓 판매 등록</h3><button type="button" class="secondary-button" id="cancel-ticket-form-button" aria-label="판매 등록 닫기">×</button></div>
+<div class="ticket-form-grid">
+<div class="ticket-field"><label for="ticket-game-date">경기 날짜</label><input type="date" id="ticket-game-date" required /></div>
+<div class="ticket-field"><label for="ticket-stadium">야구장</label><select id="ticket-stadium" required></select></div>
+<div class="ticket-field"><label for="ticket-home-team">홈 팀</label><input id="ticket-home-team" readonly /></div>
+<div class="ticket-field"><label for="ticket-away-team">상대 팀</label><select id="ticket-away-team" required></select></div>
+<div class="ticket-field" id="ticket-seat-grade-select-field"><label for="ticket-seat-grade-select">좌석 등급 (2026 기준)</label><select id="ticket-seat-grade-select"></select></div>
+<div class="ticket-field hidden" id="ticket-seat-grade-input-field"><label for="ticket-seat-grade-input">좌석 등급 (2026 기준)</label><input id="ticket-seat-grade-input" maxlength="80" placeholder="좌석 등급을 입력해 주세요" /></div>
+<div class="ticket-field"><label for="ticket-seat-detail">구역·열</label><input id="ticket-seat-detail" maxlength="120" placeholder="예: 107블록 8열 12번" required /></div>
+<div class="ticket-field"><label for="ticket-purchase-price">실제 구매가·1장 (원)</label><input type="number" id="ticket-purchase-price" min="0" max="10000000" step="1000" required /></div>
+<div class="ticket-field"><label for="ticket-unit-price">판매가·1장 (원)</label><input type="number" id="ticket-unit-price" min="0" max="10000000" step="1000" required /></div>
+<div class="ticket-field"><label for="ticket-quantity">티켓 수량</label><input type="number" id="ticket-quantity" min="1" max="20" value="1" required /></div>
+<div class="ticket-field ticket-field-wide"><label for="ticket-delivery-method">수령 방식</label><select id="ticket-delivery-method" required></select></div>
+<p class="ticket-price-note ticket-field-wide">구매가는 정가가 아니라 실제 결제한 금액입니다. 취소표 대기 수수료 등 실제 결제 비용이 포함될 수 있지만, 판매가는 이 구매가를 초과할 수 없습니다.</p>
+<div class="ticket-field ticket-field-wide"><label for="ticket-description">추가 설명 (선택)</label><textarea id="ticket-description" maxlength="500" placeholder="양도 조건이나 참고사항을 입력해 주세요."></textarea></div>
+</div>
+<div class="ticket-form-actions"><button type="button" class="secondary-button" data-ticket-cancel-form>취소</button><button type="submit" id="submit-ticket-form-button">등록</button></div>
+<p class="ticket-status" id="ticket-form-status" role="status" aria-live="polite"></p>
+</form>
+<div class="ticket-list" id="ticket-selling"></div>
+</section>
+<section class="ticket-pane ticket-pane-popup hidden" data-ticket-pane="buyer">
+<div class="ticket-popup-header"><h3>구매자</h3><button type="button" class="secondary-button" data-ticket-close-popup aria-label="구매자 창 닫기">×</button></div>
+<section class="ticket-subsection"><h4>참여한 오픈채팅</h4><div class="ticket-list" id="ticket-buying"></div></section>
+<section class="ticket-subsection"><h4>1:1 거래</h4><div class="ticket-list" id="ticket-deals"></div></section>
+</section>
+<section class="ticket-pane ticket-pane-popup hidden" data-ticket-pane="chats"><div class="ticket-popup-header"><h3>티켓 채팅</h3><button type="button" class="secondary-button" data-ticket-close-popup aria-label="채팅 창 닫기">×</button></div><div class="ticket-list" id="ticket-chats"></div></section>
+<section class="ticket-pane ticket-pane-popup hidden" data-ticket-pane="guide">
+<div class="ticket-popup-header"><h3>이용 설명</h3><button type="button" class="secondary-button" data-ticket-close-popup aria-label="설명 창 닫기">×</button></div>
+<div class="ticket-guide-list">
+<article><strong>구매하기</strong><p>홈에서 티켓을 고르고 필요한 수량을 입력하면 오픈채팅에 참여할 수 있습니다. 신청만 취소하면 대화는 유지되고, 채팅에서 나가도 작성한 메시지는 다른 참여자에게 그대로 남습니다.</p></article>
+<article><strong>판매하기</strong><p>판매자 메뉴에서 티켓을 등록하고 신청자별 희망 수량을 확인할 수 있습니다. 판매가는 실제 구매가를 넘을 수 없습니다.</p></article>
+<article><strong>보관 기간</strong><p>게시글과 오픈채팅, 1:1 거래 채팅은 경기일로부터 7일이 끝난 뒤 메시지와 함께 영구 삭제됩니다.</p></article>
+<article><strong>신고와 문의</strong><p>사기·허위 판매 또는 구매가 초과 판매는 게시글에서 신고할 수 있습니다. 정지나 검증 관련 문의는 관리자 채팅을 이용해 주세요.</p></article>
+</div>
+</section>
+<section class="ticket-pane ticket-pane-popup hidden" data-ticket-pane="moderation"><div class="ticket-popup-header"><h3>티켓 관리자</h3><button type="button" class="secondary-button" data-ticket-close-popup aria-label="관리자 창 닫기">×</button></div><p class="ticket-price-note">관리자 전용 화면입니다. 판매글별 손그림 서명, 레드체크 요청, 신고와 정지 계정을 확인하고 처리할 수 있습니다.</p><div class="ticket-list" id="ticket-moderation"></div></section>
+<nav class="ticket-tabs" aria-label="티켓 양도 메뉴">
+<button type="button" class="ticket-tab active" data-ticket-tab="home"><span>⌂</span>홈</button>
+<button type="button" class="ticket-tab" data-ticket-tab="seller"><span>＋</span>판매자</button>
+<button type="button" class="ticket-tab" data-ticket-tab="buyer"><span>⌁</span>구매자</button>
+<button type="button" class="ticket-tab" data-ticket-tab="chats"><span>◌</span>채팅</button>
+<button type="button" class="ticket-tab" data-ticket-tab="guide"><span>?</span>설명</button>
+<button type="button" class="ticket-tab hidden" id="ticket-moderation-tab" data-ticket-tab="moderation"><span>⚙</span>관리자</button>
+</nav>
+</section>
+</div>
+<div class="sheet-backdrop ticket-modal hidden" id="ticket-agreement-modal" role="dialog" aria-modal="true" aria-labelledby="ticket-agreement-title">
+<section class="user-sheet">
+<header class="sheet-header"><h2 id="ticket-agreement-title">티켓 판매 규정 서명</h2><button type="button" class="sheet-close" id="close-ticket-agreement-button">닫기</button></header>
+<form class="ticket-modal-content" id="ticket-agreement-form">
+<p>이 판매글을 등록하려면 아래에 직접 서명해야 합니다. 관련 법령과 입장권 부정판매 방지 취지에 따라 실제 구매가를 초과하는 가격으로 티켓을 판매할 수 없습니다.</p>
+<ul><li>판매가는 판매자가 실제 결제한 구매가 이하여야 합니다.</li><li>구매가는 정가와 다를 수 있으며 취소표 대기 수수료 등 실제 결제 비용이 포함될 수 있습니다.</li><li>허위 구매가 입력, 사기 및 허위 판매 신고가 접수되면 티켓 기능이 즉시 정지되며 관리자에게 소명해야 합니다.</li></ul>
+<label for="ticket-agreement-signature">손그림 서명</label><canvas class="ticket-signature-pad" id="ticket-agreement-signature" width="1040" height="320" tabindex="0" aria-label="손그림 서명란"></canvas>
+<div class="ticket-signature-actions"><button type="button" class="secondary-button" id="clear-ticket-agreement-signature">다시 그리기</button></div>
+<label class="ticket-policy-confirm"><input type="checkbox" id="ticket-agreement-confirm" required /><span>위 내용을 확인했고 구매가를 초과해 판매하지 않겠습니다. 이 판매글의 서명 기록이 관리자에게 저장되는 것에 동의합니다.</span></label>
+<button type="submit" id="submit-ticket-agreement-button">서명하고 판매글 등록</button>
+<p class="ticket-status" id="ticket-agreement-status" role="status" aria-live="polite"></p>
+</form>
+</section>
+</div>
+<div class="sheet-backdrop ticket-modal hidden" id="ticket-interest-modal" role="dialog" aria-modal="true" aria-labelledby="ticket-interest-title">
+<section class="user-sheet">
+<header class="sheet-header"><h2 id="ticket-interest-title">오픈채팅 신청</h2><button type="button" class="sheet-close" id="close-ticket-interest-button">닫기</button></header>
+<form class="ticket-modal-content" id="ticket-interest-form">
+<p id="ticket-interest-summary"></p>
+<div class="ticket-field"><label for="ticket-interest-quantity">필요한 티켓 수량</label><input type="number" id="ticket-interest-quantity" min="1" max="20" value="1" required /></div>
+<p>희망 수량은 판매자 화면에 표시됩니다. 수량을 선택해야 오픈채팅에 들어갈 수 있습니다.</p>
+<button type="submit" id="submit-ticket-interest-button">신청하고 오픈채팅 들어가기</button>
+<p class="ticket-status" id="ticket-interest-status" role="status" aria-live="polite"></p>
+</form>
+</section>
+</div>
+<div class="sheet-backdrop ticket-modal hidden" id="ticket-report-modal" role="dialog" aria-modal="true" aria-labelledby="ticket-report-title">
+<section class="user-sheet">
+<header class="sheet-header"><h2 id="ticket-report-title">티켓 신고하기</h2><button type="button" class="sheet-close" id="close-ticket-report-button">닫기</button></header>
+<form class="ticket-modal-content" id="ticket-report-form">
+<label for="ticket-report-reason">신고 유형</label><select id="ticket-report-reason" required></select>
+<p class="ticket-price-note" id="ticket-report-price-notice"></p>
+<label for="ticket-report-description">신고 내용</label><textarea id="ticket-report-description" maxlength="500" placeholder="확인할 수 있는 내용을 구체적으로 적어 주세요."></textarea>
+<p>신고가 접수되면 피신고 판매자의 티켓 판매 기능과 게시물이 즉시 정지됩니다. 허위 신고는 금지됩니다.</p>
+<button type="submit" id="submit-ticket-report-button">신고 접수</button>
+<p class="ticket-status" id="ticket-report-status" role="status" aria-live="polite"></p>
+</form>
+</section>
+</div>
+</section>
+<p class="tab-status hidden" id="app-status" role="status" aria-live="polite"></p>
+<aside class="context-action-bar" id="context-action-bar" aria-label="컨텍스트 작업">
+<span class="context-action-label">최근 대화</span>
+<div class="context-action-list" id="context-action-list"></div>
+<button class="context-action-primary" id="context-action-primary" type="button" data-icon="message-circle" data-icon-only aria-label="채팅 시작" disabled>채팅 시작</button>
+<p class="context-action-feedback" id="context-action-feedback" aria-live="polite"></p>
+</aside>
+<section class="desktop-chat-empty" aria-hidden="true">
+<strong>대화를 선택하세요</strong>
+<p>왼쪽 목록에서 채팅방을 열면<br />여기에서 대화를 이어갈 수 있어요.</p>
+</section>
+<section class="chat-room hidden" id="chat-room" aria-label="chat">
+<header class="chat-room-header">
+<button type="button" class="chat-room-back" id="close-chat-room" data-icon="arrow-left" data-icon-only aria-label="채팅방 닫기">뒤로</button>
+<span id="chat-room-avatar"></span>
+<div class="chat-room-title">
+<strong id="chat-room-name"></strong>
+<span class="chat-presence" id="chat-room-presence"></span>
+</div>
+<button type="button" class="chat-room-settings-button hidden" id="open-room-settings-button" data-icon="settings" data-icon-only aria-label="채팅방 설정">설정</button>
+</header>
+<div class="chat-message-list" id="chat-message-list" role="log" aria-live="polite" aria-relevant="additions" aria-busy="false"></div>
+<div class="chat-attachment-preview hidden" id="chat-attachment-preview">
+<span class="chat-attachment-name" id="chat-attachment-name" role="status" aria-live="polite"></span>
+<audio class="chat-voice-preview hidden" id="chat-voice-preview" controls preload="metadata" controlslist="nodownload noplaybackrate"></audio>
+<button class="chat-attachment-remove" id="chat-attachment-remove" type="button" data-icon="x" data-icon-only aria-label="첨부 취소">첨부 취소</button>
+</div>
+<div class="chat-attachment-tray hidden" id="chat-attachment-tray" aria-label="Attachment options">
+<div class="chat-attachment-options">
+<button class="chat-attachment-option" type="button" data-attachment-kind="photo">Photo</button>
+<button class="chat-attachment-option" type="button" data-attachment-kind="pdf">PDF</button>
+<button class="chat-attachment-option" type="button" data-attachment-kind="file">File</button>
+<button class="chat-attachment-option" type="button" data-attachment-kind="camera">Camera<br>soon</button>
+<button class="chat-attachment-option" type="button" data-attachment-kind="photo"><span>▣</span><strong>사진</strong></button>
+<button class="chat-attachment-option" type="button" data-attachment-kind="pdf"><span>PDF</span><strong>PDF</strong></button>
+<button class="chat-attachment-option" type="button" data-attachment-kind="file"><span>···</span><strong>파일</strong></button>
+</div>
+<button class="chat-attachment-puck" id="chat-attachment-puck" type="button" aria-label="Drag to choose attachment">+</button>
+</div>
+<div class="chat-attachment-guide hidden" id="chat-attachment-guide" aria-hidden="true">
+<svg viewBox="0 0 240 240" width="240" height="240">
+<path class="attachment-guide-sector" data-kind="photo" d="M 0 240 L 0 0 A 240 240 0 0 1 74.2 11.7 Z" />
+<path class="attachment-guide-sector" data-kind="pdf" d="M 0 240 L 74.2 11.7 A 240 240 0 0 1 141.1 45.8 Z" />
+<path class="attachment-guide-sector" data-kind="voice" d="M 0 240 L 141.1 45.8 A 240 240 0 0 1 194.2 98.9 Z" />
+<path class="attachment-guide-sector" data-kind="file" d="M 0 240 L 194.2 98.9 A 240 240 0 0 1 228.3 165.8 Z" />
+<path class="attachment-guide-sector" data-kind="camera" d="M 0 240 L 228.3 165.8 A 240 240 0 0 1 240 240 Z" />
+</svg>
+<label class="attachment-guide-label" data-kind="photo" for="chat-attachment-input">사진</label>
+<label class="attachment-guide-label" data-kind="pdf" for="chat-attachment-input">PDF</label>
+<button class="attachment-guide-label" data-kind="voice" type="button" data-icon="mic" aria-label="음성 녹음">음성</button>
+<label class="attachment-guide-label" data-kind="file" for="chat-attachment-input">파일</label>
+<span class="attachment-guide-label" data-kind="camera">카메라</span>
+</div>
+<button type="button" class="chat-new-messages hidden" id="chat-new-messages-button">새 메시지</button>
+<div class="chat-composer-context hidden" id="chat-composer-context">
+<div class="chat-composer-context-copy">
+<strong id="chat-composer-context-title"></strong>
+<span id="chat-composer-context-copy"></span>
+</div>
+<button type="button" id="cancel-chat-composer-context" data-icon="x" data-icon-only aria-label="답장 또는 수정 취소">취소</button>
+</div>
+<form class="chat-message-form" id="chat-message-form">
+<input class="chat-attachment-input" id="chat-attachment-input" type="file" accept="image/*,application/pdf,.txt,.csv,.md,.rtf,.zip,.doc,.xls,.ppt,.docx,.xlsx,.pptx" />
+<button class="chat-attachment-button" id="chat-attachment-button" type="button" data-icon="paperclip" data-icon-only aria-label="첨부 메뉴 열기" aria-expanded="false">첨부</button>
+<textarea id="chat-message-input" rows="1" maxlength="300" autocomplete="off" enterkeyhint="send" aria-label="메시지 입력" placeholder="메시지 입력"></textarea>
+<button type="submit" data-icon="send" data-icon-only aria-label="메시지 보내기">보내기</button>
+</form>
+<div class="message-read-menu hidden" id="message-read-menu" role="status" aria-live="polite" aria-hidden="true">
+<strong id="message-read-menu-title">읽음 상태</strong>
+<p id="message-read-menu-copy"></p>
+</div>
+<div class="sheet-backdrop message-action-backdrop hidden" id="message-action-dialog" role="dialog" aria-modal="true" aria-labelledby="message-action-title" aria-describedby="message-action-summary"><section class="user-sheet message-action-sheet"><header class="sheet-header"><h2 id="message-action-title">메시지 작업</h2><button type="button" class="sheet-close" id="close-message-action-button">닫기</button></header><p class="message-action-summary" id="message-action-summary"></p><div class="message-action-reactions" id="message-action-reactions" aria-label="빠른 반응"><button type="button" data-message-reaction="👍" aria-label="좋아요 반응">👍</button><button type="button" data-message-reaction="❤️" aria-label="하트 반응">❤️</button><button type="button" data-message-reaction="😂" aria-label="웃음 반응">😂</button><button type="button" data-message-reaction="😮" aria-label="놀람 반응">😮</button><button type="button" data-message-reaction="😢" aria-label="슬픔 반응">😢</button><button type="button" data-message-reaction="🙏" aria-label="감사 반응">🙏</button></div><div class="message-action-list"><button type="button" data-message-action="reply">답장</button><button type="button" data-message-action="copy">복사</button><button type="button" data-message-action="edit">수정</button><button type="button" data-message-action="read">읽음 정보</button><button type="button" data-message-action="retry">다시 보내기</button><button type="button" class="message-action-delete" data-message-action="delete">삭제</button><p class="message-action-status" id="message-action-status" role="status" aria-live="polite"></p></div></section></div>
+<div class="sheet-backdrop room-settings-backdrop hidden" id="room-settings-sheet" role="dialog" aria-modal="true" aria-labelledby="room-settings-title">
+<section class="user-sheet room-settings-sheet">
+<header class="sheet-header">
+<h2 id="room-settings-title">채팅방 설정</h2>
+<button type="button" class="sheet-close" id="close-room-settings-button">닫기</button>
+</header>
+<div class="room-settings-content">
+<section class="room-settings-photo" aria-labelledby="room-settings-photo-title">
+<div class="room-settings-photo-preview" id="room-settings-photo-preview"></div>
+<div>
+<strong id="room-settings-photo-title">채팅방 사진</strong>
+<p class="room-settings-photo-copy">선택한 사진은 기기에서 정사각형으로 조정한 뒤 1024×1024 WebP로 저장합니다.</p>
+<div class="room-settings-photo-actions">
+<button type="button" class="secondary-button" id="select-room-photo-button">사진 선택</button>
+<button type="button" class="secondary-button" id="remove-room-photo-button">사진 삭제</button>
+</div>
+<input type="file" id="room-photo-input" accept="image/jpeg,image/png,image/webp,image/avif,image/heic,image/heif" hidden />
+</div>
+</section>
+<div class="field">
+<label for="room-settings-name">채팅방 이름</label>
+<input id="room-settings-name" maxlength="32" autocomplete="off" />
+</div>
+<button type="button" id="save-room-settings-button">변경사항 저장</button>
+<p class="room-settings-owner-help" id="room-settings-owner-help"></p>
+<section class="room-settings-danger" aria-label="채팅방 나가기">
+<strong>채팅방 나가기</strong>
+<p>나가면 이 채팅방의 메시지와 첨부 파일에 더 이상 접근할 수 없습니다.</p>
+<button type="button" class="room-leave-button" id="leave-room-button">채팅방 나가기</button>
+</section>
+</div>
+</section>
+</div>
+</section>
+<nav class="list-tabs" aria-label="메신저 탭">
+<button type="button" class="active" id="chats-tab" data-icon="message-circle" aria-label="채팅">채팅</button>
+<button type="button" id="friends-tab" data-icon="users" aria-label="친구">친구</button>
+<button type="button" id="threads-tab" data-icon="message-plus" aria-label="스레드">스레드</button>
+<button type="button" id="my-tab" data-icon="user" aria-label="MY">MY</button>
+</nav>
 
-      <section class="work-mode-screen hidden" id="work-mode-screen" tabindex="-1" aria-label="Work mode" aria-hidden="true">
-        <article class="work-mode-message hidden" id="work-mode-message" aria-live="assertive">
-          <div class="work-mode-sender">
-            <div class="work-mode-avatar" id="work-mode-avatar"></div>
-            <div class="work-mode-sender-copy">
-              <strong id="work-mode-sender-name"></strong>
-              <span id="work-mode-room-name"></span>
-            </div>
-          </div>
-          <p class="work-mode-copy" id="work-mode-copy"></p>
-          <time class="work-mode-time" id="work-mode-time"></time>
-        </article>
-        <form class="work-mode-reply hidden" id="work-mode-reply-form">
-          <label class="sr-only" for="work-mode-reply-input">바로 답장</label>
-          <input id="work-mode-reply-input" maxlength="300" autocomplete="off" placeholder="답장 입력 후 Enter" />
-          <button type="submit">보내기</button>
-        </form>
-        <p class="work-mode-feedback" id="work-mode-feedback" role="status" aria-live="polite"></p>
-        <p class="work-mode-hint">한 번 탭: 메시지 숨김 · 두 번 탭: 종료 · Alt+W 종료</p>
-      </section>
+<section class="work-mode-screen hidden" id="work-mode-screen" tabindex="-1" aria-label="Work mode" aria-hidden="true">
+<article class="work-mode-message hidden" id="work-mode-message" aria-live="assertive">
+<div class="work-mode-sender">
+<div class="work-mode-avatar" id="work-mode-avatar"></div>
+<div class="work-mode-sender-copy">
+<strong id="work-mode-sender-name"></strong>
+<span id="work-mode-room-name"></span>
+</div>
+</div>
+<p class="work-mode-copy" id="work-mode-copy"></p>
+<time class="work-mode-time" id="work-mode-time"></time>
+</article>
+<form class="work-mode-reply hidden" id="work-mode-reply-form">
+<label class="sr-only" for="work-mode-reply-input">바로 답장</label>
+<input id="work-mode-reply-input" maxlength="300" autocomplete="off" placeholder="답장 입력 후 Enter" />
+<button type="submit">보내기</button>
+</form>
+<p class="work-mode-feedback" id="work-mode-feedback" role="status" aria-live="polite"></p>
+<p class="work-mode-hint">한 번 탭: 메시지 숨김 · 두 번 탭: 종료 · Alt+W 종료</p>
+</section>
 
-      <div class="sheet-backdrop hidden" id="directory-sheet" role="dialog" aria-modal="true" aria-labelledby="directory-title">
-        <section class="user-sheet">
-          <header class="sheet-header">
-            <h2 id="directory-title">친구 및 그룹</h2>
-            <button type="button" class="sheet-close" id="close-directory-button">닫기</button>
-          </header>
-          <div class="directory-content">
-            <div class="field directory-friend-field">
-              <label for="friend-code-input">친구 ID</label>
-              <div class="field-row">
-                <input id="friend-code-input" maxlength="20" autocomplete="off" autocapitalize="off" placeholder="친구 ID 입력" />
-                <button type="button" class="secondary-button" id="friend-code-add-button">추가</button>
-              </div>
-            </div>
-            <div class="user-directory" id="user-directory"></div>
-          </div>
-        </section>
-      </div>
+<div class="sheet-backdrop hidden" id="directory-sheet" role="dialog" aria-modal="true" aria-labelledby="directory-title">
+<section class="user-sheet">
+<header class="sheet-header">
+<h2 id="directory-title">친구 및 그룹</h2>
+<button type="button" class="sheet-close" id="close-directory-button">닫기</button>
+</header>
+<div class="directory-content">
+<div class="field directory-friend-field">
+<label for="friend-code-input">친구 ID</label>
+<div class="field-row">
+<input id="friend-code-input" maxlength="20" autocomplete="off" autocapitalize="off" placeholder="친구 ID 입력" />
+<button type="button" class="secondary-button" id="friend-code-add-button">추가</button>
+</div>
+</div>
+<div class="user-directory" id="user-directory"></div>
+</div>
+</section>
+</div>
 
-      <div class="sheet-backdrop hidden" id="new-chat-sheet" role="dialog" aria-modal="true" aria-labelledby="new-chat-title">
-        <section class="user-sheet new-chat-sheet">
-          <header class="sheet-header">
-            <h2 id="new-chat-title">새 채팅</h2>
-            <button type="button" class="sheet-close" id="close-new-chat-button">닫기</button>
-          </header>
-          <div class="new-chat-content">
-            <p class="new-chat-help">대화할 친구를 선택하세요.</p>
-            <div class="field new-chat-search">
-              <label for="new-chat-search">사람 검색</label>
-              <input id="new-chat-search" type="search" autocomplete="off" placeholder="이름 또는 친구 ID 검색" />
-            </div>
-            <div class="new-chat-member-list" id="new-chat-member-list"></div>
-            <div class="field hidden" id="new-chat-group-name-field">
-              <label for="new-chat-group-name">그룹 이름</label>
-              <input id="new-chat-group-name" maxlength="32" autocomplete="off" placeholder="예: 프로젝트 팀" />
-            </div>
-            <button type="button" id="create-new-chat-button" disabled>채팅 시작</button>
-          </div>
-        </section>
-      </div>
+<div class="sheet-backdrop hidden" id="new-chat-sheet" role="dialog" aria-modal="true" aria-labelledby="new-chat-title">
+<section class="user-sheet new-chat-sheet">
+<header class="sheet-header">
+<h2 id="new-chat-title">새 채팅</h2>
+<button type="button" class="sheet-close" id="close-new-chat-button">닫기</button>
+</header>
+<div class="new-chat-content">
+<p class="new-chat-help">대화할 친구를 선택하세요.</p>
+<div class="field new-chat-search">
+<label for="new-chat-search">사람 검색</label>
+<input id="new-chat-search" type="search" autocomplete="off" placeholder="이름 또는 친구 ID 검색" />
+</div>
+<div class="new-chat-member-list" id="new-chat-member-list"></div>
+<div class="field hidden" id="new-chat-group-name-field">
+<label for="new-chat-group-name">그룹 이름</label>
+<input id="new-chat-group-name" maxlength="32" autocomplete="off" placeholder="예: 프로젝트 팀" />
+</div>
+<button type="button" id="create-new-chat-button" disabled>채팅 시작</button>
+</div>
+</section>
+</div>
 
-      <div class="sheet-backdrop hidden" id="profile-sheet" role="dialog" aria-modal="true" aria-labelledby="profile-title">
-        <section class="user-sheet profile-sheet">
-          <header class="sheet-header">
-            <h2 id="profile-title">내 프로필</h2>
-            <button type="button" class="sheet-close" id="close-profile-button">닫기</button>
-          </header>
-          <div class="profile-editor">
-            <div class="field">
-              <label for="profile-display-name">이름</label>
-              <input id="profile-display-name" maxlength="24" autocomplete="nickname" />
-            </div>
-            <div class="field">
-              <label for="profile-friend-code">친구 ID</label>
-              <input id="profile-friend-code" maxlength="20" autocomplete="off" autocapitalize="off" />
-            </div>
-            <section class="profile-photo-editor" aria-labelledby="profile-photo-title">
-              <div class="profile-photo-preview" id="profile-photo-preview"></div>
-              <div>
-                <strong id="profile-photo-title">사진으로 픽셀 프로필 만들기</strong>
-                <p class="profile-photo-copy">사진의 크기와 위치를 맞추면 32×32 픽셀 편집기로 변환합니다. 변환 후 직접 수정할 수 있어요.</p>
-                <div class="profile-photo-actions">
-                  <button type="button" class="secondary-button" id="select-profile-photo-button">사진 선택</button>
-                  <button type="button" class="secondary-button" id="remove-profile-photo-button">픽셀 초기화</button>
-                </div>
-                <input type="file" id="profile-photo-input" accept="image/jpeg,image/png,image/webp,image/avif,image/heic,image/heif" hidden />
-              </div>
-              <div class="profile-photo-crop hidden" id="profile-photo-crop">
-                <canvas id="profile-photo-crop-canvas" width="512" height="512" tabindex="0" aria-label="프로필 사진 위치 조정. 드래그하거나 방향키로 이동할 수 있습니다."></canvas>
-                <label class="profile-photo-zoom" for="profile-photo-zoom">
-                  <span>크기</span>
-                  <input type="range" id="profile-photo-zoom" min="50" max="300" value="100" step="1" />
-                  <output id="profile-photo-zoom-value" for="profile-photo-zoom">100%</output>
-                </label>
-                <p class="profile-photo-crop-help">32×32로 만들 영역을 맞추세요. 사진을 드래그하거나 방향키로 이동할 수 있습니다.</p>
-                <div class="profile-photo-crop-actions">
-                  <button type="button" class="secondary-button" id="cancel-profile-photo-button">취소</button>
-                  <button type="button" id="save-profile-photo-button">32×32 픽셀로 변환</button>
-                </div>
-              </div>
-            </section>
-            <section class="custom-palette" aria-label="나만의 팔레트">
-              <div class="custom-palette-header">
-                <div class="custom-palette-heading">
-                  <strong>나만의 팔레트</strong>
-                  <button type="button" class="custom-palette-toggle" id="toggle-palette-picker-button">색 조합</button>
-                </div>
-                <span id="custom-palette-count">0 / 10</span>
-              </div>
-              <p class="custom-palette-empty hidden" id="custom-palette-empty">나만의 팔레트를 추가할 수 있어요.</p>
-              <div class="custom-palette-colors" id="custom-palette-colors"></div>
-              <div class="palette-picker hidden" id="palette-picker">
-                <div class="field">
-                  <label for="profile-palette-select">추천 색 조합</label>
-                  <select class="profile-palette-select" id="profile-palette-select"></select>
-                </div>
-                <div class="pixel-palette" id="pixel-palette" aria-label="색상 선택">
-                  <label class="custom-color-button" id="custom-color-button" aria-label="직접 색상 선택">+<input type="color" id="custom-profile-color" value="#000000" /></label>
-                </div>
-              </div>
-            </section>
-            <canvas class="pixel-editor-grid" id="pixel-editor-grid" width="320" height="320" tabindex="0" role="application" aria-label="32 × 32 픽셀 편집기. 방향키로 이동하고 Space 또는 Enter로 그리며 Delete 또는 Backspace로 지웁니다." aria-describedby="profile-pixel-status"></canvas>
-            <p class="sr-only" id="profile-pixel-status" aria-live="polite">1행 1열, 흰색</p>
-            <div class="profile-actions">
-              <button type="button" class="secondary-button" id="clear-profile-button">모두 지우기</button>
-              <button type="button" id="save-profile-button">프로필 저장</button>
-            </div>
-          </div>
-        </section>
-      </div>
+<div class="sheet-backdrop hidden" id="profile-sheet" role="dialog" aria-modal="true" aria-labelledby="profile-title">
+<section class="user-sheet profile-sheet">
+<header class="sheet-header">
+<h2 id="profile-title">내 프로필</h2>
+<button type="button" class="sheet-close" id="close-profile-button">닫기</button>
+</header>
+<div class="profile-editor">
+<div class="field">
+<label for="profile-display-name">이름</label>
+<input id="profile-display-name" maxlength="24" autocomplete="nickname" />
+</div>
+<div class="field">
+<label for="profile-friend-code">친구 ID</label>
+<input id="profile-friend-code" maxlength="20" autocomplete="off" autocapitalize="off" />
+</div>
+<section class="profile-photo-editor" aria-labelledby="profile-photo-title">
+<div class="profile-photo-preview" id="profile-photo-preview"></div>
+<div>
+<strong id="profile-photo-title">사진으로 픽셀 프로필 만들기</strong>
+<p class="profile-photo-copy">사진의 크기와 위치를 맞추면 32×32 픽셀 편집기로 변환합니다. 변환 후 직접 수정할 수 있어요.</p>
+<div class="profile-photo-actions">
+<button type="button" class="secondary-button" id="select-profile-photo-button">사진 선택</button>
+<button type="button" class="secondary-button" id="remove-profile-photo-button">픽셀 초기화</button>
+</div>
+<input type="file" id="profile-photo-input" accept="image/jpeg,image/png,image/webp,image/avif,image/heic,image/heif" hidden />
+</div>
+<div class="profile-photo-crop hidden" id="profile-photo-crop">
+<canvas id="profile-photo-crop-canvas" width="512" height="512" tabindex="0" aria-label="프로필 사진 위치 조정. 드래그하거나 방향키로 이동할 수 있습니다."></canvas>
+<label class="profile-photo-zoom" for="profile-photo-zoom">
+<span>크기</span>
+<input type="range" id="profile-photo-zoom" min="50" max="300" value="100" step="1" />
+<output id="profile-photo-zoom-value" for="profile-photo-zoom">100%</output>
+</label>
+<p class="profile-photo-crop-help">32×32로 만들 영역을 맞추세요. 사진을 드래그하거나 방향키로 이동할 수 있습니다.</p>
+<div class="profile-photo-crop-actions">
+<button type="button" class="secondary-button" id="cancel-profile-photo-button">취소</button>
+<button type="button" id="save-profile-photo-button">32×32 픽셀로 변환</button>
+</div>
+</div>
+</section>
+<section class="custom-palette" aria-label="나만의 팔레트">
+<div class="custom-palette-header">
+<div class="custom-palette-heading">
+<strong>나만의 팔레트</strong>
+<button type="button" class="custom-palette-toggle" id="toggle-palette-picker-button">색 조합</button>
+</div>
+<span id="custom-palette-count">0 / 10</span>
+</div>
+<p class="custom-palette-empty hidden" id="custom-palette-empty">나만의 팔레트를 추가할 수 있어요.</p>
+<div class="custom-palette-colors" id="custom-palette-colors"></div>
+<div class="palette-picker hidden" id="palette-picker">
+<div class="field">
+<label for="profile-palette-select">추천 색 조합</label>
+<select class="profile-palette-select" id="profile-palette-select"></select>
+</div>
+<div class="pixel-palette" id="pixel-palette" aria-label="색상 선택">
+<label class="custom-color-button" id="custom-color-button" aria-label="직접 색상 선택">+<input type="color" id="custom-profile-color" value="#000000" /></label>
+</div>
+</div>
+</section>
+<canvas class="pixel-editor-grid" id="pixel-editor-grid" width="320" height="320" tabindex="0" role="application" aria-label="32 × 32 픽셀 편집기. 방향키로 이동하고 Space 또는 Enter로 그리며 Delete 또는 Backspace로 지웁니다." aria-describedby="profile-pixel-status"></canvas>
+<p class="sr-only" id="profile-pixel-status" aria-live="polite">1행 1열, 흰색</p>
+<div class="profile-actions">
+<button type="button" class="secondary-button" id="clear-profile-button">모두 지우기</button>
+<button type="button" id="save-profile-button">프로필 저장</button>
+</div>
+</div>
+</section>
+</div>
 
-      <div class="sheet-backdrop hidden" id="status-emoji-sheet" role="dialog" aria-modal="true" aria-labelledby="status-emoji-title" aria-describedby="status-emoji-description">
-        <section class="user-sheet status-emoji-sheet">
-          <header class="status-emoji-heading">
-            <h2 id="status-emoji-title">상태 이모티콘 선택</h2>
-            <p id="status-emoji-description">친구에게 보일 현재 상태를 선택하세요. 지금 상태: <span class="status-emoji-current" id="status-emoji-current">없음</span></p>
-          </header>
-          <div class="status-emoji-picker" id="status-emoji-picker">
-            <button class="status-emoji-add" id="status-emoji-add" type="button" aria-label="직접 이모티콘 선택"><span aria-hidden="true">+</span></button>
-            <input class="status-emoji-input" id="profile-status-emoji" maxlength="16" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="이모티콘 1개" aria-describedby="status-emoji-required" />
-          </div>
-          <p class="status-emoji-required" id="status-emoji-required" role="status">감정을 선택해야 시작할 수 있어요.</p>
-        </section>
-      </div>
-    </main>
+<div class="sheet-backdrop hidden" id="status-emoji-sheet" role="dialog" aria-modal="true" aria-labelledby="status-emoji-title" aria-describedby="status-emoji-description">
+<section class="user-sheet status-emoji-sheet">
+<header class="status-emoji-heading">
+<h2 id="status-emoji-title">상태 이모티콘 선택</h2>
+<p id="status-emoji-description">친구에게 보일 현재 상태를 선택하세요. 지금 상태: <span class="status-emoji-current" id="status-emoji-current">없음</span></p>
+</header>
+<div class="status-emoji-picker" id="status-emoji-picker">
+<button class="status-emoji-add" id="status-emoji-add" type="button" aria-label="직접 이모티콘 선택"><span aria-hidden="true">+</span></button>
+<input class="status-emoji-input" id="profile-status-emoji" maxlength="16" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="이모티콘 1개" aria-describedby="status-emoji-required" />
+</div>
+<p class="status-emoji-required" id="status-emoji-required" role="status">감정을 선택해야 시작할 수 있어요.</p>
+</section>
+</div>
+</main>
 
-  </body>
+</body>
 </html>

@@ -1,10 +1,10 @@
 # 열린 이슈 처리 현황
 
-2026-10-21 GitHub 조회 기준 열린 이슈는 #25와 #33 두 개이며 열린 PR은 없었다. 작업은 로컬 브랜치 `codex/issue-33-content-review`에서 진행한다. 이 문서는 이슈를 닫거나 운영 배포를 실행하지 않는다.
+2026-10-21 재조회 기준 열린 이슈는 #25와 #33 두 개다. 현재 작업 폴더 `D:\files\github\colorless`의 브랜치는 `codex/issue-33-local`이며, 이전 AI 격리 워크트리/브랜치 `codex/issue-33-content-review`는 보존한다. 이 문서는 이슈를 닫거나 운영 배포를 실행하지 않는다.
 
 | 이슈 | 로컬 처리 상태 | 검토 근거 |
 | --- | --- | --- |
-| [#25 독립 활동 ID](https://github.com/lovesangmin716-hue/free-danny-chat/issues/25) | 기존 구현을 완료 조건에 대조하고, ID 생성/비활성화 후 남아 있던 실시간 구독을 수정. PR 검토 대기 | [완료 조건 감사](IDENTITIES.md#issue-25-acceptance-audit), 계정/ID 권한·세 ID 프로필/DM/읽음 독립성·구독 재설정 회귀 테스트 |
+| [#25 독립 활동 ID](https://github.com/lovesangmin716-hue/free-danny-chat/issues/25) | 기존 구현의 완료 조건 감사, ID 변경 후 실시간 구독 수정. 추가로 작성자별 Threads 열람·레거시 사용자 검색·ID 권한 유지와 입력 경로 보완. 로컬 검증 완료, PR 검토 대기 | [완료 조건 감사](IDENTITIES.md#issue-25-acceptance-audit), [열람/입력 보완](THREADS.md#타인-글-열람과-입력-지연-보완), 관련 HTTP/JS 회귀 테스트 |
 | [#33 통합 콘텐츠 검사](https://github.com/lovesangmin716-hue/free-danny-chat/issues/33) | 공통 계약·단일 추론 연결·저장 전 차단·평가 도구, 공개 KAIST 로컬 재현, 실제 E5 검색·격리 영속 색인·revision/ACL/삭제 동기화 구현. 통합 모델 학습·서비스 정책 검증·운영 worker/outbox는 미완료 | [구현 범위](CONTENT_REVIEW.md), [연구 조사](CONTENT_REVIEW_RESEARCH.md), [검색 구현·실측](CONTENT_REVIEW_RETRIEVAL.md), 관련 회귀 테스트 |
 
 ## 커밋 순서
@@ -13,7 +13,8 @@
 2. `0c39798` — ID 생성·비활성화 시 해당 계정의 SSE만 재연결하고 대기 데이터를 폐기. 세 ID의 프로필·DM·읽음 독립성과 세션 쿠키 유지 검증 및 #25 완료 조건 감사.
 3. `e47044c` — 요청의 출처·시간 메타데이터 검증, 다른 문서 제목을 근거로 제출 글을 왜곡 판정하는 오류 방지, 검수 JSONL/실제 모델 예측의 언어별 평가 도구와 예측 계약.
 4. `f9006f6` — 공개 연구/라이선스/데이터 조사, KAIST v2.1 가중치·토크나이저 고정 다운로드, 서버와 분리된 실제 CPU 추론 및 파일/Unicode 검증.
-5. 후속 검색 커밋 — 실제 E5 ONNX, 문단/긴 글 검색, 격리 SQLite 색인과 revision/ACL/수정·삭제·TTL 검증, 본문 벡터 및 요청 임베딩 재사용, 실제 모델+임시 DB smoke 측정.
+5. `6dd7720` — 실제 E5 ONNX, 문단/긴 글 검색, 격리 SQLite 색인과 revision/ACL/수정·삭제·TTL 검증, 본문 벡터 및 요청 임베딩 재사용, 실제 모델+임시 DB smoke 측정.
+6. 후속 사용성 수정 — 타인 작성자 피드/검색, 오래된 글 조회, 새로고침 실패·ID 전환 보호, 유휴 피드 갱신, 채팅 저장/높이 계산 지연 제거와 회귀 검증. 운영 AI 활성화와 분리한다.
 
 ## #33의 실제 완료를 위해 필요한 사항
 

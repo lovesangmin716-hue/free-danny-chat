@@ -5,6 +5,7 @@ import { ColorlessImageProcessing } from "./platform/image-processing.js";
 import { createMessageRevisionJournal } from "./platform/message-revisions.js";
 import { createTransientOutbox } from "./platform/outbox.js";
 import { withActor, sessionForWindow } from "./platform/identity-context.js";
+import { createDraftWriter } from "./platform/draft-writer.js";
 
 const coreHooks = {
   clearChatAttachment: null,
@@ -189,26 +190,21 @@ function getChatDraft(roomId) {
   return state.chatDrafts[key];
 }
 
+const chatDraftWriter = createDraftWriter(() => sessionStorage, true);
+
 function setChatDraft(roomId, value) {
   if (!roomId) return;
   const key = chatDraftKey(roomId);
   const draft = String(value || "").slice(0, 300);
   state.chatDrafts[key] = draft;
-  try {
-    if (draft) sessionStorage.setItem(key, draft);
-    else sessionStorage.removeItem(key);
-  } catch (_) {
-  }
+  chatDraftWriter.queue(key, draft);
 }
 
 function clearChatDraft(roomId, identityId = "") {
   if (!roomId) return;
   const key = chatDraftKey(roomId, identityId);
   delete state.chatDrafts[key];
-  try {
-    sessionStorage.removeItem(key);
-  } catch (_) {
-  }
+  chatDraftWriter.remove(key);
 }
 
 const ATTACHMENT_UPLOAD_BYTES_MAX = 8 * 1024 * 1024;
@@ -673,6 +669,7 @@ function beginAuthRequest(message) {
 }
 
 function showAuth(mode = "login") {
+  chatDraftWriter.flush();
   advanceAuthEpoch();
   httpClient.clearCache();
   state.messagesLoadEpoch += 1;
