@@ -15,12 +15,49 @@ TASK = "joint_content_review"
 SCHEMA_VERSION = "1"
 CHECKS = ("context_distortion", "duplicate_rewrite", "blocked_reupload")
 STATUSES = {"pass", "violation", "undetermined"}
+SOURCE_FIELDS = ("source_url", "original_id", "published_at", "modified_at", "first_observed_at")
 
 
 class ReviewFailure(Exception):
     def __init__(self, code, status=503):
         self.code, self.status = code, status
         super().__init__(code)
+
+
+def validate_request(request):
+    """Validate shared inference/training input without changing evidence offsets."""
+    if (not isinstance(request, dict) or request.get("task") != TASK or request.get("schema_version") != SCHEMA_VERSION
+            or not isinstance(request.get("policy_version"), str) or not request["policy_version"].strip()):
+        raise ValueError("invalid request versions")
+    submission, candidates = request.get("submission"), request.get("candidates")
+    if not isinstance(submission, dict) or not isinstance(candidates, list) or len(candidates) > 20:
+        raise ValueError("bounded documents required")
+    ids = set()
+    for document in [submission, *candidates]:
+        if (not isinstance(document, dict) or not isinstance(document.get("id"), str) or not document["id"]
+                or not isinstance(document.get("body"), str) or len(document["body"]) > 20000
+                or not isinstance(document.get("title"), str) or len(document["title"]) > 2000
+                or document.get("source_kind") not in ("thread", "article")
+                or any(field not in document or document[field] is not None and not isinstance(document[field], str)
+                       for field in SOURCE_FIELDS)):
+            raise ValueError("invalid document or missing source metadata")
+        if document is submission:
+            if (document.get("language") not in ("ko", "en", "mixed", "auto")
+                    or document.get("visibility") not in ("public", "followers")
+                    or any(field not in document or document[field] is not None and not isinstance(document[field], str)
+                           for field in ("parent_id", "root_id"))):
+                raise ValueError("invalid submission context")
+        else:
+            if document["id"] == "submission" or document["id"] in ids or document.get("scope") not in ("public", "blocked"):
+                raise ValueError("invalid or repeated candidate")
+            ids.add(document["id"])
+            if any(field not in document or document[field] is not None and not isinstance(document[field], str)
+                   for field in ("policy_version", "block_reason", "segment_id")):
+                raise ValueError("missing candidate provenance")
+            if "expires_at" not in document or document["expires_at"] is not None and (
+                    type(document["expires_at"]) not in (int, float) or not math.isfinite(document["expires_at"])):
+                raise ValueError("invalid candidate lifetime")
+    return request
 
 
 def validate_response(request, response, *, stage="joint"):
@@ -47,7 +84,7 @@ def validate_response(request, response, *, stage="joint"):
         if (not isinstance(evidence, list) or len(evidence) > 40 or not isinstance(missing, list)
                 or len(missing) > 20 or not all(isinstance(x, str) for x in missing)):
             raise ValueError("evidence lists required")
-        if check["status"] == "undetermined" and not any(missing):
+        if check["status"] == "undetermined" and not any(item.strip() for item in missing):
             raise ValueError("undetermined requires missing evidence")
         for span in evidence:
             if not isinstance(span, dict):
@@ -75,9 +112,11 @@ def validate_response(request, response, *, stage="joint"):
                     raise ValueError("comparison requires candidate evidence")
                 if name == "blocked_reupload" and candidate.get("scope") != "blocked":
                     raise ValueError("reupload requires private blocked record")
-                if not isinstance(check.get("matching_information"), str) or not isinstance(check.get("new_information"), str):
+                if (not isinstance(check.get("matching_information"), str) or not check["matching_information"].strip()
+                        or not isinstance(check.get("new_information"), str)):
                     raise ValueError("comparison explanation required")
-            if name == "context_distortion" and not {"title", "body"} <= {span["field"] for span in evidence}:
+            if name == "context_distortion" and not {"title", "body"} <= {
+                    span["field"] for span in evidence if span["document_id"] == "submission"}:
                 raise ValueError("distortion requires title and body evidence")
     statuses = {check["status"] for check in checks.values()}
     expected = "block" if "violation" in statuses else "hold" if "undetermined" in statuses else "allow"
@@ -140,6 +179,7 @@ class ContentReview:
                         raise ValueError("candidate is stale or inaccessible")
                 request = {"task": TASK, "schema_version": SCHEMA_VERSION, "policy_version": self.policy_version,
                            "submission": copy.deepcopy(submission), "candidates": copy.deepcopy(candidates)}
+                validate_request(request)
                 response = self.joint_model(copy.deepcopy(request), timeout=remaining())
                 validate_response(request, response)
                 self._require_allow(response)

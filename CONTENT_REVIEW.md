@@ -77,6 +77,19 @@ BERT 공유 인코더+복수 출력층과 소형 causal LM 구조화 출력 모�
 
 ## 평가·활성화 절차와 남은 완료 조건
 
+오프라인 평가 도구는 다음과 같이 실행한다. 실제 모델 출력은 `contracts/content-review-prediction.schema.json`에 맞춘 JSONL로 저장한다. 각 행은 `example_id`, `request_sha256`, `response`, 실제 측정한 `latency_ms`가 필요하다. `request_sha256`은 `review_evaluation.request_fingerprint(request)`로 계산하며 검색 후보와 시간·출처 메타데이터까지 고정한다. 입력을 바꾸거나 모델/정책 버전을 섞어 점수를 계산하는 것을 거부한다.
+
+```bash
+python -m colorless.review_evaluation reviewed-dataset.jsonl model-a-predictions.jsonl --split test
+python -m colorless.review_evaluation reviewed-dataset.jsonl model-b-predictions.jsonl --split test
+```
+
+기본 실행은 `annotation_status=human_reviewed`만 허용한다. `--allow-synthetic`은 계약 smoke test용이며 보고서의 `acceptance_eligible`이 false이므로 모델 수용 근거로 사용하지 않는다. 검수 여부는 데이터 관리자가 확인한 선언을 사용하며 도구가 사람의 검수를 대신하지 않는다. 군집의 split 중복, 예측 누락/중복, 자동 분류 상태의 언어, 무효한 근거·오프셋·판정·지연을 거부한다. 모델 추론과 원문 수집을 자동 실행하지 않는다.
+
+언어별 검사 precision/recall/FPR/FNR, 보류율·상태 일치율, 최종 정책 정확도와 p95 지연을 출력한다. violation 정답을 hold한 경우 탐지 성공으로 세지 않는다. pass 정답을 hold한 경우 오차단은 아니지만 보류율에 포함되므로 FPR만으로 허용 품질을 판단하지 않는다. 실제 예측·지연 데이터가 없으면 점수를 생성하지 않는다. 비용·처리량·신뢰 구간은 이 도구가 측정했다고 주장하지 않으며 실제 모델 서버 부하 시험에서 별도 수집한다.
+
+검색 평가를 하려면 학습 행에 검수된 `relevant_candidate_ids`를 선택적으로 추가한다. 요청에 실린 후보 순서로 recall@5/10/20을 계산하며, 관련 문서 라벨이 없거나 분모가 없는 지표는 0으로 꾸미지 않고 null로 반환한다. 같은 데이터 분할과 후보 입력을 사용해 공유 인코더 모델과 causal LM을 각각 평가한다.
+
 1. 임시 DATA_DIR, 운영 Supabase 키가 없는 격리 서버만 사용한다. 기본 None을 유지한 채 기존 전체 테스트·번들 일치·정적 예산을 통과시킨다.
 2. 실제 모델/임베딩/KAIST 어댑터와 현행 정책을 선정한다. JSON Schema·근거 검증, 권한, stale index, 실패/취소, 멱등 재전송을 테스트한다.
 3. 검수된 군집 분할 데이터로 ko/en/mixed별, 각 검사별 precision/recall/FPR/FNR·판정 불가율과 신뢰 구간을 보고한다. 언어 간 검색 recall@5/10/20, 새 사실/정당한 인용의 오차단을 따로 측정한다. 성능/임계값 목표는 검수 데이터와 모델을 확보한 후 정하고 별도 검토한다.
@@ -84,7 +97,7 @@ BERT 공유 인코더+복수 출력층과 소형 causal LM 구조화 출력 모�
 5. durable index outbox·watermark·ACL·삭제/번복 동기화·비공개 차단 보존 정책을 구현하고 누락/재색인/복구 시험을 통과한다.
 6. 결과와 예산을 검토한 별도 변경에서만 composition root에 ContentReview를 명시적으로 주입한다. 운영 활성화와 배포는 이 브랜치의 작업이 아니다. 롤백은 새 검사를 None으로 되돌리고, 검색 색인은 별도 비활성화한다.
 
-현재 완료: 공통 스키마·라벨 기준, 검증기, 단일 추론/별도 KAIST 연결 계약, 기본 비활성 hook, 네 가지 쓰기 경로와 저장/알림 차단·재시도 테스트, 격리 검색 참조 구현, 입력 저장·전송 대기 개선, 후속 운영/평가 계획.
+현재 완료: 공통 스키마·라벨 기준, 요청/응답 검증기, 단일 추론/별도 KAIST 연결 계약, 기본 비활성 hook, 네 가지 쓰기 경로와 저장/알림 차단·재시도 테스트, 격리 검색 참조 구현, 입력 저장·전송 대기 개선, 실제 예측 JSONL을 검증하는 언어별 오프라인 평가 도구, 후속 운영/평가 계획.
 
 미완료: 검수된 실제 학습셋·학습/모델 비교·언어별 실측 성능·실제 서버 추론 처리량, KAIST 실제 모델 연결, 운영 검색/기사 수집 및 트랜잭션 색인 동기화, 거부 원문의 비공개 보존, 운영 활성화. 따라서 issue #33 전체 완료/자동 종료로 표시하지 않는다.
 

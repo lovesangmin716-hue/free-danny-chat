@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "content-review-prediction.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "example_id",
+    "request_sha256",
+    "response",
+    "latency_ms"
+  ],
+  "properties": {
+    "example_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "request_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "response": {
+      "$ref": "content-review-response.schema.json"
+    },
+    "latency_ms": {
+      "type": "number",
+      "minimum": 0
+    }
+  }
+}

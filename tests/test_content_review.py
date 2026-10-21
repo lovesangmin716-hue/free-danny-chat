@@ -6,7 +6,7 @@ import time
 import unittest
 from unittest import mock
 
-from colorless.content_review import ContentReview, ReviewFailure, validate_response
+from colorless.content_review import ContentReview, ReviewFailure, validate_request, validate_response
 from colorless.content_search import ReviewIndex
 
 
@@ -25,7 +25,18 @@ def span(identity, field, quote, start=0):
 class ReviewContractTest(unittest.TestCase):
     def setUp(self):
         self.request = dict(task='joint_content_review', schema_version='1', policy_version='policy-1',
-                            submission={'body': '한글 body', 'title': 'title'}, candidates=[])
+                            submission={'id': 'new', 'body': '한글 body', 'title': 'title', 'language': 'mixed',
+                                        'visibility': 'public', 'parent_id': None, 'root_id': None, 'source_kind': 'thread',
+                                        'source_url': None, 'original_id': None, 'published_at': None,
+                                        'modified_at': None, 'first_observed_at': None}, candidates=[])
+
+    def test_request_contract_requires_source_context_and_preserves_text(self):
+        self.assertIs(validate_request(self.request), self.request)
+        for field in ('first_observed_at', 'published_at', 'original_id', 'parent_id'):
+            invalid = copy.deepcopy(self.request)
+            invalid['submission'].pop(field)
+            with self.assertRaises(ValueError):
+                validate_request(invalid)
 
     def test_jsonl_contract_examples_and_cluster_split(self):
         root = Path(__file__).parents[1] / 'contracts'
@@ -87,6 +98,15 @@ class ReviewContractTest(unittest.TestCase):
         response = verdict(self.request, status='undetermined')
         validate_response(self.request, response)
         response['checks']['duplicate_rewrite']['missing_evidence'] = []
+        with self.assertRaises(ValueError):
+            validate_response(self.request, response)
+
+    def test_unrelated_candidate_title_cannot_prove_submission_distortion(self):
+        self.request['candidates'] = [dict(id='unrelated', title='Other title', body='Other body', scope='public')]
+        response = verdict(self.request)
+        response['decision'] = 'block'
+        response['checks']['context_distortion'].update(status='violation', evidence=[
+            span('unrelated', 'title', 'Other title'), span('submission', 'body', '한글')])
         with self.assertRaises(ValueError):
             validate_response(self.request, response)
 
